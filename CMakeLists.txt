@@ -53,6 +53,10 @@ message(STATUS
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
 
+# 编译各阶段之间用管道传递，不在 /tmp 写大型临时汇编文件。
+# 部分开发机的 /tmp 是 10 MiB tmpfs，大文件编译会直接报 No space left on device。
+add_compile_options(-pipe)
+
 include_directories(
     ${CMAKE_SOURCE_DIR}/SystemView/SEGGER
     ${CMAKE_SOURCE_DIR}/SystemView/FreeRTOS

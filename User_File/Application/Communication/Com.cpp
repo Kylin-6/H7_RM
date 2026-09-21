@@ -152,6 +152,13 @@ static void Communication_IndicateArmed(bool armed)
     {
         BSP_WS2812.Set_RGB(0xFFU, 0x00U, 0x00U);
     }
+
+    /*
+     * 老工程的 BSP_WS2812_Set_RGB 在设置颜色后立即发送一帧，框架的 Set_RGB 只改
+     * 颜色缓存、刷新依赖 TIM 的 10 ms 分发。这里补一次即时发送，让状态跳变时的
+     * 灯色立刻可见，而不是最多延迟一个分发周期。发送 25 字节约 32 us。
+     */
+    BSP_WS2812.TIM_10ms_Write_PeriodElapsedCallback();
 }
 
 /**
