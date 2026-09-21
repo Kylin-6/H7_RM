@@ -10,10 +10,14 @@
 
 #include "RobotCmd.h"
 #include "SpeedPlanning.h"
+#include "bsp_uart.h"
 #include "bsp_ws2812.h"
 #include "fdcan.h"
 #include "gimbal_board.h"
 #include "sbus.h"
+#include "usart.h"
+
+#include <cstdio>
 
 #if LEGACY_INFANTRY
 
@@ -70,9 +74,21 @@
 /** 板间链路下发分频：Control_Task 为 1 kHz，2 对应 2 ms，与老工程的 GimbalTask 周期一致。 */
 #define COMMUNICATION_BOARD_DIVIDER (2U)
 
+/* ============================== 调试输出 ============================== */
+
+/** 置 1 时把 0x065 帧使用的 SBUS 通道值经调试串口输出（USART1，115200），便于核对通道映射。 */
+#define COMMUNICATION_DEBUG_CHANNELS (1)
+/** 调试输出的分频基准是 1 ms，200 对应 200 ms 一行，与老工程 DebugTask 的节流接近。 */
+#define COMMUNICATION_DEBUG_DIVIDER (200U)
+/** 调试串口发送缓冲区长度。 */
+#define COMMUNICATION_DEBUG_BUFFER_SIZE (80U)
+
 static Class_GimbalBoard Communication_Gimbal_Board;
 static bool Communication_Armed = false;
 static uint8_t Communication_Board_Divider;
+#if COMMUNICATION_DEBUG_CHANNELS
+static uint8_t Communication_Debug_Divider;
+#endif
 
 /** 将三档速度通道 [-784, 784] 线性映射为 [0, maximum_speed]。 */
 static float Communication_MapSpeedGear(int16_t gear_channel, float maximum_speed)
@@ -91,6 +107,32 @@ static float Communication_MapSpeedGear(int16_t gear_channel, float maximum_spee
 
     return speed_limit;
 }
+
+#if COMMUNICATION_DEBUG_CHANNELS
+/**
+ * @brief 把 0x065 帧使用的三个 SBUS 通道值经调试串口输出，用于核对遥控通道映射。
+ * @note USART1 没有 TX DMA，UART BSP 会回退到阻塞发送，40 字节约 3.5 ms；
+ *       在 200 ms 一行的节流下对控制周期的影响可以忽略。核对完成后把
+ *       COMMUNICATION_DEBUG_CHANNELS 置 0 即可完全关闭。
+ */
+static void Communication_DebugPrintChannels(const int16_t channels[SBUS_CHANNEL_COUNT])
+{
+    char buffer[COMMUNICATION_DEBUG_BUFFER_SIZE];
+    const int length = std::snprintf(
+        buffer, sizeof(buffer),
+        "SBUS pitch(2)=%d fire(5)=%d speed(8)=%d\r\n",
+        (int)channels[GIMBAL_BOARD_CHANNEL_PITCH],
+        (int)channels[GIMBAL_BOARD_CHANNEL_FIRE_SWITCH],
+        (int)channels[GIMBAL_BOARD_CHANNEL_SHOOT_SPEED]);
+
+    if (length > 0 && length < (int)sizeof(buffer))
+    {
+        (void)UART_Transmit_Data(&huart1,
+                                 reinterpret_cast<uint8_t*>(buffer),
+                                 (uint16_t)length);
+    }
+}
+#endif
 
 /**
  * @brief 计算机械安装下云台相对底盘正前方的偏差。
@@ -191,6 +233,9 @@ bool Communication_Init(void)
 {
     Communication_Armed = false;
     Communication_Board_Divider = 0U;
+#if COMMUNICATION_DEBUG_CHANNELS
+    Communication_Debug_Divider = 0U;
+#endif
     /* 上电默认失能，与 demo 一致先点亮红色指示灯。 */
     Communication_IndicateArmed(false);
 
@@ -235,6 +280,19 @@ void Communication_Update(void)
         /* 裁判系统未接入，热量上限 / 冷却 / 机器人 ID 均为 0。 */
         Communication_Gimbal_Board.SendRobotStatus(0U, 0U, 0U);
     }
+
+#if COMMUNICATION_DEBUG_CHANNELS
+    /* 调试输出：把 0x065 帧使用的通道值经串口打出，解锁与否都输出。 */
+    Communication_Debug_Divider++;
+    if (Communication_Debug_Divider >= COMMUNICATION_DEBUG_DIVIDER)
+    {
+        Communication_Debug_Divider = 0U;
+        if (available)
+        {
+            Communication_DebugPrintChannels(channels);
+        }
+    }
+#endif
 
     if (!Communication_Armed)
     {
