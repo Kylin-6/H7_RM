@@ -110,8 +110,10 @@ static float Communication_MapSpeedGear(int16_t gear_channel, float maximum_spee
 
 #if COMMUNICATION_DEBUG_CHANNELS
 /**
- * @brief 把 0x065 帧使用的三个 SBUS 通道值经调试串口输出，用于核对遥控通道映射。
- * @note USART1 没有 TX DMA，UART BSP 会回退到阻塞发送，40 字节约 3.5 ms；
+ * @brief 把全部 SBUS 通道值经调试串口输出，用于核对遥控通道映射。
+ * @details 输出顺序固定为通道 0~9，例如 `SBUS: 12 34 0 -56 784 -784 0 0 345 0`。
+ *          0x065 帧使用的是通道 2（pitch）、5（fire）、8（speed）。
+ * @note USART1 没有 TX DMA，UART BSP 会回退到阻塞发送，约 50 字节约 4.3 ms；
  *       在 200 ms 一行的节流下对控制周期的影响可以忽略。核对完成后把
  *       COMMUNICATION_DEBUG_CHANNELS 置 0 即可完全关闭。
  */
@@ -120,10 +122,10 @@ static void Communication_DebugPrintChannels(const int16_t channels[SBUS_CHANNEL
     char buffer[COMMUNICATION_DEBUG_BUFFER_SIZE];
     const int length = std::snprintf(
         buffer, sizeof(buffer),
-        "SBUS pitch(2)=%d fire(5)=%d speed(8)=%d\r\n",
-        (int)channels[GIMBAL_BOARD_CHANNEL_PITCH],
-        (int)channels[GIMBAL_BOARD_CHANNEL_FIRE_SWITCH],
-        (int)channels[GIMBAL_BOARD_CHANNEL_SHOOT_SPEED]);
+        "SBUS: %d %d %d %d %d %d %d %d %d %d\r\n",
+        (int)channels[0], (int)channels[1], (int)channels[2], (int)channels[3],
+        (int)channels[4], (int)channels[5], (int)channels[6], (int)channels[7],
+        (int)channels[8], (int)channels[9]);
 
     if (length > 0 && length < (int)sizeof(buffer))
     {
