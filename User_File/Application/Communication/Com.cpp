@@ -67,8 +67,12 @@
 /** 2π，rad。 */
 #define CHASSIS_TWO_PI_RAD (6.28318531F)
 
+/** 板间链路下发分频：Control_Task 为 1 kHz，2 对应 2 ms，与老工程的 GimbalTask 周期一致。 */
+#define COMMUNICATION_BOARD_DIVIDER (2U)
+
 static Class_GimbalBoard Communication_Gimbal_Board;
 static bool Communication_Armed = false;
+static uint8_t Communication_Board_Divider;
 
 /** 将三档速度通道 [-784, 784] 线性映射为 [0, maximum_speed]。 */
 static float Communication_MapSpeedGear(int16_t gear_channel, float maximum_speed)
@@ -186,6 +190,7 @@ static void Communication_UpdateArmState(void)
 bool Communication_Init(void)
 {
     Communication_Armed = false;
+    Communication_Board_Divider = 0U;
     /* 上电默认失能，与 demo 一致先点亮红色指示灯。 */
     Communication_IndicateArmed(false);
 
@@ -208,19 +213,28 @@ void Communication_Update(void)
 
     Communication_UpdateArmState();
 
-    /* 板间链路：遥控帧只在拿到有效数据时转发；状态帧与解锁与否无关。 */
-    if (available)
-    {
-        Communication_Gimbal_Board.SendRemoteChannels(channels);
-    }
-
-    /* 地面系 Yaw 尚无外部陀螺仪来源，与 demo 一致地暂用云台电机角度代替。 */
+    /* 云台反馈每周期读取：供板间链路与底盘坐标旋转共同使用。 */
     GimbalFeedback gimbal_feedback{};
-    const float chassis_yaw_rad =
-        RobotCmd_GetGimbalFeedback(gimbal_feedback) ? gimbal_feedback.yaw_rad : 0.0F;
-    Communication_Gimbal_Board.SendChassisYaw(chassis_yaw_rad, chassis_yaw_rad);
-    /* 裁判系统未接入，热量上限 / 冷却 / 机器人 ID 均为 0。 */
-    Communication_Gimbal_Board.SendRobotStatus(0U, 0U, 0U);
+    const bool gimbal_feedback_valid = RobotCmd_GetGimbalFeedback(gimbal_feedback);
+
+    /* 板间链路按 2 ms 下发，与老工程的 GimbalTask 周期一致，避免压满 CAN 总线。 */
+    Communication_Board_Divider++;
+    if (Communication_Board_Divider >= COMMUNICATION_BOARD_DIVIDER)
+    {
+        Communication_Board_Divider = 0U;
+
+        /* 遥控帧只在拿到有效数据时转发；状态帧与解锁与否无关。 */
+        if (available)
+        {
+            Communication_Gimbal_Board.SendRemoteChannels(channels);
+        }
+
+        /* 地面系 Yaw 尚无外部陀螺仪来源，与 demo 一致地暂用云台电机角度代替。 */
+        const float chassis_yaw_rad = gimbal_feedback_valid ? gimbal_feedback.yaw_rad : 0.0F;
+        Communication_Gimbal_Board.SendChassisYaw(chassis_yaw_rad, chassis_yaw_rad);
+        /* 裁判系统未接入，热量上限 / 冷却 / 机器人 ID 均为 0。 */
+        Communication_Gimbal_Board.SendRobotStatus(0U, 0U, 0U);
+    }
 
     if (!Communication_Armed)
     {
@@ -252,10 +266,17 @@ void Communication_Update(void)
                                         RC_CHASSIS_W_DEADBAND, RC_CHASSIS_W_EXPO) *
         rotation_limit;
 
-    /* 平移方向始终相对云台保持一致，便于云台转动时操控。 */
-    const float gimbal_forward_error =
-        Communication_GetGimbalForwardError(gimbal_feedback.yaw_rad);
-    Communication_RotateVelocityByGimbal(gimbal_forward_error, &velocity_x, &velocity_y);
+    /*
+     * 平移方向始终相对云台保持一致，便于云台转动时操控。
+     * 云台反馈不可用时不做旋转：此时角度按 0 处理会被换算成 -180° 偏差，把速度
+     * 方向整个翻转，表现为前后左右全反。
+     */
+    float gimbal_forward_error = 0.0F;
+    if (gimbal_feedback_valid)
+    {
+        gimbal_forward_error = Communication_GetGimbalForwardError(gimbal_feedback.yaw_rad);
+        Communication_RotateVelocityByGimbal(gimbal_forward_error, &velocity_x, &velocity_y);
+    }
 
     /*
      * 旋转摇杆非负时放弃手动旋转：开关 1 抬起交由底盘跟随云台，否则原地静止。
@@ -265,7 +286,10 @@ void Communication_Update(void)
     if (channels[RC_INDEX_ROTATION] >= 0 &&
         channels[RC_INDEX_FOLLOW_SWITCH] > RC_FOLLOW_SWITCH_THRESHOLD)
     {
-        velocity_w = Communication_GetGimbalFollowSpeed(gimbal_forward_error, rotation_limit);
+        velocity_w = gimbal_feedback_valid
+                         ? Communication_GetGimbalFollowSpeed(gimbal_forward_error,
+                                                              rotation_limit)
+                         : 0.0F;
         chassis_command.mode = ChassisMode::FOLLOW_GIMBAL_YAW;
     }
     else if (channels[RC_INDEX_ROTATION] >= 0)

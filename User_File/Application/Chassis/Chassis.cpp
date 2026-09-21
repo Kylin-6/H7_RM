@@ -43,8 +43,15 @@ static uint8_t Chassis_Feedback_Divider;
 
 /** 单轮速度限幅，沿用老步兵原始速度量纲。 */
 static constexpr float CHASSIS_WHEEL_SPEED_MAX = 30.0f;
-/** 速度规划控制周期，与 Control_Task 的 1 kHz 调度一致。 */
-static constexpr float CHASSIS_CONTROL_DT = 0.001f;
+/**
+ * 速度规划控制周期。老工程的控制路径是 2 ms，这里保持一致：Control_Task 虽然是
+ * 1 kHz，但下发按 2 分频执行。若按 1 ms 全速下发，四路 DM 速度帧加上云台与板间帧
+ * 会达到 8 帧/ms，超过 1 Mbps 总线约 7.5 帧/ms 的承载上限，导致排在后面的帧长期
+ * 发不出去，表现为部分电机不响应。
+ */
+static constexpr float CHASSIS_CONTROL_DT = 0.002f;
+/** Control_Task 的 1 kHz 调度下，老步兵控制路径的执行分频（2 对应 2 ms）。 */
+static constexpr uint8_t CHASSIS_CONTROL_DIVIDER = 2U;
 /** 零速吸附门限。 */
 static constexpr float CHASSIS_PLANNING_THRESHOLD = 0.1f;
 
@@ -79,6 +86,7 @@ static bool Chassis_Output_Enabled;
 static float Chassis_Planned_Velocity_X;
 static float Chassis_Planned_Velocity_Y;
 static float Chassis_Planned_Velocity_W;
+static uint8_t Chassis_Control_Divider;
 
 /** 使能或失能四台底盘电机；状态未变化时不重复下发命令。 */
 static void Chassis_SetEnabled(bool enabled)
@@ -322,6 +330,7 @@ bool Chassis_Init(void)
     Chassis_Planned_Velocity_X = 0.0f;
     Chassis_Planned_Velocity_Y = 0.0f;
     Chassis_Planned_Velocity_W = 0.0f;
+    Chassis_Control_Divider = 0U;
 
     Chassis_Initialized = initialized;
     Chassis_Output_Enabled = true;
@@ -388,28 +397,35 @@ void Chassis_Update(void)
         const bool enabled = Chassis_Command.mode != ChassisMode::ZERO_FORCE;
         Chassis_SetEnabled(enabled);
 
-        if (enabled)
+        /* 老步兵控制路径按 2 ms 执行：与老工程一致，同时把 CAN 负载压回总线承载范围内。 */
+        Chassis_Control_Divider++;
+        if (Chassis_Control_Divider >= CHASSIS_CONTROL_DIVIDER)
         {
-            /* 速度规划：三轴各自按非对称速率限制平滑，反向时先刹停再反向加速。 */
-            Chassis_Planned_Velocity_X = SpeedPlanning_UpdateRateLimited(
-                Chassis_Command.velocity_x_m_s, &Chassis_X_Planning, CHASSIS_CONTROL_DT,
-                CHASSIS_X_ACCEL_LIMIT, CHASSIS_X_DECEL_LIMIT,
-                CHASSIS_X_RELEASE_LIMIT, CHASSIS_X_REVERSE_LIMIT,
-                CHASSIS_PLANNING_THRESHOLD);
-            Chassis_Planned_Velocity_Y = SpeedPlanning_UpdateRateLimited(
-                Chassis_Command.velocity_y_m_s, &Chassis_Y_Planning, CHASSIS_CONTROL_DT,
-                CHASSIS_Y_ACCEL_LIMIT, CHASSIS_Y_DECEL_LIMIT,
-                CHASSIS_Y_RELEASE_LIMIT, CHASSIS_Y_REVERSE_LIMIT,
-                CHASSIS_PLANNING_THRESHOLD);
-            Chassis_Planned_Velocity_W = SpeedPlanning_UpdateRateLimited(
-                Chassis_Command.angular_velocity_rad_s, &Chassis_W_Planning, CHASSIS_CONTROL_DT,
-                CHASSIS_W_ACCEL_LIMIT, CHASSIS_W_DECEL_LIMIT,
-                CHASSIS_W_RELEASE_LIMIT, CHASSIS_W_REVERSE_LIMIT,
-                CHASSIS_PLANNING_THRESHOLD);
+            Chassis_Control_Divider = 0U;
 
-            Chassis_ControlMotors(Chassis_Planned_Velocity_X,
-                                  Chassis_Planned_Velocity_Y,
-                                  Chassis_Planned_Velocity_W);
+            if (enabled)
+            {
+                /* 速度规划：三轴各自按非对称速率限制平滑，反向时先刹停再反向加速。 */
+                Chassis_Planned_Velocity_X = SpeedPlanning_UpdateRateLimited(
+                    Chassis_Command.velocity_x_m_s, &Chassis_X_Planning, CHASSIS_CONTROL_DT,
+                    CHASSIS_X_ACCEL_LIMIT, CHASSIS_X_DECEL_LIMIT,
+                    CHASSIS_X_RELEASE_LIMIT, CHASSIS_X_REVERSE_LIMIT,
+                    CHASSIS_PLANNING_THRESHOLD);
+                Chassis_Planned_Velocity_Y = SpeedPlanning_UpdateRateLimited(
+                    Chassis_Command.velocity_y_m_s, &Chassis_Y_Planning, CHASSIS_CONTROL_DT,
+                    CHASSIS_Y_ACCEL_LIMIT, CHASSIS_Y_DECEL_LIMIT,
+                    CHASSIS_Y_RELEASE_LIMIT, CHASSIS_Y_REVERSE_LIMIT,
+                    CHASSIS_PLANNING_THRESHOLD);
+                Chassis_Planned_Velocity_W = SpeedPlanning_UpdateRateLimited(
+                    Chassis_Command.angular_velocity_rad_s, &Chassis_W_Planning, CHASSIS_CONTROL_DT,
+                    CHASSIS_W_ACCEL_LIMIT, CHASSIS_W_DECEL_LIMIT,
+                    CHASSIS_W_RELEASE_LIMIT, CHASSIS_W_REVERSE_LIMIT,
+                    CHASSIS_PLANNING_THRESHOLD);
+
+                Chassis_ControlMotors(Chassis_Planned_Velocity_X,
+                                      Chassis_Planned_Velocity_Y,
+                                      Chassis_Planned_Velocity_W);
+            }
         }
 
         /* 底盘不测量实际速度，反馈字段表示本周期下发的规划目标与设备在线状态。 */

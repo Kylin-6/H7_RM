@@ -27,8 +27,13 @@ static GimbalMode Gimbal_Last_Mode = GimbalMode::DISABLED;
 static constexpr float GIMBAL_YAW_SPEED_MAX = 15.0f;
 /** 机体系 Z 轴角速度前馈增益，用于抑制底盘自转耦合。 */
 static constexpr float GIMBAL_YAW_RATE_FEEDFORWARD_GAIN = 1.0f;
-/** 速度规划控制周期，与 Control_Task 的 1 kHz 调度一致。 */
-static constexpr float GIMBAL_CONTROL_DT = 0.001f;
+/**
+ * 速度规划控制周期。老工程的控制路径是 2 ms，这里保持一致：Control_Task 虽然是
+ * 1 kHz，但云台下发按 2 分频执行，避免与底盘帧、板间帧叠加后压满 1 Mbps 总线。
+ */
+static constexpr float GIMBAL_CONTROL_DT = 0.002f;
+/** Control_Task 的 1 kHz 调度下，云台控制路径的执行分频（2 对应 2 ms）。 */
+static constexpr uint8_t GIMBAL_CONTROL_DIVIDER = 2U;
 /** 零速吸附门限。 */
 static constexpr float GIMBAL_PLANNING_THRESHOLD = 0.1f;
 
@@ -57,6 +62,7 @@ static constexpr float GIMBAL_MOTOR_TORQUE_MAX_NM = 10.0f;
 
 DMGimbal_t Gimbal;
 static bool Gimbal_Yaw_Output_Enabled;
+static uint8_t Gimbal_Loop_Divider;
 
 /** 把 value 约束到 [minimum, maximum]。 */
 static float Gimbal_Constrain(float value, float minimum, float maximum)
@@ -87,6 +93,7 @@ static float Gimbal_MoveTowards(float current, float target, float maximum_delta
 void Gimbal_Init(void)
 {
     Gimbal_Yaw_Output_Enabled = false;
+    Gimbal_Loop_Divider = 0U;
     Gimbal.Yaw_Speed_Command = 0.0f;
     Gimbal.Yaw_Mit_Kd = GIMBAL_YAW_MIT_KD_CENTER;
     Gimbal.Yaw_Mit_Torque_Feedforward = 0.0f;
@@ -504,10 +511,16 @@ void Gimbal_Update(void)
     }
 
 #if LEGACY_INFANTRY
-    /* 只有命令要求使能时才下发；禁用状态保持电机失能。 */
-    if (Gimbal_Yaw_Output_Enabled)
+    /* 云台控制按 2 ms 执行：与老工程一致，同时控制 CAN 总线负载。 */
+    Gimbal_Loop_Divider++;
+    if (Gimbal_Loop_Divider >= GIMBAL_CONTROL_DIVIDER)
     {
-        Gimbal_Loop();
+        Gimbal_Loop_Divider = 0U;
+        /* 只有命令要求使能时才下发；禁用状态保持电机失能。 */
+        if (Gimbal_Yaw_Output_Enabled)
+        {
+            Gimbal_Loop();
+        }
     }
 #elif GIMBAL
     /* 只有初始化完成且两轴就绪时才允许输出，故障状态不得继续下发控制量。 */
