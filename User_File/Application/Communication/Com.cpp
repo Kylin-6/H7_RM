@@ -76,8 +76,14 @@
 
 /* ============================== 调试输出 ============================== */
 
-/** 置 1 时把 0x065 帧使用的 SBUS 通道值经调试串口输出（USART1，115200），便于核对通道映射。 */
-#define COMMUNICATION_DEBUG_CHANNELS (1)
+/**
+ * 置 1 时把全部 SBUS 通道值经调试串口输出（USART1，115200），便于核对通道映射。
+ * @warning USART1 没有 TX DMA，UART BSP 会回退到阻塞发送，一行约占 4.3 ms。
+ *          该发送发生在 Control_Task（1 kHz）里，会打断板间帧的 2 ms 节拍，
+ *          使云台板收到断续的遥控数据（表现为云台时动时停）。核对完通道后
+ *          必须置 0；确需长期观察请改用带 TX DMA 的串口。
+ */
+#define COMMUNICATION_DEBUG_CHANNELS (0)
 /** 调试输出的分频基准是 1 ms，200 对应 200 ms 一行，与老工程 DebugTask 的节流接近。 */
 #define COMMUNICATION_DEBUG_DIVIDER (200U)
 /** 调试串口发送缓冲区长度。 */
