@@ -216,6 +216,35 @@ void Communication_Update(void)
     PublishCommands(gimbal_command, shoot_command);
 }
 
+bool Communication_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch)
+{
+    if (!communication_initialized)
+    {
+        return false;
+    }
+
+    int16_t local_fire = 0;
+    int16_t local_dial = 0;
+    int16_t local_pitch = 0;
+    const bool valid = chassis_board.GetFire(&local_fire) &&
+                       chassis_board.GetDial(&local_dial) &&
+                       chassis_board.GetPitch(&local_pitch);
+
+    if (fire != nullptr)
+    {
+        *fire = local_fire;
+    }
+    if (dial != nullptr)
+    {
+        *dial = local_dial;
+    }
+    if (pitch != nullptr)
+    {
+        *pitch = local_pitch;
+    }
+    return valid;
+}
+
 #else
 
 void Communication_Init(void)
@@ -224,6 +253,23 @@ void Communication_Init(void)
 
 void Communication_Update(void)
 {
+}
+
+bool Communication_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch)
+{
+    if (fire != nullptr)
+    {
+        *fire = 0;
+    }
+    if (dial != nullptr)
+    {
+        *dial = 0;
+    }
+    if (pitch != nullptr)
+    {
+        *pitch = 0;
+    }
+    return false;
 }
 
 #endif /* LEGACY_INFANTRY_GIMBAL */

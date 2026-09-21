@@ -19,7 +19,7 @@
 
 /* Private macros ------------------------------------------------------------*/
 
-// 阻塞发送超时（ms），用于无 TX DMA 的 UART5
+// 阻塞发送超时（ms），用于没有配置 TX DMA 的 UART（如 UART5、USART1）
 #define UART_TX_BLOCKING_TIMEOUT 10
 
 /* Private types -------------------------------------------------------------*/

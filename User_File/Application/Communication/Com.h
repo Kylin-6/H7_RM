@@ -49,4 +49,15 @@ void Communication_Init(void);
  */
 void Communication_Update(void);
 
+/**
+ * @brief 读取板间链路最近一帧的三个原始通道值（未滤波、未映射）。
+ * @param fire  输出火控开关通道；可为 nullptr。
+ * @param dial  输出拨弹盘（波轮）通道；可为 nullptr。
+ * @param pitch 输出 Pitch 轴通道；可为 nullptr。
+ * @return true 表示三个通道都有 100 ms 内的有效数据。
+ * @note 只读访问器，不改变任何控制状态；供遥测任务观测链路原始量使用。
+ *       非老步兵云台板配置下恒返回 false 并清零输出。
+ */
+bool Communication_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch);
+
 #endif // COM_H

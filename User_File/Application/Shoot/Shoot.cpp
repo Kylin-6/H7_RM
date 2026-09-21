@@ -457,6 +457,52 @@ void Shoot_Legacy_UpdateFeedback(void)
 }
 } // namespace
 
+extern "C" void Shoot_GetDebug(float *initialized,
+                               float *left_feedback,
+                               float *right_feedback,
+                               float *loader_feedback,
+                               float *friction_ready,
+                               float *left_velocity,
+                               float *right_velocity,
+                               float *left_target,
+                               float *right_target,
+                               float *fire_state,
+                               float *press_duration_ms,
+                               float *left_motor_state,
+                               float *right_motor_state)
+{
+    if (initialized != nullptr)
+        *initialized = Shoot_Initialized ? 1.0f : 0.0f;
+    if (left_feedback != nullptr)
+        *left_feedback = Friction_Left.IsOnline() ? 1.0f : 0.0f;
+    if (right_feedback != nullptr)
+        *right_feedback = Friction_Right.IsOnline() ? 1.0f : 0.0f;
+    if (loader_feedback != nullptr)
+        *loader_feedback = Loader.online ? 1.0f : 0.0f;
+    if (friction_ready != nullptr)
+        *friction_ready = FrictionReady() ? 1.0f : 0.0f;
+    if (left_velocity != nullptr)
+        *left_velocity = Friction_Left.feedback.velocity;
+    if (right_velocity != nullptr)
+        *right_velocity = Friction_Right.feedback.velocity;
+    /* 摩擦轮指令方向与云台板原实现一致：左轮取负、右轮取正。 */
+    const bool friction_commanded = (Fire_State != FireState::IDLE);
+    if (left_target != nullptr)
+        *left_target = friction_commanded ? -FRICTION_SPEED_RAD_S : 0.0f;
+    if (right_target != nullptr)
+        *right_target = friction_commanded ? FRICTION_SPEED_RAD_S : 0.0f;
+    if (fire_state != nullptr)
+        *fire_state = static_cast<float>(Fire_State);
+    if (press_duration_ms != nullptr)
+        *press_duration_ms = (Fire_State == FireState::PRESSING)
+                                 ? static_cast<float>(HAL_GetTick() - Press_Start_Tick)
+                                 : 0.0f;
+    if (left_motor_state != nullptr)
+        *left_motor_state = static_cast<float>(Friction_Left.feedback.state);
+    if (right_motor_state != nullptr)
+        *right_motor_state = static_cast<float>(Friction_Right.feedback.state);
+}
+
 #endif /* SHOOT && LEGACY_INFANTRY_GIMBAL */
 
 #if SHOOT && !LEGACY_INFANTRY_GIMBAL
