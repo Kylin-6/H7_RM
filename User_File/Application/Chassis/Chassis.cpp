@@ -52,6 +52,8 @@ static constexpr float CHASSIS_WHEEL_SPEED_MAX = 30.0f;
 static constexpr float CHASSIS_CONTROL_DT = 0.002f;
 /** Control_Task 的 1 kHz 调度下，老步兵控制路径的执行分频（2 对应 2 ms）。 */
 static constexpr uint8_t CHASSIS_CONTROL_DIVIDER = 2U;
+/** 使能补齐的分频基准是 2 ms，50 表示每 100 ms 检查一次未在线的电机。 */
+static constexpr uint8_t CHASSIS_ENABLE_RETRY_DIVIDER = 50U;
 /** 零速吸附门限。 */
 static constexpr float CHASSIS_PLANNING_THRESHOLD = 0.1f;
 
@@ -87,6 +89,7 @@ static float Chassis_Planned_Velocity_X;
 static float Chassis_Planned_Velocity_Y;
 static float Chassis_Planned_Velocity_W;
 static uint8_t Chassis_Control_Divider;
+static uint8_t Chassis_Enable_Retry_Divider;
 
 /** 使能或失能四台底盘电机；状态未变化时不重复下发命令。 */
 static void Chassis_SetEnabled(bool enabled)
@@ -331,6 +334,7 @@ bool Chassis_Init(void)
     Chassis_Planned_Velocity_Y = 0.0f;
     Chassis_Planned_Velocity_W = 0.0f;
     Chassis_Control_Divider = 0U;
+    Chassis_Enable_Retry_Divider = 0U;
 
     Chassis_Initialized = initialized;
     Chassis_Output_Enabled = true;
@@ -425,6 +429,24 @@ void Chassis_Update(void)
                 Chassis_ControlMotors(Chassis_Planned_Velocity_X,
                                       Chassis_Planned_Velocity_Y,
                                       Chassis_Planned_Velocity_W);
+
+                /*
+                 * DM 电机必须收到使能帧才会工作，而使能命令只在状态跳变时下发一次：
+                 * 若那一帧丢失、或电机掉线后重新上线，它不会再被使能。这里按在线状态
+                 * 周期补齐，避免单个电机长期不响应。正常运行时不产生额外总线流量。
+                 */
+                Chassis_Enable_Retry_Divider++;
+                if (Chassis_Enable_Retry_Divider >= CHASSIS_ENABLE_RETRY_DIVIDER)
+                {
+                    Chassis_Enable_Retry_Divider = 0U;
+                    for (uint32_t index = 0U; index < 4U; ++index)
+                    {
+                        if (!Chassis_Motor[index].IsOnline())
+                        {
+                            (void)Chassis_Motor[index].Enable();
+                        }
+                    }
+                }
             }
         }
 
