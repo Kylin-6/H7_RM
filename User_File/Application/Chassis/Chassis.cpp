@@ -52,7 +52,7 @@ static constexpr float CHASSIS_WHEEL_SPEED_MAX = 30.0f;
 static constexpr float CHASSIS_CONTROL_DT = 0.002f;
 /** Control_Task 的 1 kHz 调度下，老步兵控制路径的执行分频（2 对应 2 ms）。 */
 static constexpr uint8_t CHASSIS_CONTROL_DIVIDER = 2U;
-/** 使能补齐的分频基准是 2 ms，50 表示每 100 ms 检查一次未在线的电机。 */
+/** 使能重发的分频基准是 2 ms，50 表示每 100 ms 重发一次使能命令。 */
 static constexpr uint8_t CHASSIS_ENABLE_RETRY_DIVIDER = 50U;
 /** 零速吸附门限。 */
 static constexpr float CHASSIS_PLANNING_THRESHOLD = 0.1f;
@@ -439,12 +439,14 @@ void Chassis_Update(void)
                 if (Chassis_Enable_Retry_Divider >= CHASSIS_ENABLE_RETRY_DIVIDER)
                 {
                     Chassis_Enable_Retry_Divider = 0U;
+                    /*
+                     * 无条件周期重发使能。这里不能用在线状态判断是否需要补齐：
+                     * DM 电机在未使能时仍会周期上报状态帧，会落在"在线但未使能"
+                     * 的情况被漏掉。使能命令是幂等的，100 ms 一次、四帧的开销可忽略。
+                     */
                     for (uint32_t index = 0U; index < 4U; ++index)
                     {
-                        if (!Chassis_Motor[index].IsOnline())
-                        {
-                            (void)Chassis_Motor[index].Enable();
-                        }
+                        (void)Chassis_Motor[index].Enable();
                     }
                 }
             }

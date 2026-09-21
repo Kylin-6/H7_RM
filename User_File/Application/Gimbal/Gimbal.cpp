@@ -34,6 +34,8 @@ static constexpr float GIMBAL_YAW_RATE_FEEDFORWARD_GAIN = 1.0f;
 static constexpr float GIMBAL_CONTROL_DT = 0.002f;
 /** Control_Task 的 1 kHz 调度下，云台控制路径的执行分频（2 对应 2 ms）。 */
 static constexpr uint8_t GIMBAL_CONTROL_DIVIDER = 2U;
+/** 使能重发的分频基准是 2 ms，50 表示每 100 ms 重发一次使能命令。 */
+static constexpr uint8_t GIMBAL_ENABLE_RETRY_DIVIDER = 50U;
 /** 零速吸附门限。 */
 static constexpr float GIMBAL_PLANNING_THRESHOLD = 0.1f;
 
@@ -63,6 +65,7 @@ static constexpr float GIMBAL_MOTOR_TORQUE_MAX_NM = 10.0f;
 DMGimbal_t Gimbal;
 static bool Gimbal_Yaw_Output_Enabled;
 static uint8_t Gimbal_Loop_Divider;
+static uint8_t Gimbal_Enable_Retry_Divider;
 
 /** 把 value 约束到 [minimum, maximum]。 */
 static float Gimbal_Constrain(float value, float minimum, float maximum)
@@ -94,6 +97,7 @@ void Gimbal_Init(void)
 {
     Gimbal_Yaw_Output_Enabled = false;
     Gimbal_Loop_Divider = 0U;
+    Gimbal_Enable_Retry_Divider = 0U;
     Gimbal.Yaw_Speed_Command = 0.0f;
     Gimbal.Yaw_Mit_Kd = GIMBAL_YAW_MIT_KD_CENTER;
     Gimbal.Yaw_Mit_Torque_Feedforward = 0.0f;
@@ -520,6 +524,14 @@ void Gimbal_Update(void)
         if (Gimbal_Yaw_Output_Enabled)
         {
             Gimbal_Loop();
+
+            /* 与底盘同理：使能命令只在状态跳变时下发一次，丢失后没有第二次机会。 */
+            Gimbal_Enable_Retry_Divider++;
+            if (Gimbal_Enable_Retry_Divider >= GIMBAL_ENABLE_RETRY_DIVIDER)
+            {
+                Gimbal_Enable_Retry_Divider = 0U;
+                (void)Gimbal.Yaw_Motor.Enable();
+            }
         }
     }
 #elif GIMBAL
