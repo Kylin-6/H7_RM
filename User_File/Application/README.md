@@ -254,6 +254,7 @@ SBUS(UART5) ─► Communication ──RobotCmd_SetChassis / SetGimbal──► 
 - 上电默认失能：`Chassis_Init` 与 `Gimbal_Init` 完成后主动下发失能命令。
 - `Communication` 未解锁期间，每周期显式下发 `ZERO_FORCE` 与 `GimbalMode::DISABLED`。
 - 解锁条件是连续 200 ms 健康 SBUS 帧（`frame_lost` 与 `failsafe` 均为 0）；健康帧超时 200 ms 立即重新锁定。
+- 武装指示灯随互锁状态切换：未解锁为红灯、解锁为蓝灯，与 demo 的 `SafetyTask` 语义一致。
 - 老步兵的四路底盘电机与云台电机各自独立使能，不再使用 demo 的整板使能门控。
 
 ### 13.4 单位约定
@@ -269,6 +270,35 @@ SBUS(UART5) ─► Communication ──RobotCmd_SetChassis / SetGimbal──► 
 - 原 `User/device/sbus` 自行持有 DMA 缓冲并逐字节组帧，本版本改用框架 UART BSP 的双缓冲交付，只保留帧对齐与协议解析。
 - `WitGyro` 与 `ElegantDebug` 未移植：前者在 demo 中仅用于调试显示、并未接入控制回路，后者由框架 `sys_debug` / EricTool 通道承担。
 - `Class_DMMotor` 的节点 ID 上限由 `0x0F` 放宽到 `0xFF`（老步兵底盘电机为 `0x50~0x53`），反馈匹配改为比较 ID 低 4 位，由 `master_id` 保证唯一性；对原有 `0x00~0x0F` 配置行为不变。
+
+### 13.6 与 demo 的文件级对照
+
+复用框架同名实现，不需要移植：
+
+| demo | 框架 | 说明 |
+| --- | --- | --- |
+| `User/algorithm/alg_basic.cpp` | `Algorithm/Basic/` | 源码完全相同 |
+| `User/algorithm/alg_filter_vqf.cpp` | `Algorithm/Filter/VQF/` | 源码完全相同 |
+| `User/algorithm/alg_matrix.cpp` | `Algorithm/Matrix/` | 源码完全相同 |
+| `User/algorithm/alg_quaternion.cpp` | `Algorithm/Quaternion/` | 源码完全相同 |
+| `User/bsp/SPI/bsp_spi.cpp` | `Middleware/BSP/SPI/` | 源码完全相同 |
+| `User/module/BMI088/` | `Device/Onboard/BMI088/` | 框架版为超集：C++ 类化，并修正了 PRIMASK 恢复与 `volatile` 标志 |
+| `User/module/sys_timestamp.cpp` | `System/Timestamp/` | 框架版更完善 |
+| `User/module/ws2812.cpp` | `Device/Onboard/WS2812/` | 框架版为 C++ 类，灯色语义已接入 `Communication` |
+
+未移植项及理由：
+
+| demo | 理由 |
+| --- | --- |
+| `APP/DebugTask.c` 的遥测打印 | 纯调试输出，框架已有 `sys_debug` / EricTool 通道；其中的灯色逻辑已移植 |
+| `User/module/WitGyro.c` 及 `User/bsp/uart_bsp.c` 的 WIT DMA 分支 | demo 中仅用于调试显示、未接入控制回路；`0x070` 帧的地面系 Yaw 与 demo 一样暂用云台电机角度代替 |
+| `User/module/ElegantDebug.c` | 框架已有 `sys_debug` / EricTool 调试通道 |
+| `User/algorithm/PID.c` | demo 内没有任何调用者（死代码） |
+| `User/bsp/bsp.h`、`User/bsp/bsp_def.c`、`User/module/device.h` | 空模板或单行 include，无实际内容 |
+| `bsp_def.h` 的 `Booster_Left/Right_ID` | 仅有定义、无任何引用；摩擦轮由云台板控制 |
+
+底层外设核对：两边 FDCAN 均为 1 Mbps、采样点均为 75%（位时间等价），UART5 的 SBUS 参数一致；
+`AutoRetransmission` demo 为 ENABLE、框架为 DISABLE（周期帧会持续重发，对实时控制更稳妥）。
 
 ## 14. 相关文档
 

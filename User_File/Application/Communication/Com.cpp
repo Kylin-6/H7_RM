@@ -10,6 +10,7 @@
 
 #include "RobotCmd.h"
 #include "SpeedPlanning.h"
+#include "bsp_ws2812.h"
 #include "fdcan.h"
 #include "gimbal_board.h"
 #include "sbus.h"
@@ -140,8 +141,21 @@ static float Communication_GetGimbalFollowSpeed(float gimbal_forward_error,
     return follow_speed;
 }
 
+/** 武装状态指示灯：红灯表示电机失能，蓝灯表示已解锁，与 demo 的灯色一致。 */
+static void Communication_IndicateArmed(bool armed)
+{
+    if (armed)
+    {
+        BSP_WS2812.Set_RGB(0x00U, 0x00U, 0xFFU);
+    }
+    else
+    {
+        BSP_WS2812.Set_RGB(0xFFU, 0x00U, 0x00U);
+    }
+}
+
 /**
- * @brief 维护遥控健康互锁。
+ * @brief 维护遥控健康互锁，并同步武装指示灯。
  * @details 对应 demo 的 SafetyTask：上电默认锁定（所有电机路径保持失能命令），
  *          连续健康 200 ms 才解锁，健康帧超时 200 ms 立即重新锁定。
  */
@@ -152,17 +166,21 @@ static void Communication_UpdateArmState(void)
         if (SBUS_IsControlHealthyFor(COMMUNICATION_RECOVERY_TIME_MS))
         {
             Communication_Armed = true;
+            Communication_IndicateArmed(true);
         }
     }
     else if (SBUS_IsControlLostFor(COMMUNICATION_LOSS_TIMEOUT_MS))
     {
         Communication_Armed = false;
+        Communication_IndicateArmed(false);
     }
 }
 
 bool Communication_Init(void)
 {
     Communication_Armed = false;
+    /* 上电默认失能，与 demo 一致先点亮红色指示灯。 */
+    Communication_IndicateArmed(false);
 
     const bool sbus_ready = SBUS_Init();
     /* 老步兵的底盘板固定在 FDCAN2 上向云台板发送状态。 */
