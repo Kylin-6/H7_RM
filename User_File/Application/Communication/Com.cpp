@@ -71,16 +71,20 @@
 /** 2π，rad。 */
 #define CHASSIS_TWO_PI_RAD (6.28318531F)
 
-/** 板间链路下发分频：Control_Task 为 1 kHz，2 对应 2 ms，与老工程的 GimbalTask 周期一致。 */
-#define COMMUNICATION_BOARD_DIVIDER (2U)
+/**
+ * 板间链路下发分频：Control_Task 为 1 kHz，1 表示每 1 ms 下发一次。
+ * @details 诊断用。老工程是 2 ms（值 2），这里临时提高到 1 ms，用于验证
+ *          「云台板俯仰抽动是否由板间帧发送时刻被控制任务推迟引起」——
+ *          1 ms 下发提供双倍冗余，若现象明显减轻则说明与时序相关。
+ */
+#define COMMUNICATION_BOARD_DIVIDER (1U)
 
 /**
  * 诊断开关：置 1 时 0x070 帧的两个 yaw 字段固定为 0。
- * @details 用于排查云台板的俯仰电机是否依赖本帧的 yaw 值——若固定为 0 后
- *          「推底盘摇杆导致俯仰抽动」消失，说明耦合来自 0x070 而非 0x065。
- * @warning 仅用于诊断，确认后必须置回 0。
+ * @details 用于排查云台板的俯仰电机是否依赖本帧的 yaw 值。当前置 0（关闭），
+ *          避免与板间帧发送频率的诊断实验相互干扰。
  */
-#define COMMUNICATION_DEBUG_FREEZE_YAW (1)
+#define COMMUNICATION_DEBUG_FREEZE_YAW (0)
 
 /* ============================== 调试输出 ============================== */
 
