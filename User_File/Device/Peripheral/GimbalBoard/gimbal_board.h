@@ -30,6 +30,18 @@
 #define GIMBAL_BOARD_ID_ROBOT_STATUS (0x075U)
 /** 接收并转发给云台板的通道数，与 SBUS 使用通道数一致。 */
 #define GIMBAL_BOARD_CHANNEL_COUNT (10U)
+
+/* 0x065 帧各字段对应的 SBUS 通道索引（通道值已减中位 1024）。 */
+/** 火控（发射）开关。 */
+#define GIMBAL_BOARD_CHANNEL_FIRE_SWITCH (5U)
+/** 发射速度。 */
+#define GIMBAL_BOARD_CHANNEL_SHOOT_SPEED (8U)
+/** 云台俯仰轴。 */
+#define GIMBAL_BOARD_CHANNEL_PITCH (2U)
+
+/** 火控开关极性：置 1 时发送前取反，用于遥控开关方向与云台板约定相反的情况。 */
+#define GIMBAL_BOARD_FIRE_SWITCH_INVERT (1)
+
 /** 0x070 帧的 Yaw 编码偏移，度。 */
 #define GIMBAL_BOARD_YAW_OFFSET_DEG (180.0F)
 /** 0x070 帧的 Yaw 编码倍率：(角度 - 偏移) * 倍率 存入 int16。 */

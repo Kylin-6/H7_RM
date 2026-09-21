@@ -42,15 +42,21 @@ bool Class_GimbalBoard::SendRemoteChannels(
 {
     uint8_t data[8] = {0};
 
-    /* 火控开关 -> data[0..1] */
-    data[0] = (uint8_t)((uint16_t)sbus_channels[5] >> 8);
-    data[1] = (uint8_t)((uint16_t)sbus_channels[5]);
+    /* 火控（发射）开关 -> data[0..1]；极性由 GIMBAL_BOARD_FIRE_SWITCH_INVERT 决定。 */
+    int16_t fire_switch = sbus_channels[GIMBAL_BOARD_CHANNEL_FIRE_SWITCH];
+#if GIMBAL_BOARD_FIRE_SWITCH_INVERT
+    fire_switch = (int16_t)(-fire_switch);
+#endif
+    data[0] = (uint8_t)((uint16_t)fire_switch >> 8);
+    data[1] = (uint8_t)fire_switch;
     /* 发射速度 -> data[2..3] */
-    data[2] = (uint8_t)((uint16_t)sbus_channels[8] >> 8);
-    data[3] = (uint8_t)((uint16_t)sbus_channels[8]);
+    const int16_t shoot_speed = sbus_channels[GIMBAL_BOARD_CHANNEL_SHOOT_SPEED];
+    data[2] = (uint8_t)((uint16_t)shoot_speed >> 8);
+    data[3] = (uint8_t)shoot_speed;
     /* Pitch 轴 -> data[4..5] */
-    data[4] = (uint8_t)((uint16_t)sbus_channels[2] >> 8);
-    data[5] = (uint8_t)((uint16_t)sbus_channels[2]);
+    const int16_t pitch = sbus_channels[GIMBAL_BOARD_CHANNEL_PITCH];
+    data[4] = (uint8_t)((uint16_t)pitch >> 8);
+    data[5] = (uint8_t)pitch;
 
     return Transmit(GIMBAL_BOARD_ID_REMOTE_CHANNELS, data);
 }
