@@ -67,17 +67,14 @@ extern "C" void System_Init(void)
     /*
      * ---- 老步兵云台板上电配置 ----
      *
-     * 1. 两路 DC24 必须打开：云台 Pitch 电机、DM3519 摩擦轮与 M2006 拨弹盘的驱动器
-     *    都由板载 24V 供电。云台板原工程写的是 BSP_Power.Init(false, false, true)
-     *    （只开 5V、两路 24V 关闭），与"摩擦轮无反馈、达妙上位机也读不到电机"的
-     *    现象吻合；若实车确认电机改由外部供电，把前两个参数改回 false 即可。
+     * 1. 与云台板原工程一致，只开启板载 5V；两路 24V 保持关闭，电机使用既有
+     *    外部供电。未经硬件确认不得在移植层改变电源开关状态。
      * 2. 板上未使用 W25Q64JV：其 Init() 会在等待 JEDEC ID 处一直自旋
      *    （while (Rx_Buffer != 0x001740EF)），缺片或坏片会把 System_Init 卡死，
      *    因此与云台板原工程一致地跳过。OSPI 外设本身照常初始化，回调不受影响。
      * 3. BMI088 只在启用 Yaw 轴时初始化：云台板当前 IMU 硬件故障，Yaw 关闭时没有
      *    姿态需求；修好硬件后用 H7_LEGACY_INFANTRY_GIMBAL_YAW=ON 一并打开。
-     * 4. ADC 保留初始化：BSP_Power 绑定 ADC1_Manage_Object，跳过会让电源电压读取
-     *    指向未初始化的缓冲区；本外设无副作用。
+     * 4. ADC 与原工程一致不初始化，避免启用已知不可用的板载采样链路。
      */
     BSP_WS2812.Init();
     BSP_Buzzer.Init();
@@ -86,8 +83,7 @@ extern "C" void System_Init(void)
     System_IMU_Configure();
     BSP_BMI088.Init();
 #endif
-    ADC_Init(&hadc1, 1);
-    BSP_Power.Init(true, true, true);
+    BSP_Power.Init(false, false, true);
     EricTool_USB.Init();
 #if LEGACY_INFANTRY_GIMBAL_YAW
     BSP_BMI088.BMI088_Gyro.Start_FIFO_Acquisition();

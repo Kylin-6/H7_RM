@@ -116,8 +116,11 @@ bool UpdateEnableState(bool enabled)
         }
         else if ((HAL_GetTick() - pitch_enable_arm_tick) >= PITCH_ENABLE_DELAY_MS)
         {
-            pitch_motor.Enable();
-            pitch_enable_state = EnableState::ENABLED;
+            /* 插入队列可能暂满；只有使能帧成功入队后才允许开始 MIT 输出。 */
+            if (pitch_motor.Enable())
+            {
+                pitch_enable_state = EnableState::ENABLED;
+            }
         }
         break;
 
@@ -275,8 +278,8 @@ bool Pitch_Init(void)
                             pitch_position_pid_init.I_Separate_Threshold,
                             pitch_position_pid_init.D_First);
 
-    pitch_initialized = true;
-    return imu_ok && motor_ok;
+    pitch_initialized = imu_ok && motor_ok;
+    return pitch_initialized;
 }
 
 void Pitch_SetTargetAngle(float angle_rad)
@@ -307,6 +310,15 @@ void Pitch_Update(float requested_target_rad, bool target_valid, bool enabled)
     uint32_t imu_pitch_sequence;
     if (!DM_IMU_GetPitchSample(&imu_pitch_deg, &imu_pitch_sequence))
     {
+        /* 运行中姿态链路丢失时立即撤销使能，恢复后重新等待安全延时。 */
+        if (pitch_enable_state == EnableState::ENABLED)
+        {
+            pitch_motor.Disable();
+        }
+        pitch_enable_state = EnableState::DISABLED;
+        pitch_remote_target_initialized = false;
+        pitch_trajectory_initialized = false;
+        pitch_imu_velocity_initialized = false;
         return;
     }
 

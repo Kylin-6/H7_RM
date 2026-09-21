@@ -62,10 +62,14 @@ extern "C" void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
     return;
   }
 
+#if !LEGACY_INFANTRY_GIMBAL || LEGACY_INFANTRY_GIMBAL_YAW
   if (GPIO_Pin == BMI088_ACCEL__INTERRUPT_Pin ||
       GPIO_Pin == BMI088_GYRO__INTERRUPT_Pin) {
     BSP_BMI088.EXTI_Flag_Callback(GPIO_Pin);
   }
+#else
+  (void)GPIO_Pin;
+#endif
 }
 
 extern "C" void TIM_PeriodElapsedCallback(TIM_HandleTypeDef* htim)

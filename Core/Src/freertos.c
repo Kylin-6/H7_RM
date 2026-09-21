@@ -186,8 +186,10 @@ void MX_FREERTOS_Init(void) {
   /* creation of TIM_1ms_Task */
   TIM_1ms_TaskHandle = osThreadNew(TIM1msTask, NULL, &TIM_1ms_Task_attributes);
 
-  /* creation of BMI088Task */
+  /* BMI088 损坏的老步兵云台板不得创建会访问未初始化对象的任务。 */
+#if !LEGACY_INFANTRY_GIMBAL || LEGACY_INFANTRY_GIMBAL_YAW
   BMI088TaskHandle = osThreadNew(BMI088_Task, NULL, &BMI088Task_attributes);
+#endif
 
   /* creation of ControlTask */
   ControlTaskHandle = osThreadNew(Control_Task, NULL, &ControlTask_attributes);

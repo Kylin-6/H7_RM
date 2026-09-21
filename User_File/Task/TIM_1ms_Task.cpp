@@ -34,13 +34,19 @@ void W25Q64JV_AutoPolling_Callback(void) {
 }
 
 static const PulseEntry_t TIM_1ms_Callback_Table[] = {
+#if !LEGACY_INFANTRY_GIMBAL
     {1U, W25Q64JV_AutoPolling_Callback},
+#endif
     {1U, BSP_Key_TIM_1ms_Process_PeriodElapsedCallback},
+#if !LEGACY_INFANTRY_GIMBAL || LEGACY_INFANTRY_GIMBAL_YAW
     {1U, BMI088_TIM_1ms_Service_PeriodElapsedCallback},
+#endif
     {1U, UART_TIM_1ms_Recover_PeriodElapsedCallback},
     {10U, BSP_WS2812_TIM_10ms_Write_PeriodElapsedCallback},
     {50U, BSP_Key_TIM_50ms_Process_PeriodElapsedCallback},
+#if !LEGACY_INFANTRY_GIMBAL || LEGACY_INFANTRY_GIMBAL_YAW
     {128U, BMI088_TIM_128ms_Calculate_PeriodElapsedCallback},
+#endif
 };
 
 

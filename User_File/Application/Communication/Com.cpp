@@ -7,7 +7,7 @@
  *
  * - Pitch 通道：两级一阶低通（每级 tau = 25 ms，总延迟约 50 ms）+ 线性映射到
  *   DM-IMU 限位 [-40 度, +15 度]；
- * - 火控开关：通道值小于 700 视为按下；
+ * - 火控开关：使用 [-500, +500] 双阈值滞回，避免必须拨到通道端点；
  * - 波轮档位：[-780, 740] 线性映射到 [0, 拨弹盘输出最大速度]。
  *
  * 云台与发射的目标都经 `RobotCmd` 发布，多个上层输入同时存在时仍由 RobotCmd
@@ -43,8 +43,9 @@ constexpr float kPitchChannelMin = -770.0f;
 constexpr float kPitchChannelSpan = 1520.0f;
 constexpr float kPitchChannelFilterTauS = 0.025f;
 
-/* 火控开关判定阈值：通道值小于该值视为按下。 */
-constexpr int16_t kFirePressedThreshold = 700;
+/* 火控开关双阈值：端点约为 +/-780，中间区保持上次状态以抑制抖动。 */
+constexpr int16_t kFirePressedThreshold = -500;
+constexpr int16_t kFireReleasedThreshold = 500;
 
 /* 波轮档位 -> 拨弹盘输出速度（M2006，减速比 36，转子上限 4500 rpm）。 */
 constexpr int16_t kDialMin = -780;
@@ -57,6 +58,7 @@ constexpr float kLoaderMaxOutputRadS =
 
 Class_ChassisBoard chassis_board;
 bool communication_initialized;
+bool fire_trigger_pressed;
 bool pitch_filter_initialized;
 float pitch_filter_stage1;
 float pitch_filtered;
@@ -131,8 +133,6 @@ bool ShootCommandChanged(const ShootCmd &command)
 /** 发布一次云台与发射命令，并记录已发布内容。 */
 void PublishCommands(const GimbalCmd &gimbal_command, const ShootCmd &shoot_command)
 {
-    last_command_valid = true;
-
     if (GimbalCommandChanged(gimbal_command))
     {
         RobotCmd_SetGimbal(gimbal_command);
@@ -143,6 +143,9 @@ void PublishCommands(const GimbalCmd &gimbal_command, const ShootCmd &shoot_comm
         RobotCmd_SetShoot(shoot_command);
         last_shoot_command = shoot_command;
     }
+
+    /* 首帧也必须参与发布；否则全零的 DISABLED 安全命令会被默认值误判为未变化。 */
+    last_command_valid = true;
 }
 } // namespace
 
@@ -155,6 +158,7 @@ void Communication_Init(void)
 
     /* 板间链路走云台板的 FDCAN2，与底盘板的下行帧一致。 */
     chassis_board.Init(&hfdcan2);
+    fire_trigger_pressed = false;
     pitch_filter_initialized = false;
     pitch_filter_stage1 = 0.0f;
     pitch_filtered = 0.0f;
@@ -188,6 +192,7 @@ void Communication_Update(void)
     if (!channels_valid)
     {
         /* 安全互锁：不再清除滤波历史，链路恢复后目标由限速率路径平滑过渡。 */
+        fire_trigger_pressed = false;
         GimbalCmd gimbal_command{};
         gimbal_command.mode = GimbalMode::DISABLED;
         ShootCmd shoot_command{};
@@ -195,7 +200,15 @@ void Communication_Update(void)
         return;
     }
 
-    const bool trigger_pressed = fire < kFirePressedThreshold;
+    if (fire <= kFirePressedThreshold)
+    {
+        fire_trigger_pressed = true;
+    }
+    else if (fire >= kFireReleasedThreshold)
+    {
+        fire_trigger_pressed = false;
+    }
+    const bool trigger_pressed = fire_trigger_pressed;
 
     GimbalCmd gimbal_command{};
     gimbal_command.mode = GimbalMode::IMU;

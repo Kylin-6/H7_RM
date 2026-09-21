@@ -163,6 +163,8 @@ bool FrictionReady(void)
 {
     return Friction_Left.IsOnline() &&
            Friction_Right.IsOnline() &&
+           Friction_Left.IsEnabled() &&
+           Friction_Right.IsEnabled() &&
            std::fabs(Friction_Left.feedback.velocity + FRICTION_SPEED_RAD_S) <=
                FRICTION_READY_TOLERANCE_RAD_S &&
            std::fabs(Friction_Right.feedback.velocity - FRICTION_SPEED_RAD_S) <=
@@ -330,16 +332,14 @@ void Shoot_Legacy_Loop(void)
     const uint32_t now = HAL_GetTick();
     const bool trigger_pressed = Shoot_Command.shoot_mode == ShootMode::ON;
 
-    /*
-     * 原工程用电机上报的使能状态决定是否重发使能帧；框架的 Class_DMMotor 只暴露
-     * 在线状态，因此改为「反馈离线即重发使能」，重发间隔与原工程一致。
-     */
-    if ((!Friction_Left.IsOnline() || !Friction_Right.IsOnline()) &&
+    /* 在线只表示收到反馈；必须按驱动器状态码确认使能，未使能时周期重发。 */
+    if ((!Friction_Left.IsOnline() || !Friction_Left.IsEnabled() ||
+         !Friction_Right.IsOnline() || !Friction_Right.IsEnabled()) &&
         now - Last_Enable_Tick >= ENABLE_RETRY_MS)
     {
-        if (!Friction_Left.IsOnline())
+        if (!Friction_Left.IsOnline() || !Friction_Left.IsEnabled())
             Friction_Left.Enable();
-        if (!Friction_Right.IsOnline())
+        if (!Friction_Right.IsOnline() || !Friction_Right.IsEnabled())
             Friction_Right.Enable();
         Last_Enable_Tick = now;
     }

@@ -10,6 +10,8 @@
 
 #include "dvc_dm_imu.h"
 
+#include "stm32h7xx_hal.h"
+
 #include <stddef.h>
 
 namespace
@@ -22,12 +24,15 @@ constexpr float kPitchMinDeg = -90.0f;
 constexpr float kPitchSpanDeg = 180.0f;
 /** uint16 满量程，用于归一化解码。 */
 constexpr float kUint16Max = 65535.0f;
+/** 超过该时间没有收到新姿态即判定 DM-IMU 离线。 */
+constexpr uint32_t kPitchTimeoutMs = 100U;
 
 FDCAN_HandleTypeDef *dm_imu_can;
 uint32_t dm_imu_can_id;
 volatile float dm_imu_pitch_deg;
 volatile bool dm_imu_pitch_valid;
 volatile uint32_t dm_imu_pitch_sequence;
+volatile uint32_t dm_imu_last_rx_ms;
 
 /** 把 uint16 原始值按线性量程还原为物理解码值。 */
 float DecodeUint16(uint16_t value, float minimum, float span)
@@ -57,6 +62,7 @@ void DM_IMU_RxCallback(FDCAN_HandleTypeDef *hfdcan,
     const uint16_t pitch_raw = static_cast<uint16_t>(data[2]) |
                                (static_cast<uint16_t>(data[3]) << 8U);
     dm_imu_pitch_deg = DecodeUint16(pitch_raw, kPitchMinDeg, kPitchSpanDeg);
+    dm_imu_last_rx_ms = HAL_GetTick();
     dm_imu_pitch_sequence = dm_imu_pitch_sequence + 1U;
     dm_imu_pitch_valid = true;
 }
@@ -76,6 +82,7 @@ extern "C" bool DM_IMU_Init(FDCAN_HandleTypeDef *hfdcan,
     dm_imu_pitch_deg = 0.0f;
     dm_imu_pitch_valid = false;
     dm_imu_pitch_sequence = 0U;
+    dm_imu_last_rx_ms = 0U;
 
     return BSP_CAN_RegisterCallback(mst_id,
                                     hfdcan,
@@ -110,7 +117,8 @@ extern "C" bool DM_IMU_GetPitch(float *pitch_deg)
     }
 
     *pitch_deg = dm_imu_pitch_deg;
-    return dm_imu_pitch_valid;
+    return dm_imu_pitch_valid &&
+           (HAL_GetTick() - dm_imu_last_rx_ms) <= kPitchTimeoutMs;
 }
 
 extern "C" bool DM_IMU_GetPitchSample(float *pitch_deg, uint32_t *sequence)
@@ -131,5 +139,6 @@ extern "C" bool DM_IMU_GetPitchSample(float *pitch_deg, uint32_t *sequence)
     } while (sequence_before != sequence_after);
 
     *sequence = sequence_after;
-    return dm_imu_pitch_valid;
+    return dm_imu_pitch_valid &&
+           (HAL_GetTick() - dm_imu_last_rx_ms) <= kPitchTimeoutMs;
 }
