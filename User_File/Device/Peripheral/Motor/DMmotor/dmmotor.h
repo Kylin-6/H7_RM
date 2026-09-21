@@ -35,7 +35,12 @@ struct Struct_DMMotor_Feedback
 class Class_DMMotor
 {
 public:
-    /** 初始化 CAN 参数、反馈回调，并把在线守护器注册到 DaemonManager。 */
+    /**
+     * 初始化 CAN 参数、反馈回调，并把在线守护器注册到 DaemonManager。
+     * @param can_id    电机节点 ID，0~0xFF。经典达妙配置为 0x00~0x0F；老步兵底盘电机
+     *                  使用 0x50~0x53，此时反馈帧首字节只能携带 ID 低 4 位，靠 master_id 区分。
+     * @param master_id 主控接收 ID，同时是反馈回调的注册键，0~0x7FF。
+     */
     bool Init(FDCAN_HandleTypeDef *hfdcan,
               uint8_t can_id,
               uint16_t master_id,

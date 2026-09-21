@@ -6,7 +6,34 @@
 /** 云台应用的 1 kHz 周期入口，由 Control_Task 调度。 */
 void Gimbal_Update(void);
 
-#if GIMBAL
+#if LEGACY_INFANTRY
+
+#include "SpeedPlanning.h"
+#include "dmmotor.h"
+
+/* ===== 老步兵云台：单轴 DM 电机 MIT 速度控制（移植自 rm/demo 的 APP/GimbalTask.c）===== */
+
+/** 云台偏航 DM 电机的节点 ID 与主控接收 ID，与 demo 的 bsp_def.h 一致。 */
+#define GIMBAL_YAW_MOTOR_CAN_ID (0x03U)
+#define GIMBAL_YAW_MOTOR_MASTER_ID (0x05U)
+
+typedef struct
+{
+    Class_DMMotor Yaw_Motor;               ///< 偏航轴 DM 电机（MIT 模式）
+    SpeedPlanningState Yaw_Speed_Planning; ///< 偏航速度规划状态
+    float Yaw_Speed_Command;               ///< 本周期下发的偏航速度，rad/s
+    float Yaw_Mit_Kd;                      ///< 当前 MIT 阻尼增益
+    float Yaw_Mit_Torque_Feedforward;      ///< 当前 MIT 力矩前馈，N·m
+} DMGimbal_t;
+
+/** 初始化云台 DM 电机与速度规划；上电默认保持失能。 */
+void Gimbal_Init(void);
+/** 执行一次云台速度闭环并向电机下发 MIT 命令。 */
+void Gimbal_Loop(void);
+
+extern DMGimbal_t Gimbal;
+
+#elif GIMBAL
 
 #include "QD4310.h"
 #include "alg_pid.h"

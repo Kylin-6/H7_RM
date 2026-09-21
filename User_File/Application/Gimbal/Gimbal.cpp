@@ -10,11 +10,158 @@ static Subscriber<GimbalCmd> Gimbal_Command_Subscriber(
 static Publisher<GimbalFeedback> Gimbal_Feedback_Publisher(
     MessageCenter::Gimbal_Feedback_Topic);
 static uint8_t Gimbal_Message_Divider;
-#if GIMBAL
+#if GIMBAL || LEGACY_INFANTRY
 static GimbalMode Gimbal_Last_Mode = GimbalMode::DISABLED;
 #endif
 
-#if GIMBAL
+#if LEGACY_INFANTRY
+
+#include "SpeedPlanning.h"
+#include "fdcan.h"
+#include <cmath>
+
+/* ============================== 控制参数 ============================== */
+/* 全部取自 demo 的 APP/GimbalTask.c 与 User/bsp/bsp_def.h。 */
+
+/** 偏航摇杆速度上限，rad/s；必须与 Com.cpp 的 GIMBAL_TARGET_YAW_SPEED_MAX 一致。 */
+static constexpr float GIMBAL_YAW_SPEED_MAX = 15.0f;
+/** 机体系 Z 轴角速度前馈增益，用于抑制底盘自转耦合。 */
+static constexpr float GIMBAL_YAW_RATE_FEEDFORWARD_GAIN = 1.0f;
+/** 速度规划控制周期，与 Control_Task 的 1 kHz 调度一致。 */
+static constexpr float GIMBAL_CONTROL_DT = 0.001f;
+/** 零速吸附门限。 */
+static constexpr float GIMBAL_PLANNING_THRESHOLD = 0.1f;
+
+/** 偏航速率限制：加速度上限随摇杆比例在 MIN 与 MAX 之间线性插值。 */
+static constexpr float GIMBAL_YAW_ACCEL_LIMIT_MIN = 60.0f;
+static constexpr float GIMBAL_YAW_ACCEL_LIMIT_MAX = 150.0f;
+static constexpr float GIMBAL_YAW_DECEL_LIMIT = 120.0f;
+static constexpr float GIMBAL_YAW_RELEASE_LIMIT = 75.0f;
+static constexpr float GIMBAL_YAW_REVERSE_LIMIT = 250.0f;
+
+/** MIT 参数：位置增益恒为 0，即纯速度 + 阻尼控制，位置目标固定为 0。 */
+static constexpr float GIMBAL_YAW_MIT_KP = 0.0f;
+static constexpr float GIMBAL_YAW_MIT_KD_CENTER = 1.4f;
+static constexpr float GIMBAL_YAW_MIT_KD_MOVING = 1.0f;
+static constexpr float GIMBAL_YAW_MIT_KD_REVERSE = 1.6f;
+static constexpr float GIMBAL_YAW_MIT_KD_SLEW_RATE = 5.0f;
+/** 力矩前馈：由速度规划的加速度换算，含增益、限幅与变化率限制。 */
+static constexpr float GIMBAL_YAW_MIT_TORQUE_GAIN = 0.002f;
+static constexpr float GIMBAL_YAW_MIT_TORQUE_MAX = 0.35f;
+static constexpr float GIMBAL_YAW_MIT_TORQUE_SLEW = 8.0f;
+
+/** DM 云台电机量程，与 demo 的 DM_drv.h 一致。 */
+static constexpr float GIMBAL_MOTOR_POSITION_MAX_RAD = 3.14f;
+static constexpr float GIMBAL_MOTOR_VELOCITY_MAX_RAD_S = 30.0f;
+static constexpr float GIMBAL_MOTOR_TORQUE_MAX_NM = 10.0f;
+
+DMGimbal_t Gimbal;
+static bool Gimbal_Yaw_Output_Enabled;
+
+/** 把 value 约束到 [minimum, maximum]。 */
+static float Gimbal_Constrain(float value, float minimum, float maximum)
+{
+    if (value < minimum)
+    {
+        return minimum;
+    }
+    if (value > maximum)
+    {
+        return maximum;
+    }
+    return value;
+}
+
+/** 以最大步长 maximum_delta 逼近 target，用于增益与力矩前馈的逐周期限速。 */
+static float Gimbal_MoveTowards(float current, float target, float maximum_delta)
+{
+    const float delta = target - current;
+
+    if (fabsf(delta) <= maximum_delta)
+    {
+        return target;
+    }
+    return current + (delta > 0.0f ? maximum_delta : -maximum_delta);
+}
+
+void Gimbal_Init(void)
+{
+    Gimbal_Yaw_Output_Enabled = false;
+    Gimbal.Yaw_Speed_Command = 0.0f;
+    Gimbal.Yaw_Mit_Kd = GIMBAL_YAW_MIT_KD_CENTER;
+    Gimbal.Yaw_Mit_Torque_Feedforward = 0.0f;
+    SpeedPlanning_Init(&Gimbal.Yaw_Speed_Planning, 0.0f);
+
+    const bool initialized =
+        Gimbal.Yaw_Motor.Init(&hfdcan1,
+                              GIMBAL_YAW_MOTOR_CAN_ID,
+                              GIMBAL_YAW_MOTOR_MASTER_ID,
+                              Enum_DMMotor_Mode::MIT,
+                              false,
+                              GIMBAL_MOTOR_POSITION_MAX_RAD,
+                              GIMBAL_MOTOR_VELOCITY_MAX_RAD_S,
+                              GIMBAL_MOTOR_TORQUE_MAX_NM);
+    if (initialized)
+    {
+        /* 上电默认失能，等 RobotCmd 的云台命令进入使能模式后再输出。 */
+        (void)Gimbal.Yaw_Motor.Disable();
+    }
+}
+
+void Gimbal_Loop(void)
+{
+    /* 摇杆目标速度：死区与指数整形已在 Communication 层完成。 */
+    const float stick_speed_command = Gimbal_Constrain(
+        Gimbal_Command.yaw_speed_rad_s, -GIMBAL_YAW_SPEED_MAX, GIMBAL_YAW_SPEED_MAX);
+
+    /* 机体系 Z 轴角速度前馈，抑制底盘旋转对云台的耦合。 */
+    float yaw_speed_command =
+        stick_speed_command - GIMBAL_YAW_RATE_FEEDFORWARD_GAIN * Gimbal_INS_State.gyro_z_rad_s;
+    yaw_speed_command =
+        Gimbal_Constrain(yaw_speed_command, -GIMBAL_YAW_SPEED_MAX, GIMBAL_YAW_SPEED_MAX);
+
+    const float yaw_stick_ratio = fabsf(stick_speed_command) / GIMBAL_YAW_SPEED_MAX;
+    const float yaw_speed_previous = Gimbal.Yaw_Speed_Planning.current_speed;
+    const float yaw_acceleration_limit =
+        GIMBAL_YAW_ACCEL_LIMIT_MIN +
+        (GIMBAL_YAW_ACCEL_LIMIT_MAX - GIMBAL_YAW_ACCEL_LIMIT_MIN) * yaw_stick_ratio;
+
+    const float yaw_speed = SpeedPlanning_UpdateRateLimited(
+        yaw_speed_command, &Gimbal.Yaw_Speed_Planning, GIMBAL_CONTROL_DT,
+        yaw_acceleration_limit, GIMBAL_YAW_DECEL_LIMIT,
+        GIMBAL_YAW_RELEASE_LIMIT, GIMBAL_YAW_REVERSE_LIMIT,
+        GIMBAL_PLANNING_THRESHOLD);
+    Gimbal.Yaw_Speed_Command = yaw_speed;
+
+    /* 阻尼随摇杆推进减小、反向瞬间提高，逐周期限速避免阶跃。 */
+    float mit_kd_target = GIMBAL_YAW_MIT_KD_CENTER +
+                          (GIMBAL_YAW_MIT_KD_MOVING - GIMBAL_YAW_MIT_KD_CENTER) * yaw_stick_ratio;
+    if (yaw_speed_previous * stick_speed_command < 0.0f)
+    {
+        mit_kd_target = GIMBAL_YAW_MIT_KD_REVERSE;
+    }
+    Gimbal.Yaw_Mit_Kd = Gimbal_MoveTowards(Gimbal.Yaw_Mit_Kd, mit_kd_target,
+                                           GIMBAL_YAW_MIT_KD_SLEW_RATE * GIMBAL_CONTROL_DT);
+
+    /* 由速度规划的等效加速度换算前馈力矩，并限幅、限速。 */
+    const float yaw_acceleration_command =
+        (yaw_speed - yaw_speed_previous) / GIMBAL_CONTROL_DT;
+    const float mit_torque_target =
+        Gimbal_Constrain(yaw_acceleration_command * GIMBAL_YAW_MIT_TORQUE_GAIN,
+                         -GIMBAL_YAW_MIT_TORQUE_MAX, GIMBAL_YAW_MIT_TORQUE_MAX);
+    Gimbal.Yaw_Mit_Torque_Feedforward = Gimbal_MoveTowards(
+        Gimbal.Yaw_Mit_Torque_Feedforward, mit_torque_target,
+        GIMBAL_YAW_MIT_TORQUE_SLEW * GIMBAL_CONTROL_DT);
+
+    /* MIT 下发：位置目标 0、位置增益 0，速度由电机内部闭环，阻尼与外力矩由本层给。 */
+    Gimbal.Yaw_Motor.SetMIT(0.0f,
+                            yaw_speed,
+                            GIMBAL_YAW_MIT_KP,
+                            Gimbal.Yaw_Mit_Kd,
+                            Gimbal.Yaw_Mit_Torque_Feedforward);
+}
+
+#elif GIMBAL
 
 #include "QD4310.h"
 #include "alg_pid.h"
@@ -302,7 +449,22 @@ void Gimbal_Update(void)
     if (Gimbal_Command_Subscriber.Read(command))
     {
         Gimbal_Command = command;
-#if GIMBAL
+#if LEGACY_INFANTRY
+        if (command.mode == GimbalMode::DISABLED)
+        {
+            if (Gimbal_Last_Mode != GimbalMode::DISABLED)
+            {
+                (void)Gimbal.Yaw_Motor.Disable();
+                Gimbal_Yaw_Output_Enabled = false;
+            }
+        }
+        else if (Gimbal_Last_Mode == GimbalMode::DISABLED)
+        {
+            (void)Gimbal.Yaw_Motor.Enable();
+            Gimbal_Yaw_Output_Enabled = true;
+        }
+        Gimbal_Last_Mode = command.mode;
+#elif GIMBAL
         if (command.mode == GimbalMode::DISABLED)
         {
             if (Gimbal_Last_Mode != GimbalMode::DISABLED)
@@ -341,7 +503,13 @@ void Gimbal_Update(void)
 #endif
     }
 
-#if GIMBAL
+#if LEGACY_INFANTRY
+    /* 只有命令要求使能时才下发；禁用状态保持电机失能。 */
+    if (Gimbal_Yaw_Output_Enabled)
+    {
+        Gimbal_Loop();
+    }
+#elif GIMBAL
     /* 只有初始化完成且两轴就绪时才允许输出，故障状态不得继续下发控制量。 */
     if (Gimbal_Command.mode != GimbalMode::DISABLED &&
         Gimbal.Gimbal_FSM.Get_Now_Status_Serial() == Gimbal_Status_READY)
@@ -356,6 +524,15 @@ void Gimbal_Update(void)
     {
         Gimbal_Message_Divider = 0U;
         GimbalFeedback feedback{};
+#if LEGACY_INFANTRY
+        /* 老步兵模式下 yaw 反馈取云台电机机械角，供底盘跟随与板间链路使用。 */
+        feedback.yaw_rad = Gimbal.Yaw_Motor.feedback.position;
+        feedback.pitch_rad = 0.0f;
+        feedback.yaw_speed_rad_s = Gimbal.Yaw_Speed_Command;
+        feedback.pitch_speed_rad_s = 0.0f;
+        feedback.ins_valid = Gimbal_INS_Valid;
+        feedback.enabled = Gimbal_Yaw_Output_Enabled;
+#else
         feedback.yaw_rad = Gimbal_INS_State.yaw_rad;
         feedback.pitch_rad = Gimbal_INS_State.pitch_rad;
         feedback.yaw_speed_rad_s = Gimbal_INS_State.gyro_z_rad_s;
@@ -363,6 +540,7 @@ void Gimbal_Update(void)
         feedback.ins_valid = Gimbal_INS_Valid;
 #if GIMBAL
         feedback.enabled = Gimbal.Yaw_Motor.enabled && Gimbal.Pitch_Motor.enabled;
+#endif
 #endif
         Gimbal_Feedback_Publisher.Publish(feedback);
     }

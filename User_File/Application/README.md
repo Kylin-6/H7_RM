@@ -31,10 +31,12 @@ Application 不应：
 | `Gimbal` | 云台模式、目标角/速度、QD4310 控制和反馈 | Yaw/Pitch QD4310、PID、INS Topic |
 | `Chassis` | 四舵轮运动学、最短转向和电机目标 | 8 个 DJI 电机及电机组 |
 | `Shoot` | 摩擦轮、拨弹连续模式和离散射击动作 | 3 个 DJI 电机、ShootEvent FIFO |
-| `Communication` | 当前通信应用骨架 | 后续外部输入或传输接入点 |
+| `Communication` | 遥控输入适配与云台板链路（老步兵配置） | SBUS 设备、云台板链路、RobotCmd |
 
 硬件路径由 `H7_APP_GIMBAL`、`H7_APP_CHASSIS`、`H7_APP_SHOOT` 控制。默认关闭的模块
 仍保留消息端点和反馈结构，但不会访问对应电机硬件。
+
+另有一组互斥的整机配置开关 `H7_LEGACY_INFANTRY`，用于构建老步兵机器人，见第 13 节。
 
 ## 3. Control_Task 生命周期
 
@@ -210,7 +212,65 @@ Application 边界、四舵轮运动学和基础发射控制参考 Meta-Embedded
 的 C++ Device、CMSIS-RTOS v2、静态 Message Center 和 CAN 提交语义。许可信息见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-## 13. 相关文档
+## 13. 老步兵配置（LEGACY_INFANTRY）
+
+`-DH7_LEGACY_INFANTRY=ON` 启用的整机实现，移植自 `rm/demo` 工程。它与 AGV / QD4310
+路径互斥：同一份 Application 源码用编译开关承载两套实现，`Chassis.cpp`、`Gimbal.cpp`
+各自在文件内按 `LEGACY_INFANTRY` / `CHASSIS` / `GIMBAL` 分支，公共的消息端点、命令
+缓存与反馈结构保持不变。
+
+### 13.1 数据流
+
+```text
+SBUS(UART5) ─► Communication ──RobotCmd_SetChassis / SetGimbal──► RobotCmd
+                    │                                                │
+                    └─ 0x065 / 0x070 / 0x075 ─► 云台板 (FDCAN2)       │
+                                                                     ▼
+             Control_Task 1 kHz:  Communication → RobotCmd → Gimbal → Chassis
+                                                                     │
+             Gimbal : DM 云台电机 0x03 (MIT, FDCAN1) ◄───────────────┤
+             Chassis: DM ×4 麦轮 0x50~0x53 (速度模式, FDCAN1) ◄──────┘
+```
+
+### 13.2 各模块职责
+
+| 模块 | 老步兵实现 |
+| --- | --- |
+| `Communication` | 读 SBUS、健康互锁、摇杆死区与指数整形、速度档位映射、平移速度按云台方向旋转、云台跟随角速度、板间 0x065/0x070/0x075 下发 |
+| `Chassis` | 四路 DM 速度模式电机（节点 `0x50~0x53`，接收 ID `0x60~0x63`）、三轴非对称速度规划、麦轮逆运动学、整轮限幅 ±30 |
+| `Gimbal` | 单轴 DM 云台电机（节点 `0x03`，接收 ID `0x05`）的 MIT 控制：机体系角速度前馈、随摇杆插值的加速度上限、可变阻尼、力矩前馈 |
+| `Shoot` | 不参与。老步兵底盘板不控制发射机构，摩擦轮与拨弹盘由云台板负责，本配置下 `H7_APP_SHOOT` 必须保持 OFF |
+
+新增的支撑模块：
+
+| 模块 | 位置 | 职责 |
+| --- | --- | --- |
+| `SBUS` | `Device/Peripheral/Remote/sbus.*` | 复用 UART BSP 的 IDLE+DMA 通道，做帧对齐、协议解析与健康监测 |
+| `Class_GimbalBoard` | `Device/Peripheral/GimbalBoard/` | 底盘板到云台板的三个下行状态帧 |
+| `SpeedPlanning` | `Middleware/Algorithm/SpeedPlanning/` | 非对称加减速率限制、S 曲线与死区/指数整形 |
+
+### 13.3 安全策略
+
+- 上电默认失能：`Chassis_Init` 与 `Gimbal_Init` 完成后主动下发失能命令。
+- `Communication` 未解锁期间，每周期显式下发 `ZERO_FORCE` 与 `GimbalMode::DISABLED`。
+- 解锁条件是连续 200 ms 健康 SBUS 帧（`frame_lost` 与 `failsafe` 均为 0）；健康帧超时 200 ms 立即重新锁定。
+- 老步兵的四路底盘电机与云台电机各自独立使能，不再使用 demo 的整板使能门控。
+
+### 13.4 单位约定
+
+老步兵底盘沿用原始“速度单位”（电机速度量纲），不是物理 m/s；`ChassisCmd` 的
+`velocity_x_m_s` / `velocity_y_m_s` / `angular_velocity_rad_s` 在该配置下使用该量纲。
+`GimbalCmd.yaw_speed_rad_s` 仍为 rad/s。
+
+### 13.5 与前一代 demo 的差异
+
+- 控制周期由 demo 的 2 ms 提升到框架的 1 ms；各速率限制的单位是“速度单位/秒”，因此每秒加减速特性与 demo 一致，只是分辨率更高。
+- 原 `Chassis_Analysis_Vel` 会把轮速组合结果先强制转换为 `int16_t` 再赋回 `float`，本版本保留浮点精度。
+- 原 `User/device/sbus` 自行持有 DMA 缓冲并逐字节组帧，本版本改用框架 UART BSP 的双缓冲交付，只保留帧对齐与协议解析。
+- `WitGyro` 与 `ElegantDebug` 未移植：前者在 demo 中仅用于调试显示、并未接入控制回路，后者由框架 `sys_debug` / EricTool 通道承担。
+- `Class_DMMotor` 的节点 ID 上限由 `0x0F` 放宽到 `0xFF`（老步兵底盘电机为 `0x50~0x53`），反馈匹配改为比较 ID 低 4 位，由 `master_id` 保证唯一性；对原有 `0x00~0x0F` 配置行为不变。
+
+## 14. 相关文档
 
 - [框架总览](../../README.md)
 - [BSP](../Middleware/BSP/README.md)

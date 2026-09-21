@@ -239,6 +239,27 @@ cmake --build --preset Release
 
 [CMakePresets.json](CMakePresets.json) 管理构建配置。Debug 使用 `-Og -g3`，Release 使用 `-Os -g0`。
 
+### 机器人配置开关
+
+默认构建不启用任何实车控制路径，只保留消息端点与反馈结构。实车配置用 CMake 选项选择：
+
+| 选项 | 默认 | 说明 |
+| --- | --- | --- |
+| `H7_APP_GIMBAL` | OFF | QD4310 双轴云台硬件路径 |
+| `H7_APP_CHASSIS` | OFF | 四舵轮 AGV 底盘硬件路径 |
+| `H7_APP_SHOOT` | OFF | DJI 摩擦轮 / 拨弹盘发射硬件路径 |
+| `H7_LEGACY_INFANTRY` | OFF | 老步兵整机：DM 四电机麦轮底盘 + DM MIT 云台 + SBUS 遥控 + 云台板链路 |
+
+`H7_LEGACY_INFANTRY` 与三个 `H7_APP_*` 互斥，同时启用会在配置阶段直接报错。老步兵配置的构建方式：
+
+```powershell
+cmake -S . -B build/legacy -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/gcc-arm-none-eabi.cmake `
+      -DCMAKE_BUILD_TYPE=Debug -DH7_LEGACY_INFANTRY=ON
+cmake --build build/legacy
+```
+
+配置语义与移植差异见 [Application 开发指南](User_File/Application/README.md)。
+
 ### 主机回归
 
 仓库内提供独立 CMake 测试工程，使用主机 C++ 编译器直接编译生产源码，按需以桩函数替换硬件接口。不要给这些工程加载固件 ARM 工具链。

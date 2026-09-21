@@ -172,6 +172,11 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Gimbal/Gimbal.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Chassis/Chassis.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Shoot/Shoot.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Communication/Com.cpp
+        # 老步兵配置：DM 底盘速度规划、SBUS 遥控接收与云台板链路
+        ${CMAKE_CURRENT_LIST_DIR}/User_File/Middleware/Algorithm/SpeedPlanning/SpeedPlanning.c
+        ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/Remote/sbus.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/GimbalBoard/gimbal_board.cpp
 
 )
 
@@ -195,6 +200,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Middleware/Algorithm/Quaternion
         User_File/Middleware/Algorithm/Queue
         User_File/Middleware/Algorithm/Slope
+        User_File/Middleware/Algorithm/SpeedPlanning
         User_File/Middleware/Algorithm/Trajectory
         User_File/Middleware/Algorithm/SMC
         User_File/Middleware/BSP/ADC
@@ -228,6 +234,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Middleware/Algorithm/CRC/
         User_File/Device/Peripheral/Remote/
         User_File/Device/Peripheral/Referee/
+        User_File/Device/Peripheral/GimbalBoard/
         User_File/Application/
         User_File/Application/RobotCmd/
         User_File/Application/Gimbal/
@@ -240,6 +247,14 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 option(H7_APP_GIMBAL "Build the Gimbal hardware-control path" OFF)
 option(H7_APP_CHASSIS "Build the Chassis hardware-control path" OFF)
 option(H7_APP_SHOOT "Build the Shoot hardware-control path" OFF)
+option(H7_LEGACY_INFANTRY
+    "Build the legacy infantry (old soldier) robot path: DM wheel chassis, DM MIT yaw gimbal, SBUS remote" OFF)
+
+if(H7_LEGACY_INFANTRY AND (H7_APP_GIMBAL OR H7_APP_CHASSIS OR H7_APP_SHOOT))
+    message(FATAL_ERROR
+        "H7_LEGACY_INFANTRY is mutually exclusive with "
+        "H7_APP_GIMBAL / H7_APP_CHASSIS / H7_APP_SHOOT")
+endif()
 
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
@@ -248,6 +263,7 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     GIMBAL=$<BOOL:${H7_APP_GIMBAL}>
     CHASSIS=$<BOOL:${H7_APP_CHASSIS}>
     SHOOT=$<BOOL:${H7_APP_SHOOT}>
+    LEGACY_INFANTRY=$<BOOL:${H7_LEGACY_INFANTRY}>
 )
 
 # Remove wrong libob.a library dependency when using cpp files

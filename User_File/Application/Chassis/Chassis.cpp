@@ -1,15 +1,27 @@
 /**
  * @file Chassis.cpp
- * @brief 基于四个舵轮模块的 AGV 底盘应用，参考 Meta-Embedded-NG 移植。
+ * @brief 底盘应用。同一份文件用互斥的编译开关承载两套实现：
  *
- * 运动学与舵向最短路径规则来自 MIT 许可证下的 Meta-Embedded-NG
- * application/chassis，实现已适配本工程 Class_DJIMotor 接口。机械参数仍是
- * 待实车标定值，因此模块默认不参与固件构建。
+ * - `LEGACY_INFANTRY`：老步兵 DM 四电机麦轮底盘（移植自 rm/demo 的 APP/ChassisTask.c
+ *   与 User/algorithm/CHASSIS_ALG.c）。遥控整形与云台跟随在 Communication 层完成，
+ *   本层只负责速度规划、麦轮逆运动学与电机下发。
+ * - `CHASSIS`：基于四个舵轮模块的 AGV 底盘，参考 Meta-Embedded-NG 移植。运动学与
+ *   舵向最短路径规则来自 MIT 许可证下的 Meta-Embedded-NG application/chassis，
+ *   实现已适配本工程 Class_DJIMotor 接口。机械参数仍是待实车标定值。
+ *
+ * 两套实现默认都不参与固件构建。
  */
 
 #include "Chassis.h"
 
 #include "message_center.h"
+
+#if LEGACY_INFANTRY
+#include "SpeedPlanning.h"
+#include "dmmotor.h"
+#include "fdcan.h"
+#include <cmath>
+#endif
 
 #if CHASSIS
 #include "dji_motor.h"
@@ -24,6 +36,102 @@ static Publisher<ChassisFeedback> Chassis_Feedback_Publisher(
 static ChassisCmd Chassis_Command;
 static ChassisFeedback Chassis_Feedback;
 static uint8_t Chassis_Feedback_Divider;
+
+#if LEGACY_INFANTRY
+
+/* ============================== 控制参数 ============================== */
+
+/** 单轮速度限幅，沿用老步兵原始速度量纲。 */
+static constexpr float CHASSIS_WHEEL_SPEED_MAX = 30.0f;
+/** 速度规划控制周期，与 Control_Task 的 1 kHz 调度一致。 */
+static constexpr float CHASSIS_CONTROL_DT = 0.001f;
+/** 零速吸附门限。 */
+static constexpr float CHASSIS_PLANNING_THRESHOLD = 0.1f;
+
+/** 三轴非对称速率限制，单位“速度单位/秒”。 */
+static constexpr float CHASSIS_X_ACCEL_LIMIT = 180.0f;
+static constexpr float CHASSIS_X_DECEL_LIMIT = 180.0f;
+static constexpr float CHASSIS_X_RELEASE_LIMIT = 120.0f;
+static constexpr float CHASSIS_X_REVERSE_LIMIT = 300.0f;
+static constexpr float CHASSIS_Y_ACCEL_LIMIT = 180.0f;
+static constexpr float CHASSIS_Y_DECEL_LIMIT = 180.0f;
+static constexpr float CHASSIS_Y_RELEASE_LIMIT = 120.0f;
+static constexpr float CHASSIS_Y_REVERSE_LIMIT = 300.0f;
+static constexpr float CHASSIS_W_ACCEL_LIMIT = 350.0f;
+static constexpr float CHASSIS_W_DECEL_LIMIT = 350.0f;
+static constexpr float CHASSIS_W_RELEASE_LIMIT = 250.0f;
+static constexpr float CHASSIS_W_REVERSE_LIMIT = 600.0f;
+
+/** 四个底盘 DM 电机在 FDCAN1 上的节点 ID 与主控接收 ID，与 demo 的 bsp_CAN.c 一致。 */
+static constexpr uint8_t CHASSIS_MOTOR_CAN_ID[4] = {0x50U, 0x51U, 0x52U, 0x53U};
+static constexpr uint16_t CHASSIS_MOTOR_MASTER_ID[4] = {0x60U, 0x61U, 0x62U, 0x63U};
+/** 底盘电机反馈量程：位置 ±3.14 rad、速度 ±200 rad/s、转矩 ±10 N·m（DM3519）。 */
+static constexpr float CHASSIS_MOTOR_POSITION_MAX_RAD = 3.14f;
+static constexpr float CHASSIS_MOTOR_VELOCITY_MAX_RAD_S = 200.0f;
+static constexpr float CHASSIS_MOTOR_TORQUE_MAX_NM = 10.0f;
+
+static Class_DMMotor Chassis_Motor[4];
+static SpeedPlanningState Chassis_X_Planning;
+static SpeedPlanningState Chassis_Y_Planning;
+static SpeedPlanningState Chassis_W_Planning;
+static bool Chassis_Initialized;
+static bool Chassis_Output_Enabled;
+static float Chassis_Planned_Velocity_X;
+static float Chassis_Planned_Velocity_Y;
+static float Chassis_Planned_Velocity_W;
+
+/** 使能或失能四台底盘电机；状态未变化时不重复下发命令。 */
+static void Chassis_SetEnabled(bool enabled)
+{
+    if (enabled == Chassis_Output_Enabled)
+    {
+        return;
+    }
+    Chassis_Output_Enabled = enabled;
+
+    for (uint32_t index = 0U; index < 4U; ++index)
+    {
+        if (enabled)
+        {
+            (void)Chassis_Motor[index].Enable();
+        }
+        else
+        {
+            (void)Chassis_Motor[index].Disable();
+        }
+    }
+}
+
+/**
+ * @brief 麦轮逆运动学：把底盘三轴速度分解为四轮目标速度并下发。
+ * @details 与 demo 的 Chassis_Analysis_Vel 一致：轮速由 vx/vy/w 直接代数组合，
+ *          不做轮距与半径换算，最后整轮限幅。
+ * @note 原实现会把组合结果强制转换为 int16_t 再赋回 float，本版本保留浮点精度。
+ */
+static void Chassis_ControlMotors(float velocity_x, float velocity_y, float velocity_w)
+{
+    float wheel_speed[4];
+    wheel_speed[0] = velocity_y + velocity_x + velocity_w;
+    wheel_speed[1] = velocity_y - velocity_x + velocity_w;
+    wheel_speed[2] = -velocity_y - velocity_x + velocity_w;
+    wheel_speed[3] = velocity_x - velocity_y + velocity_w;
+
+    for (uint32_t index = 0U; index < 4U; ++index)
+    {
+        if (wheel_speed[index] > CHASSIS_WHEEL_SPEED_MAX)
+        {
+            wheel_speed[index] = CHASSIS_WHEEL_SPEED_MAX;
+        }
+        else if (wheel_speed[index] < -CHASSIS_WHEEL_SPEED_MAX)
+        {
+            wheel_speed[index] = -CHASSIS_WHEEL_SPEED_MAX;
+        }
+
+        Chassis_Motor[index].SetSpeed(wheel_speed[index]);
+    }
+}
+
+#endif /* LEGACY_INFANTRY */
 
 #if CHASSIS
 static constexpr float CHASSIS_HALF_LENGTH_M = 0.163f;
@@ -193,7 +301,37 @@ bool Chassis_Init(void)
     Chassis_Feedback = {};
     Chassis_Feedback_Divider = 0U;
 
-#if CHASSIS
+#if LEGACY_INFANTRY
+    bool initialized = true;
+    for (uint32_t index = 0U; index < 4U; ++index)
+    {
+        initialized = Chassis_Motor[index].Init(&hfdcan1,
+                                               CHASSIS_MOTOR_CAN_ID[index],
+                                               CHASSIS_MOTOR_MASTER_ID[index],
+                                               Enum_DMMotor_Mode::SPEED,
+                                               false,
+                                               CHASSIS_MOTOR_POSITION_MAX_RAD,
+                                               CHASSIS_MOTOR_VELOCITY_MAX_RAD_S,
+                                               CHASSIS_MOTOR_TORQUE_MAX_NM) &&
+                      initialized;
+    }
+
+    SpeedPlanning_Init(&Chassis_X_Planning, 0.0f);
+    SpeedPlanning_Init(&Chassis_Y_Planning, 0.0f);
+    SpeedPlanning_Init(&Chassis_W_Planning, 0.0f);
+    Chassis_Planned_Velocity_X = 0.0f;
+    Chassis_Planned_Velocity_Y = 0.0f;
+    Chassis_Planned_Velocity_W = 0.0f;
+
+    Chassis_Initialized = initialized;
+    Chassis_Output_Enabled = true;
+    if (initialized)
+    {
+        /* 上电默认失能，与老步兵 SafetyTask 一致：等遥控健康互锁解锁后才输出。 */
+        Chassis_SetEnabled(false);
+    }
+    return initialized;
+#elif CHASSIS
     Struct_DJIMotor_Init_Config wheel_config{};
     wheel_config.hfdcan = &hfdcan1;
     wheel_config.motor_type = Enum_DJIMotor_Type::M3508;
@@ -244,7 +382,49 @@ void Chassis_Update(void)
         Chassis_Command = command;
     }
 
-#if CHASSIS
+#if LEGACY_INFANTRY
+    if (Chassis_Initialized)
+    {
+        const bool enabled = Chassis_Command.mode != ChassisMode::ZERO_FORCE;
+        Chassis_SetEnabled(enabled);
+
+        if (enabled)
+        {
+            /* 速度规划：三轴各自按非对称速率限制平滑，反向时先刹停再反向加速。 */
+            Chassis_Planned_Velocity_X = SpeedPlanning_UpdateRateLimited(
+                Chassis_Command.velocity_x_m_s, &Chassis_X_Planning, CHASSIS_CONTROL_DT,
+                CHASSIS_X_ACCEL_LIMIT, CHASSIS_X_DECEL_LIMIT,
+                CHASSIS_X_RELEASE_LIMIT, CHASSIS_X_REVERSE_LIMIT,
+                CHASSIS_PLANNING_THRESHOLD);
+            Chassis_Planned_Velocity_Y = SpeedPlanning_UpdateRateLimited(
+                Chassis_Command.velocity_y_m_s, &Chassis_Y_Planning, CHASSIS_CONTROL_DT,
+                CHASSIS_Y_ACCEL_LIMIT, CHASSIS_Y_DECEL_LIMIT,
+                CHASSIS_Y_RELEASE_LIMIT, CHASSIS_Y_REVERSE_LIMIT,
+                CHASSIS_PLANNING_THRESHOLD);
+            Chassis_Planned_Velocity_W = SpeedPlanning_UpdateRateLimited(
+                Chassis_Command.angular_velocity_rad_s, &Chassis_W_Planning, CHASSIS_CONTROL_DT,
+                CHASSIS_W_ACCEL_LIMIT, CHASSIS_W_DECEL_LIMIT,
+                CHASSIS_W_RELEASE_LIMIT, CHASSIS_W_REVERSE_LIMIT,
+                CHASSIS_PLANNING_THRESHOLD);
+
+            Chassis_ControlMotors(Chassis_Planned_Velocity_X,
+                                  Chassis_Planned_Velocity_Y,
+                                  Chassis_Planned_Velocity_W);
+        }
+
+        /* 底盘不测量实际速度，反馈字段表示本周期下发的规划目标与设备在线状态。 */
+        bool online = true;
+        for (uint32_t index = 0U; index < 4U; ++index)
+        {
+            online = online && Chassis_Motor[index].IsOnline();
+        }
+        Chassis_Feedback.velocity_x_m_s = Chassis_Planned_Velocity_X;
+        Chassis_Feedback.velocity_y_m_s = Chassis_Planned_Velocity_Y;
+        Chassis_Feedback.angular_velocity_rad_s = Chassis_Planned_Velocity_W;
+        Chassis_Feedback.enabled = Chassis_Output_Enabled;
+        Chassis_Feedback.online = online;
+    }
+#elif CHASSIS
     if (Chassis_Initialized)
     {
         const bool enabled = Chassis_Command.mode != ChassisMode::ZERO_FORCE;
