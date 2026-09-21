@@ -4,9 +4,11 @@
  * @details
  * Task 只提供 1 kHz 调度，不承载具体控制算法。RobotCmd 先更新命令，随后依次
  * 调度云台、底盘和发射 Application，各模块直接控制自己拥有的 Device。
+ * 老步兵云台板配置下通信应用先于 RobotCmd 更新，把板间通道转换为本周期命令。
  */
 
 #include "Chassis.h"
+#include "Com.h"
 #include "Gimbal.h"
 #include "RobotCmd.h"
 #include "Shoot.h"
@@ -17,6 +19,10 @@ extern "C" void Control_Task(void* argument)
     // 在每个 1 kHz CAN 发送周期前生成最新目标；BMI088 High2 任务仍优先处理传感器数据。
     osThreadSetPriority(osThreadGetId(), osPriorityHigh1);
 
+#if LEGACY_INFANTRY_GIMBAL
+    /* 云台板的输入来自底盘板，先建立板间链路接收。 */
+    Communication_Init();
+#endif
 #if GIMBAL
     Gimbal_Init();
 #endif
@@ -29,6 +35,10 @@ extern "C" void Control_Task(void* argument)
     {
         /* 由 1 ms 定时回调唤醒；阻塞等待期间不占用 CPU。 */
         osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
+#if LEGACY_INFANTRY_GIMBAL
+        /* 输入适配先于 RobotCmd，保证本周期发布的命令来自本周期通道。 */
+        Communication_Update();
+#endif
         /* 命令所有者先发布最新目标，再由各 Application 消费并执行。 */
         RobotCmd_Update();
         Gimbal_Update();

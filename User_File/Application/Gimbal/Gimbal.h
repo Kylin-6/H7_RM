@@ -26,6 +26,32 @@ enum Enum_Gimbal_Status
     Gimbal_Status_PITCH_ERROR, ///< Pitch 轴使能或通信异常
 };
 
+#if LEGACY_INFANTRY_GIMBAL
+
+/**
+ * @brief 老步兵云台板的云台状态。
+ *
+ * 云台板只有 Pitch 轴参与实际控制：DM 电机（MIT）+ DM-IMU 角度反馈，实现在
+ * `Application/Pitch`，本模块只负责模式门控与反馈汇总。Yaw 轴沿用云台板原工程的
+ * QD4310 + INS 实现，但云台板当前 BMI088 硬件故障、原工程也没有调度
+ * `Gimbal_Init` / `Gimbal_Loop`，因此默认关闭；需要 Yaw 时打开 CMake 选项
+ * `H7_LEGACY_INFANTRY_GIMBAL_YAW`。
+ */
+typedef struct
+{
+    Class_FSM<5> Gimbal_FSM; ///< Yaw 轴初始化状态机（Yaw 关闭时不使用）
+    QD4310_t Yaw_Motor;      ///< 偏航轴电机（Yaw 关闭时不初始化）
+
+    float Target_Yaw_Angle;  ///< Yaw 目标角，rad
+    float Target_Yaw_Speed;  ///< Yaw 目标角速度，rad/s
+
+    Class_PID Yaw_Angle_PID; ///< Yaw 角度外环
+    Class_PID Yaw_Speed_PID; ///< Yaw 速度内环
+} LegacyGimbal_t;
+
+extern LegacyGimbal_t Gimbal;
+
+#else
 
 typedef struct
 {
@@ -45,13 +71,14 @@ typedef struct
 
 }QDGimbal_t;
 
+extern QDGimbal_t Gimbal;
+
+#endif /* LEGACY_INFANTRY_GIMBAL */
 
 /** 初始化云台设备和控制器；电机异常时在有限重试后返回。 */
 void Gimbal_Init(void);
 /** 执行一次已经通过状态守卫的云台闭环计算。 */
 void Gimbal_Loop(void);
-
-extern QDGimbal_t Gimbal;
 
 #endif
 #endif

@@ -22,6 +22,199 @@ static GimbalMode Gimbal_Last_Mode = GimbalMode::DISABLED;
 #include "fdcan.h"
 #include <cmath>
 
+#if LEGACY_INFANTRY_GIMBAL
+
+/* ==========================================================================
+ * 老步兵云台板实现
+ *
+ * 云台板只有 Pitch 轴参与实际控制，由 Application/Pitch 承担（DM MIT + DM-IMU）。
+ * 本文件负责：Pitch 的模式门控、Yaw 轴（默认关闭）和云台反馈汇总。
+ * ========================================================================== */
+
+#include "Pitch.h"
+
+/** 弧度 / 度换算。 */
+static constexpr float GIMBAL_DEG_TO_RAD = 0.0174532925f;
+
+LegacyGimbal_t Gimbal;
+
+/**
+ * @brief Yaw 轴速度内环参数（云台板原工程数值）。
+ *
+ * 输入目标为角速度，反馈来自 INS 状态的 Z 轴角速度，输出作为 QD4310 电流指令。
+ */
+PID_InitTypeDef Legacy_Yaw_Speed_PID_Init = {
+    .K_P = 0.15f,
+    .K_I = 0.63f,
+    .K_D = 0.000f,
+    .K_F = 0.0f,
+    .I_Out_Max = 1.2f,
+    .Out_Max = 1.65f,
+    .D_T = 0.001f,
+    .Dead_Zone = 0.01f,
+    .I_Variable_Speed_A = 0.0f,
+    .I_Variable_Speed_B = 0.0f,
+    .I_Separate_Threshold = 0.0f,
+    .D_First = PID_D_First_DISABLE};
+
+/**
+ * @brief Yaw 轴角度外环参数（云台板原工程数值）。
+ *
+ * 输入目标为 Yaw 目标角度，反馈来自 INS 状态的欧拉角；输出交给速度内环。
+ */
+PID_InitTypeDef Legacy_Yaw_Angle_PID_Init = {
+    .K_P = 32.00f,
+    .K_I = 0.00f,
+    .K_D = 0.0f,
+    .K_F = 0.0f,
+    .I_Out_Max = 15.0f,
+    .Out_Max = 50.0f,
+    .D_T = 0.001f,
+    .Dead_Zone = 0.0f,
+    .I_Variable_Speed_A = 0.0f,
+    .I_Variable_Speed_B = 0.0f,
+    .I_Separate_Threshold = 0.0f,
+    .D_First = PID_D_First_DISABLE};
+
+/**
+ * @brief 初始化 Pitch 轴（必需）与 Yaw 轴（可选）。
+ *
+ * Pitch 轴只做设备与参数初始化，使能帧由 Pitch 内部延迟下发，因此这里不会阻塞。
+ * 云台板当前 BMI088 硬件故障，Yaw 轴默认不初始化；需要时打开
+ * `H7_LEGACY_INFANTRY_GIMBAL_YAW`，届时沿用原工程的有限重试使能流程。
+ */
+void Gimbal_Init(void)
+{
+    Gimbal.Gimbal_FSM.Init();
+    Gimbal.Target_Yaw_Angle = 0.0f;
+    Gimbal.Target_Yaw_Speed = 0.0f;
+
+    Pitch_Init();
+
+#if LEGACY_INFANTRY_GIMBAL_YAW
+    QD4310_Init(&Gimbal.Yaw_Motor, YAW_ID, &hfdcan2);
+
+    Gimbal.Yaw_Speed_PID.Init(Legacy_Yaw_Speed_PID_Init.K_P,
+                             Legacy_Yaw_Speed_PID_Init.K_I,
+                             Legacy_Yaw_Speed_PID_Init.K_D,
+                             Legacy_Yaw_Speed_PID_Init.K_F,
+                             Legacy_Yaw_Speed_PID_Init.I_Out_Max,
+                             Legacy_Yaw_Speed_PID_Init.Out_Max,
+                             Legacy_Yaw_Speed_PID_Init.D_T,
+                             Legacy_Yaw_Speed_PID_Init.Dead_Zone,
+                             Legacy_Yaw_Speed_PID_Init.I_Variable_Speed_A,
+                             Legacy_Yaw_Speed_PID_Init.I_Variable_Speed_B,
+                             Legacy_Yaw_Speed_PID_Init.I_Separate_Threshold,
+                             Legacy_Yaw_Speed_PID_Init.D_First);
+
+    Gimbal.Yaw_Angle_PID.Init(Legacy_Yaw_Angle_PID_Init.K_P,
+                             Legacy_Yaw_Angle_PID_Init.K_I,
+                             Legacy_Yaw_Angle_PID_Init.K_D,
+                             Legacy_Yaw_Angle_PID_Init.K_F,
+                             Legacy_Yaw_Angle_PID_Init.I_Out_Max,
+                             Legacy_Yaw_Angle_PID_Init.Out_Max,
+                             Legacy_Yaw_Angle_PID_Init.D_T,
+                             Legacy_Yaw_Angle_PID_Init.Dead_Zone,
+                             Legacy_Yaw_Angle_PID_Init.I_Variable_Speed_A,
+                             Legacy_Yaw_Angle_PID_Init.I_Variable_Speed_B,
+                             Legacy_Yaw_Angle_PID_Init.I_Separate_Threshold,
+                             Legacy_Yaw_Angle_PID_Init.D_First);
+
+    // 原工程在此处无限重试并使能 Yaw 轴；框架改为最多 2 s，避免阻塞其他 Application。
+    constexpr uint32_t GIMBAL_ENABLE_RETRY_COUNT = 100U;
+    constexpr uint32_t GIMBAL_ENABLE_RETRY_DELAY_MS = 20U;
+    for (uint32_t retry = 0U; retry < GIMBAL_ENABLE_RETRY_COUNT; ++retry)
+    {
+        if (Gimbal.Yaw_Motor.enabled)
+        {
+            Gimbal.Gimbal_FSM.Set_Status(Gimbal_Status_READY);
+            return;
+        }
+
+        Gimbal.Gimbal_FSM.Set_Status(Gimbal_Status_YAW_ERROR);
+        QD4310_Enable(&Gimbal.Yaw_Motor);
+        osDelay(GIMBAL_ENABLE_RETRY_DELAY_MS);
+    }
+#else
+    /* Yaw 轴未启用：状态机直接标记为就绪，表示云台板 Pitch 轴可用。 */
+    Gimbal.Gimbal_FSM.Set_Status(Gimbal_Status_READY);
+#endif
+}
+
+/**
+ * @brief 执行一次云台闭环计算。
+ *
+ * Pitch 轴由 Pitch_Update 内部完成 DM-IMU 位置环 + MIT 力矩下发，这里只处理 Yaw。
+ * 原工程中云台板不调度本函数，Yaw 轴打开后才有实际输出。
+ */
+void Gimbal_Loop(void)
+{
+#if LEGACY_INFANTRY_GIMBAL_YAW
+    if (!Gimbal_INS_Valid)
+    {
+        return;
+    }
+
+    // Yaw 角度外环：使用 INS 状态的 Yaw 欧拉角，计算速度内环目标。
+    Gimbal.Yaw_Angle_PID.Set_Target(Gimbal.Target_Yaw_Angle);
+    Gimbal.Yaw_Angle_PID.Set_Now(Gimbal_INS_State.yaw_rad);
+    Gimbal.Yaw_Angle_PID.TIM_Calculate_PeriodElapsedCallback();
+    Gimbal.Target_Yaw_Speed = Gimbal.Yaw_Angle_PID.Get_Out();
+
+    // Yaw 速度内环使用 INS 状态的机体系 Z 轴角速度反馈。
+    Gimbal.Yaw_Speed_PID.Set_Target(Gimbal.Target_Yaw_Speed);
+    Gimbal.Yaw_Speed_PID.Set_Now(Gimbal_INS_State.gyro_z_rad_s);
+    Gimbal.Yaw_Speed_PID.TIM_Calculate_PeriodElapsedCallback();
+
+    // Yaw 采用电流控制：速度 PID 输出直接作为电机电流指令。
+    QD4310_SetCurrent(&Gimbal.Yaw_Motor, Gimbal.Yaw_Speed_PID.Get_Out());
+#endif
+}
+
+/**
+ * @brief 云台命令处理：老步兵云台板的模式语义。
+ *
+ * - `IMU`     Pitch 跟随命令目标角（板间通道经 Communication 滤波映射后下发）；
+ * - `LOCK`    Pitch 保持当前规划目标，不接收新目标；
+ * - `DISABLED`两轴失能，Pitch 主动下发失能帧。
+ *
+ * 云台板没有 Yaw 目标输入，Yaw 始终锁在使能时刻的 INS 角度。
+ */
+static void Gimbal_HandleCommand(const GimbalCmd &command)
+{
+#if LEGACY_INFANTRY_GIMBAL_YAW
+    if (command.mode == GimbalMode::DISABLED)
+    {
+        if (Gimbal_Last_Mode != GimbalMode::DISABLED)
+        {
+            QD4310_Disable(&Gimbal.Yaw_Motor);
+        }
+    }
+    else
+    {
+        if (Gimbal_Last_Mode == GimbalMode::DISABLED)
+        {
+            QD4310_Enable(&Gimbal.Yaw_Motor);
+            /* 使能瞬间锁住当前姿态，避免目标跳向零点。 */
+            if (Gimbal_INS_Valid && std::isfinite(Gimbal_INS_State.yaw_rad))
+            {
+                Gimbal.Target_Yaw_Angle = Gimbal_INS_State.yaw_rad;
+            }
+        }
+        else if (command.mode == GimbalMode::LOCK)
+        {
+            Gimbal.Target_Yaw_Angle = Gimbal_INS_Valid ? Gimbal_INS_State.yaw_rad
+                                                       : Gimbal.Target_Yaw_Angle;
+        }
+    }
+#else
+    (void)command;
+#endif
+    Gimbal_Last_Mode = command.mode;
+}
+
+#else /* LEGACY_INFANTRY_GIMBAL */
+
 QDGimbal_t Gimbal;
 
 float Gimbal_Clamp(float value, float minimum, float maximum)
@@ -285,7 +478,51 @@ void Gimbal_Loop(void)
     QD4310_SetAngle(&Gimbal.Pitch_Motor, Gimbal.Target_Pitch_Angle);
 }
 
-#endif
+/**
+ * @brief 云台命令处理：QD4310 双轴配置的模式语义。
+ */
+static void Gimbal_HandleCommand(const GimbalCmd &command)
+{
+    if (command.mode == GimbalMode::DISABLED)
+    {
+        if (Gimbal_Last_Mode != GimbalMode::DISABLED)
+        {
+            QD4310_Disable(&Gimbal.Yaw_Motor);
+            QD4310_Disable(&Gimbal.Pitch_Motor);
+        }
+    }
+    else
+    {
+        if (Gimbal_Last_Mode == GimbalMode::DISABLED)
+        {
+            QD4310_Enable(&Gimbal.Yaw_Motor);
+            QD4310_Enable(&Gimbal.Pitch_Motor);
+        }
+        if (command.mode == GimbalMode::IMU)
+        {
+            Gimbal_SetTargetAngle(command.yaw_angle_rad,
+                                  command.pitch_angle_rad);
+            Gimbal_SetTargetSpeed(command.yaw_speed_rad_s,
+                                  command.pitch_speed_rad_s);
+        }
+        else if (Gimbal_Last_Mode != GimbalMode::LOCK)
+        {
+            if (Gimbal_INS_Valid)
+            {
+                Gimbal.Target_Yaw_Angle = Gimbal_INS_State.yaw_rad;
+            }
+            Gimbal.Target_Pitch_Angle = Gimbal_Clamp(
+                Gimbal.Pitch_Motor.angle,
+                GIMBAL_PITCH_MIN_ANGLE_RAD,
+                GIMBAL_PITCH_MAX_ANGLE_RAD);
+        }
+    }
+    Gimbal_Last_Mode = command.mode;
+}
+
+#endif /* LEGACY_INFANTRY_GIMBAL */
+
+#endif /* GIMBAL */
 
 void Gimbal_Update(void)
 {
@@ -303,51 +540,32 @@ void Gimbal_Update(void)
     {
         Gimbal_Command = command;
 #if GIMBAL
-        if (command.mode == GimbalMode::DISABLED)
-        {
-            if (Gimbal_Last_Mode != GimbalMode::DISABLED)
-            {
-                QD4310_Disable(&Gimbal.Yaw_Motor);
-                QD4310_Disable(&Gimbal.Pitch_Motor);
-            }
-        }
-        else
-        {
-            if (Gimbal_Last_Mode == GimbalMode::DISABLED)
-            {
-                QD4310_Enable(&Gimbal.Yaw_Motor);
-                QD4310_Enable(&Gimbal.Pitch_Motor);
-            }
-            if (command.mode == GimbalMode::IMU)
-            {
-                Gimbal_SetTargetAngle(command.yaw_angle_rad,
-                                      command.pitch_angle_rad);
-                Gimbal_SetTargetSpeed(command.yaw_speed_rad_s,
-                                      command.pitch_speed_rad_s);
-            }
-            else if (Gimbal_Last_Mode != GimbalMode::LOCK)
-            {
-                if (Gimbal_INS_Valid)
-                {
-                    Gimbal.Target_Yaw_Angle = Gimbal_INS_State.yaw_rad;
-                }
-                Gimbal.Target_Pitch_Angle = Gimbal_Clamp(
-                    Gimbal.Pitch_Motor.angle,
-                    GIMBAL_PITCH_MIN_ANGLE_RAD,
-                    GIMBAL_PITCH_MAX_ANGLE_RAD);
-            }
-        }
-        Gimbal_Last_Mode = command.mode;
+        Gimbal_HandleCommand(command);
 #endif
     }
 
 #if GIMBAL
+#if LEGACY_INFANTRY_GIMBAL
+    /* 云台板：Pitch 轴只在 IMU 模式下使能——链路健康且确实有目标时才允许输出，
+     * LOCK / DISABLED 都不更新目标，避免无目标时带力矩启动。与云台板原实现一致，
+     * 不使用两轴 READY 门控，Yaw 轴故障不阻断 Pitch 输出。 */
+    if (Gimbal_Command.mode == GimbalMode::IMU)
+    {
+        Pitch_Update(Gimbal_Command.pitch_angle_rad, true, true);
+    }
+    else
+    {
+        Pitch_Update(Pitch_GetTargetAngle(), false, false);
+    }
+    Gimbal_Loop();
+#else
     /* 只有初始化完成且两轴就绪时才允许输出，故障状态不得继续下发控制量。 */
     if (Gimbal_Command.mode != GimbalMode::DISABLED &&
         Gimbal.Gimbal_FSM.Get_Now_Status_Serial() == Gimbal_Status_READY)
     {
         Gimbal_Loop();
     }
+#endif
 #endif
 
     /* 控制保持 1 kHz，反馈降频到 100 Hz，减少应用消息复制。 */
@@ -362,7 +580,19 @@ void Gimbal_Update(void)
         feedback.pitch_speed_rad_s = Gimbal_INS_State.gyro_x_rad_s;
         feedback.ins_valid = Gimbal_INS_Valid;
 #if GIMBAL
+#if LEGACY_INFANTRY_GIMBAL
+        /* Pitch 反馈来自 DM-IMU：欧拉角与差分角速度。 */
+        float pitch_deg = 0.0f;
+        if (Pitch_GetImuPitchDeg(&pitch_deg))
+        {
+            feedback.pitch_rad = pitch_deg * GIMBAL_DEG_TO_RAD;
+        }
+        feedback.pitch_speed_rad_s = Pitch_GetImuVelocityRadS();
+        feedback.enabled = Pitch_IsEnabled();
+        feedback.ins_valid = Gimbal_INS_Valid || Pitch_IsImuValid();
+#else
         feedback.enabled = Gimbal.Yaw_Motor.enabled && Gimbal.Pitch_Motor.enabled;
+#endif
 #endif
         Gimbal_Feedback_Publisher.Publish(feedback);
     }

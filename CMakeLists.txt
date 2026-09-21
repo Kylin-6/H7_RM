@@ -172,6 +172,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Gimbal/Gimbal.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Chassis/Chassis.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Shoot/Shoot.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Communication/Com.cpp
 
 )
 
@@ -224,6 +225,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Device/Peripheral/Motor/QDrive
         User_File/Device/Peripheral/Motor/DMmotor
         User_File/Device/Peripheral/Motor/DJImotor
+        User_File/Device/Peripheral/IMU/DM_IMU
+        User_File/Device/Peripheral/ChassisBoard
         User_File/Middleware/Algorithm/Pulse/
         User_File/Middleware/Algorithm/CRC/
         User_File/Device/Peripheral/Remote/
@@ -231,6 +234,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Application/
         User_File/Application/RobotCmd/
         User_File/Application/Gimbal/
+        User_File/Application/Pitch/
         User_File/Application/Chassis/
         User_File/Application/Shoot/
         User_File/Application/Communication/
@@ -241,14 +245,40 @@ option(H7_APP_GIMBAL "Build the Gimbal hardware-control path" OFF)
 option(H7_APP_CHASSIS "Build the Chassis hardware-control path" OFF)
 option(H7_APP_SHOOT "Build the Shoot hardware-control path" OFF)
 
+# 老步兵云台板：DM Pitch 轴（MIT + DM-IMU 反馈）+ DM3519 摩擦轮 + M2006 拨弹盘，
+# 遥控通道由底盘板经 FDCAN2 的 0x065 帧转发。该配置固定使用 Gimbal 与 Shoot
+# 两条硬件路径，并且不控制底盘。
+option(H7_LEGACY_INFANTRY_GIMBAL
+    "Build the legacy-infantry gimbal board: DM pitch + DM friction wheels + M2006 loader" OFF)
+# 云台板当前 BMI088 硬件故障，云台板原工程没有调度 Yaw 轴，因此默认关闭；
+# 硬件恢复后打开该选项即可启用 QD4310 + INS 的 Yaw 轴。
+option(H7_LEGACY_INFANTRY_GIMBAL_YAW
+    "Also build the legacy-infantry gimbal board Yaw axis (QD4310 + INS)" OFF)
+
+if(H7_LEGACY_INFANTRY_GIMBAL AND H7_APP_CHASSIS)
+    message(FATAL_ERROR
+        "H7_LEGACY_INFANTRY_GIMBAL 与 H7_APP_CHASSIS 互斥：老步兵云台板不控制底盘")
+endif()
+
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
     BALANCE=1
-    GIMBAL=$<BOOL:${H7_APP_GIMBAL}>
+    GIMBAL=$<OR:$<BOOL:${H7_APP_GIMBAL}>,$<BOOL:${H7_LEGACY_INFANTRY_GIMBAL}>>
     CHASSIS=$<BOOL:${H7_APP_CHASSIS}>
-    SHOOT=$<BOOL:${H7_APP_SHOOT}>
+    SHOOT=$<OR:$<BOOL:${H7_APP_SHOOT}>,$<BOOL:${H7_LEGACY_INFANTRY_GIMBAL}>>
+    LEGACY_INFANTRY_GIMBAL=$<BOOL:${H7_LEGACY_INFANTRY_GIMBAL}>
+    LEGACY_INFANTRY_GIMBAL_YAW=$<BOOL:${H7_LEGACY_INFANTRY_GIMBAL_YAW}>
 )
+
+# 老步兵云台板专属源文件：只在对应配置下参与编译，其他配置保持原有构建内容不变。
+if(H7_LEGACY_INFANTRY_GIMBAL)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Pitch/Pitch.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/IMU/DM_IMU/dvc_dm_imu.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/ChassisBoard/chassis_board.cpp
+    )
+endif()
 
 # Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
