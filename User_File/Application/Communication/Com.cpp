@@ -74,6 +74,14 @@
 /** 板间链路下发分频：Control_Task 为 1 kHz，2 对应 2 ms，与老工程的 GimbalTask 周期一致。 */
 #define COMMUNICATION_BOARD_DIVIDER (2U)
 
+/**
+ * 诊断开关：置 1 时 0x070 帧的两个 yaw 字段固定为 0。
+ * @details 用于排查云台板的俯仰电机是否依赖本帧的 yaw 值——若固定为 0 后
+ *          「推底盘摇杆导致俯仰抽动」消失，说明耦合来自 0x070 而非 0x065。
+ * @warning 仅用于诊断，确认后必须置回 0。
+ */
+#define COMMUNICATION_DEBUG_FREEZE_YAW (1)
+
 /* ============================== 调试输出 ============================== */
 
 /**
@@ -283,8 +291,14 @@ void Communication_Update(void)
         }
 
         /* 地面系 Yaw 尚无外部陀螺仪来源，与 demo 一致地暂用云台电机角度代替。 */
-        const float chassis_yaw_rad = gimbal_feedback_valid ? gimbal_feedback.yaw_rad : 0.0F;
+#if COMMUNICATION_DEBUG_FREEZE_YAW
+        /* 诊断：0x070 的 yaw 字段固定为 0。 */
+        Communication_Gimbal_Board.SendChassisYaw(0.0F, 0.0F);
+#else
+        const float chassis_yaw_rad =
+            gimbal_feedback_valid ? gimbal_feedback.yaw_rad : 0.0F;
         Communication_Gimbal_Board.SendChassisYaw(chassis_yaw_rad, chassis_yaw_rad);
+#endif
         /* 裁判系统未接入，热量上限 / 冷却 / 机器人 ID 均为 0。 */
         Communication_Gimbal_Board.SendRobotStatus(0U, 0U, 0U);
     }
