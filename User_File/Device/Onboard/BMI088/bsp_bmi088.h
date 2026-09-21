@@ -111,6 +111,7 @@ public:
     inline uint32_t Get_Timestamp_Anomaly_Counter() const;
     inline float Get_D_T() const;
     inline uint64_t Get_Calculating_Time() const;
+    inline uint64_t Get_Last_Sample_Timestamp_Us() const;
 
     inline uint32_t Get_VQF_Reset_Counter() const;
     inline Class_Matrix_f32<3, 1> Get_VQF_Gyro_Bias() const;
@@ -332,6 +333,11 @@ inline uint32_t Class_BMI088::Get_Timestamp_Anomaly_Counter() const
 inline float Class_BMI088::Get_D_T() const
 {
     return D_T;
+}
+
+inline uint64_t Class_BMI088::Get_Last_Sample_Timestamp_Us() const
+{
+    return Get_Atomic_Copy(VQF_Pre_Timestamp);
 }
 
 inline uint64_t Class_BMI088::Get_Calculating_Time() const

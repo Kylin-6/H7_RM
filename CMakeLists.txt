@@ -153,6 +153,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Task/TIM_1ms_Task.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Task/BMI088_Task.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Task/StorageTask.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/User_File/Task/StatusTask.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/User_File/System/Health/sys_health.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/Motor/QDrive/QD4310.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/Motor/DMmotor/dmmotor.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/Motor/DJImotor/dji_motor.cpp
@@ -197,6 +199,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/System/Init
         User_File/Task
         User_File/System/debug
+        User_File/System/Health
         User_File/Middleware/BSP/CAN
         User_File/Middleware/BSP/UART
         User_File/Middleware/BSP/USB

@@ -25,6 +25,7 @@ struct Struct_DJIMotor_Tx_Group
 
 struct Struct_DJIMotor_Registration
 {
+    Class_DJIMotor *motor = nullptr;
     FDCAN_HandleTypeDef *hfdcan = nullptr;
     uint32_t rx_id = 0;
     bool used = false;
@@ -38,7 +39,6 @@ static constexpr float DJI_MOTOR_RPM_TO_RADIAN_PER_SECOND = 2.0f * DJI_MOTOR_PI 
 static constexpr float DJI_MOTOR_RADIAN_TO_DEGREE = 180.0f / DJI_MOTOR_PI;
 static constexpr float DJI_MOTOR_ROTOR_SPEED_LPF_ALPHA = 0.85f; // 每帧反馈低通的旧值权重
 static constexpr uint8_t DJI_MOTOR_MAX_GROUPS = 15;
-static constexpr uint8_t DJI_MOTOR_MAX_MOTORS = 24;
 
 static Struct_DJIMotor_Tx_Group DJI_Motor_Tx_Groups[DJI_MOTOR_MAX_GROUPS];
 static Struct_DJIMotor_Registration DJI_Motor_Registrations[DJI_MOTOR_MAX_MOTORS];
@@ -278,10 +278,34 @@ bool Class_DJIMotor::Init(const Struct_DJIMotor_Init_Config &config)
     sender->slot_owner[resolved_slot] = this;
     DJI_Motor_Registrations[registration_index].hfdcan = config.hfdcan;
     DJI_Motor_Registrations[registration_index].rx_id = resolved_rx_id;
+    DJI_Motor_Registrations[registration_index].motor = this;
     DJI_Motor_Registrations[registration_index].used = true;
     enabled = true;
     initialized = true;
     return true;
+}
+
+/** @brief 读取已有注册项；不触发超时处理、不修改使能或指令。 @author zzm */
+bool Class_DJIMotor::Get_Health(uint8_t index, Struct_DJIMotor_Health *snapshot)
+{
+    if (snapshot == nullptr || index >= DJI_MOTOR_MAX_MOTORS)
+    {
+        return false;
+    }
+    uint32_t interrupt_state = DJI_Motor_Enter_Critical();
+    const Class_DJIMotor *motor = DJI_Motor_Registrations[index].motor;
+    bool ready = motor != nullptr && motor->initialized;
+    if (ready)
+    {
+        snapshot->hfdcan = motor->hfdcan;
+        snapshot->rx_id = motor->rx_id;
+        snapshot->last_feedback_us = motor->last_feedback_timestamp_us;
+        snapshot->feedback_timeout_us = motor->feedback_timeout_us;
+        snapshot->feedback_received = motor->feedback_initialized;
+        snapshot->enabled = motor->enabled;
+    }
+    DJI_Motor_Exit_Critical(interrupt_state);
+    return ready;
 }
 
 /** @brief 双向同步调试区的 kp/ki/kd 与 PID 参数，通过缓存识别调试器主动修改的值。 */

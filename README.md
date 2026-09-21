@@ -140,6 +140,7 @@ EricTool 的 USB/UART 解析均只读取回调传入的缓冲区及有效长度�
 | 时间戳 | 提供统一微秒时间，供周期测量与超时判断使用 | [System/Timestamp](User_File/System/Timestamp) |
 | 参数配置 | 集中维护当前 IMU 采样、姿态与零偏估计参数 | [System/IMU](User_File/System/IMU) |
 | 调试数据 | 导出便于 Watch、绘图与遥测读取的状态 | [System/debug](User_File/System/debug) |
+| 健康状态 | 20 Hz 汇总 IMU 与已注册 DJI 电机，发布全局 `SYS_Health` 快照 | [健康系统与验证](Tests/Health/README.md) |
 | 周期与任务 | CMSIS-RTOS V2 任务入口、线程标志和周期回调 | [Task](User_File/Task) |
 
 [main.c](Core/Src/main.c) 完成 MPU、HAL 和外设初始化后调用 `System_Init()`，随后初始化 RTOS、创建任务并启动调度。CAN 发送资源在内核初始化后建立，周期服务与设备计算按职责由任务调度。
@@ -226,11 +227,12 @@ cmake --build --preset Release
 | [Boundary](Tests/Boundary) | PID 积分/死区/D 低通、KF 连续缺测、电机命令失败返回、EricTool 有界解析、UART DMA 发送寿命及忙/失败路径，共 5 组 |
 | [Trajectory](Tests/Trajectory/README.md) | 输入契约、6 万组随机初态、1657 组边界初态、10 万次逐周期改目标、连续信号跟随及分段连续性，共 5 组 |
 | [FilterPolynomial](Tests/FilterPolynomial/README.md) | 0～3 阶独立系数、流式卷积、解析导数、生命周期及配置失败状态保留，共 5 组 |
+| [Health](Tests/Health/README.md) | 快照一致性、IMU 增量告警、DJI 只读超时检测、24 电机容量及任务调度，共 5 组 |
 
 在仓库根目录运行下列 PowerShell 命令；将 `g++` 替换为本机主机编译器路径：
 
 ```powershell
-foreach ($suite in @("Fuzzy", "Boundary", "Trajectory", "FilterPolynomial")) {
+foreach ($suite in @("Fuzzy", "Boundary", "Trajectory", "FilterPolynomial", "Health")) {
     cmake -S "Tests/$suite" -B "build/Tests_$suite" -G Ninja -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release
     if ($LASTEXITCODE -ne 0) { throw "$suite 配置失败" }
     cmake --build "build/Tests_$suite"

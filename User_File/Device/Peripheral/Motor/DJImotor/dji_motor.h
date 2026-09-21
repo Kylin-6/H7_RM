@@ -18,6 +18,8 @@
 
 /* Exported macros ------------------------------------------------------------*/
 
+#define DJI_MOTOR_MAX_MOTORS 24
+
 /* Exported types -------------------------------------------------------------*/
 
 enum class Enum_DJIMotor_Type : uint8_t
@@ -119,6 +121,16 @@ struct Struct_DJIMotor_Feedback
     Struct_DJIMotor_PID_Feedback pid;
 };
 
+struct Struct_DJIMotor_Health
+{
+    FDCAN_HandleTypeDef *hfdcan;
+    uint32_t rx_id;
+    uint64_t last_feedback_us;
+    uint64_t feedback_timeout_us;
+    bool feedback_received;
+    bool enabled;
+};
+
 class Class_DJIMotor
 {
 public:
@@ -134,6 +146,7 @@ public:
     bool Set_Feedback_Source(Enum_DJIMotor_Loop loop, Enum_DJIMotor_Feedback source,
                              const float *feedback = nullptr);
     uint64_t Get_Last_Feedback_Timestamp_Us() const;
+    static bool Get_Health(uint8_t index, Struct_DJIMotor_Health *snapshot);
 
     // 接收中断更新运动反馈，Control 更新 PID 状态；整个结构不是原子快照。
     Struct_DJIMotor_Feedback feedback;
