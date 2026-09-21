@@ -71,13 +71,8 @@
 /** 2π，rad。 */
 #define CHASSIS_TWO_PI_RAD (6.28318531F)
 
-/**
- * 板间链路下发分频：Control_Task 为 1 kHz，1 表示每 1 ms 下发一次。
- * @details 诊断用。老工程是 2 ms（值 2），这里临时提高到 1 ms，用于验证
- *          「云台板俯仰抽动是否由板间帧发送时刻被控制任务推迟引起」——
- *          1 ms 下发提供双倍冗余，若现象明显减轻则说明与时序相关。
- */
-#define COMMUNICATION_BOARD_DIVIDER (1U)
+/** 板间链路下发分频：Control_Task 为 1 kHz，2 对应 2 ms，与老工程一致。 */
+#define COMMUNICATION_BOARD_DIVIDER (2U)
 
 /**
  * 诊断开关：置 1 时 0x070 帧的两个 yaw 字段固定为 0。
