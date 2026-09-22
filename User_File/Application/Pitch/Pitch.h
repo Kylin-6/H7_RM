@@ -93,6 +93,9 @@ extern "C"
 #define PITCH_DISTURBANCE_DECAY_TAU_S          (0.20f)
 /** 每次使能前等待 DM-IMU 数据并延迟下发使能帧的时间，单位 ms。 */
 #define PITCH_ENABLE_DELAY_MS   (2000U)
+/** 已使能状态下检查反馈使能位并补发使能帧的周期，单位 ms。
+ *  FDCAN1 硬件自动重传关闭后，使能帧靠该周期补发 + Daemon 离线回调兜底。 */
+#define PITCH_ENABLE_RETRY_MS   (100U)
 
 /**
  * @brief 初始化 Pitch 电机、DM-IMU 与位置环参数。

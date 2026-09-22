@@ -88,6 +88,7 @@ float pitch_imu_velocity_filtered;
 float pitch_disturbance_torque;
 EnableState pitch_enable_state;
 uint32_t pitch_enable_arm_tick;
+uint32_t pitch_enable_retry_tick;
 
 /** 一阶低通截止频率换算：tau = 1 / (2*pi*fc)。 */
 constexpr float kMotorVelocityFilterCutoffHz =
@@ -98,6 +99,11 @@ constexpr float kSamplingFrequencyHz = 1.0f / kControlPeriodS;
 /**
  * @brief 推进使能状态；ARMING 期间等到 PITCH_ENABLE_DELAY_MS 后下发使能帧。
  * @return true 表示当前允许下发控制指令。
+ * @note FDCAN1 硬件自动重传已关闭，使能帧可靠性由三层软件机制兜底：
+ *       1) Daemon 离线跃迁回调补发一帧（框架，dmmotor 内置）；
+ *       2) 本状态机 ENABLED 期间按 PITCH_ENABLE_RETRY_MS 周期检查反馈中的
+ *          协议使能位，掉使能即补发（反馈在线但驱动器自行掉使能的场景）；
+ *       3) MIT 电流指令本身 1 kHz 周期发送，单帧丢失下周期自愈。
  */
 bool UpdateEnableState(bool enabled)
 {
@@ -123,6 +129,7 @@ bool UpdateEnableState(bool enabled)
             if (pitch_motor.Enable())
             {
                 pitch_enable_state = EnableState::ENABLED;
+                pitch_enable_retry_tick = HAL_GetTick();
             }
         }
         break;
@@ -133,6 +140,16 @@ bool UpdateEnableState(bool enabled)
         {
             pitch_motor.Disable();
             pitch_enable_state = EnableState::DISABLED;
+        }
+        else if ((HAL_GetTick() - pitch_enable_retry_tick) >=
+                 PITCH_ENABLE_RETRY_MS)
+        {
+            /* 反馈帧中的协议使能位为准；已使能时补发无副作用。 */
+            if (!pitch_motor.IsEnabled())
+            {
+                (void)pitch_motor.Enable();
+            }
+            pitch_enable_retry_tick = HAL_GetTick();
         }
         break;
     }
@@ -163,6 +180,7 @@ bool Pitch_Init(void)
     pitch_disturbance_torque = 0.0f;
     pitch_enable_state = EnableState::DISABLED;
     pitch_enable_arm_tick = 0U;
+    pitch_enable_retry_tick = 0U;
 
     /* 目标规划与滤波组件：常量均为编译期正值，Init 不会失败。 */
     (void)pitch_trajectory.Init(PITCH_TRAJECTORY_MAX_VELOCITY_RAD_S,
