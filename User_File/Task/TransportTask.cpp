@@ -25,10 +25,10 @@
 /* Private macros ------------------------------------------------------------*/
 
 #if LEGACY_INFANTRY_GIMBAL
-/** JustFloat 发送周期，单位 ms。115200 波特率下 68 B 帧约占 5.9 ms，留足余量。 */
+/** JustFloat 发送周期，单位 ms。115200 波特率下 100 B 帧约占 8.7 ms。 */
 #define SHOOT_TELEMETRY_PERIOD_MS (10U)
-/** JustFloat 通道数：3 路板间遥控通道 + 13 路发射诊断。 */
-#define SHOOT_TELEMETRY_CHANNEL_COUNT (16U)
+/** JustFloat 通道数：原 16 路诊断 + 8 路 M2006/C610 排查数据。 */
+#define SHOOT_TELEMETRY_CHANNEL_COUNT (24U)
 /** JustFloat 帧尾（IEEE754 约定的不可达浮点值）。 */
 static const uint8_t SHOOT_TELEMETRY_TAIL[4] = {0x00U, 0x00U, 0x80U, 0x7FU};
 
@@ -39,6 +39,9 @@ static const uint8_t SHOOT_TELEMETRY_TAIL[4] = {0x00U, 0x00U, 0x80U, 0x7FU};
  *   [7] 摩擦轮就绪  [8] 左轮速度    [9] 右轮速度    [10] 左轮目标
  *   [11] 右轮目标   [12] 扳机状态   [13] 按下时长 ms
  *   [14] 左轮状态码 [15] 右轮状态码
+ *   [16] M2006编码器 [17] 转子累计角度° [18] 输出轴累计角度°
+ *   [19] 转子速度rad/s [20] 输出轴速度rad/s [21] 原始电流
+ *   [22] 反馈年龄ms（从未收到为-1） [23] 速度PID输出
  */
 #endif
 
@@ -82,11 +85,21 @@ extern "C" void Transport_Task(void *argument)
                            &channels[9], &channels[10], &channels[11],
                            &channels[12], &channels[13], &channels[14],
                            &channels[15]);
+            Struct_Legacy_Loader_Debug loader_debug{};
+            Shoot_GetLoaderDebug(&loader_debug);
+            channels[16] = loader_debug.encoder;
+            channels[17] = loader_debug.rotor_total_angle_degree;
+            channels[18] = loader_debug.output_total_angle_degree;
+            channels[19] = loader_debug.rotor_speed_rad_s;
+            channels[20] = loader_debug.output_speed_rad_s;
+            channels[21] = loader_debug.current_raw;
+            channels[22] = loader_debug.feedback_age_ms;
+            channels[23] = loader_debug.speed_pid_out;
 
             memcpy(justfloat_buffer, channels, sizeof(channels));
             memcpy(&justfloat_buffer[sizeof(channels)], SHOOT_TELEMETRY_TAIL,
                    sizeof(SHOOT_TELEMETRY_TAIL));
-            /* USART1 未配置 TX DMA，走阻塞发送：68 B @115200 约 5.9 ms，
+            /* USART1 未配置 TX DMA，走阻塞发送：100 B @115200 约 8.7 ms，
              * 在 10 ms 超时内完成；本任务优先级 Normal，不影响 1 kHz 控制任务。 */
             (void) UART_Transmit_Data(&huart1, justfloat_buffer,
                                       sizeof(justfloat_buffer));

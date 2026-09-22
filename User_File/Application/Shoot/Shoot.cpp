@@ -521,6 +521,25 @@ extern "C" void Shoot_GetDebug(float *initialized,
         *right_motor_state = static_cast<float>(Friction_Right.feedback.state);
 }
 
+extern "C" void Shoot_GetLoaderDebug(Struct_Legacy_Loader_Debug *debug)
+{
+    if (debug == nullptr)
+        return;
+
+    const uint64_t timestamp_us = Loader.Get_Last_Feedback_Timestamp_Us();
+    const uint64_t now_us = SYS_Timestamp.Get_Now_Microsecond();
+    debug->encoder = static_cast<float>(Loader.feedback.encoder);
+    debug->rotor_total_angle_degree = Loader.feedback.rotor_total_angle_degree;
+    debug->output_total_angle_degree = Loader.feedback.output_total_angle_degree;
+    debug->rotor_speed_rad_s = Loader.feedback.rotor_speed;
+    debug->output_speed_rad_s = Loader.feedback.output_speed;
+    debug->current_raw = static_cast<float>(Loader.feedback.current_raw);
+    debug->feedback_age_ms = timestamp_us == 0U
+                                 ? -1.0f
+                                 : static_cast<float>(now_us - timestamp_us) * 0.001f;
+    debug->speed_pid_out = Loader.feedback.pid.speed.out;
+}
+
 #endif /* SHOOT && LEGACY_INFANTRY_GIMBAL */
 
 #if SHOOT && !LEGACY_INFANTRY_GIMBAL
