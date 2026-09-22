@@ -109,6 +109,12 @@
 static Class_GimbalBoard Communication_Gimbal_Board;
 static bool Communication_Armed = false;
 static uint8_t Communication_Board_Divider;
+/** 最近一次健康帧的时刻（毫秒），供解锁/失联去抖使用。 */
+static uint32_t Communication_Last_Healthy_Tick;
+/** 最近一次不健康判定的时刻（毫秒），供解锁去抖使用。 */
+static uint32_t Communication_Last_Unhealthy_Tick;
+/** 是否收到过至少一帧健康帧；未收到前永远不解锁。 */
+static bool Communication_Ever_Healthy;
 #if COMMUNICATION_DEBUG_CHANNELS
 static uint8_t Communication_Debug_Divider;
 #endif
