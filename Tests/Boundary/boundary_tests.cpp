@@ -455,8 +455,56 @@ static void TestCommands()
     CHECK(motor.Enable());
     CHECK(last_message.id == 0x201);
 
+    Class_DMMotor high_id_motor;
+    CHECK(high_id_motor.Init(&bus, 0x50, 0x102, Enum_DMMotor_Mode::MIT));
+    CHECK(!high_id_motor.IsOnline());
+    CHECK(!high_id_motor.IsEnabled());
+    CHECK(!high_id_motor.IsDataValid());
+    CHECK(!high_id_motor.IsHealthy());
+    uint8_t mismatched_feedback[8] = {0x11, 0x80, 0, 0x80, 0, 0x80, 20, 21};
+    rx_callback(&bus, 0x102, mismatched_feedback, 8, rx_context);
+    CHECK(high_id_motor.feedback.state == 0U);
+    uint8_t high_id_feedback[8] = {0x10, 0x80, 0, 0x80, 0, 0x80, 20, 21};
+    rx_callback(&bus, 0x102, high_id_feedback, 8, rx_context);
+    CHECK(high_id_motor.feedback.state == 1U);
+    CHECK(high_id_motor.IsOnline());
+    CHECK(high_id_motor.IsEnabled());
+    CHECK(high_id_motor.IsDataValid());
+    CHECK(high_id_motor.IsHealthy());
+    CHECK(isfinite(high_id_motor.feedback.position));
+    CHECK(fabsf(high_id_motor.feedback.position) < 0.001f);
+    submit_ok = true;
+    CHECK(high_id_motor.SetMode(Enum_DMMotor_Mode::SPEED));
+    uint8_t high_id_mode_feedback[8] = {0x10, 0, 0x55, 0x0A,
+                                        (uint8_t)Enum_DMMotor_Mode::SPEED,
+                                        0, 0, 0};
+    rx_callback(&bus, 0x102, high_id_mode_feedback, 8, rx_context);
+    CHECK(high_id_motor.Enable());
+    CHECK(last_message.id == 0x250U);
+    high_id_feedback[0] = 0x20;
+    rx_callback(&bus, 0x102, high_id_feedback, 8, rx_context);
+    CHECK(high_id_motor.IsOnline());
+    CHECK(!high_id_motor.IsEnabled());
+
     QD4310_t qd{};
     QD4310_Init(&qd, 2, &bus);
+    CHECK(!QD4310_IsOnline(&qd));
+    CHECK(!QD4310_IsEnabled(&qd));
+    CHECK(!QD4310_IsDataValid(&qd));
+    CHECK(!QD4310_IsHealthy(&qd));
+    uint8_t qd_feedback[8] = {1U, 0U, 0U, 0U, 0U, 0U, 0U, 0U};
+    test_timestamp_us = 100U;
+    QD4310_Update(&qd, qd_feedback);
+    CHECK(QD4310_IsOnline(&qd));
+    CHECK(QD4310_IsEnabled(&qd));
+    CHECK(QD4310_IsDataValid(&qd));
+    CHECK(QD4310_IsHealthy(&qd));
+    test_timestamp_us += QD4310_FEEDBACK_TIMEOUT_US + 1U;
+    CHECK(!QD4310_IsOnline(&qd));
+    CHECK(!QD4310_IsDataValid(&qd));
+    CHECK(!QD4310_IsHealthy(&qd));
+    qd_feedback[0] = 0U;
+    QD4310_Update(&qd, qd_feedback);
     for (int accepted = 0; accepted <= 1; ++accepted)
     {
         submit_ok = accepted != 0;
