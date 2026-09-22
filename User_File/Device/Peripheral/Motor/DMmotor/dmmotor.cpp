@@ -155,7 +155,7 @@ bool Class_DMMotor::Init(FDCAN_HandleTypeDef *motor_hfdcan,
                          float motor_velocity_max,
                          float motor_torque_max)
 {
-    if (motor_hfdcan == nullptr || motor_can_id > 0xFFU || motor_master_id > 0x7FFU)
+    if (motor_hfdcan == nullptr || motor_master_id > 0x7FFU)
     {
         return false;
     }
@@ -186,6 +186,21 @@ bool Class_DMMotor::Init(FDCAN_HandleTypeDef *motor_hfdcan,
 bool Class_DMMotor::IsOnline() const
 {
     return feedback_daemon.IsOnline();
+}
+
+bool Class_DMMotor::IsEnabled() const
+{
+    return feedback.state == 1U;
+}
+
+bool Class_DMMotor::IsDataValid() const
+{
+    return IsOnline();
+}
+
+bool Class_DMMotor::IsHealthy() const
+{
+    return IsOnline() && IsEnabled();
 }
 
 const Daemon &Class_DMMotor::GetDaemon() const

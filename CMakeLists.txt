@@ -167,6 +167,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Middleware/Algorithm/CRC/crc8.c
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Middleware/Algorithm/CRC/crc16.c
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/Remote/remote_control.c
+        ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/Remote/sbus.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/Referee/crc_ref.c
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/Referee/referee_26.c
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/Referee/referee_UI_26.c
@@ -177,9 +178,8 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Chassis/Chassis.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Shoot/Shoot.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Communication/Com.cpp
-        # 老步兵配置：DM 底盘速度规划、SBUS 遥控接收与云台板链路
+        # 老步兵配置：DM 底盘速度规划与云台板链路（SBUS 驱动在上方框架区已统一编译）
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Middleware/Algorithm/SpeedPlanning/SpeedPlanning.c
-        ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/Remote/sbus.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/GimbalBoard/gimbal_board.cpp
 
 )

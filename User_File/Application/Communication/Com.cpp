@@ -71,6 +71,16 @@
 /** 2π，rad。 */
 #define CHASSIS_TWO_PI_RAD (6.28318531F)
 
+/**
+ * 遥控摇杆满量程幅值：SBUS 11bit 原始值减去中位 1024 后的范围是
+ * [-1024, 1023]，实遥控可达幅值约 784，沿用老工程 bsp_def.h 的定义。
+ * @note SBUS 驱动已切换为框架版（Device/Peripheral/Remote/sbus.cpp），框架头文件
+ *       不再提供该常量，故在此保留老步兵本地定义。
+ */
+#define SBUS_CHANNEL_MAX (784.0F)
+/** 解锁去抖的健康帧新鲜度门限，毫秒；沿用原 sbus 的 SBUS_HEALTH_FRAME_TIMEOUT_MS。 */
+#define COMMUNICATION_HEALTH_FRESH_MS (50U)
+
 /** 板间链路下发分频：Control_Task 为 1 kHz，2 对应 2 ms，与老工程一致。 */
 #define COMMUNICATION_BOARD_DIVIDER (2U)
 
@@ -226,19 +236,39 @@ static void Communication_IndicateArmed(bool armed)
  * @brief 维护遥控健康互锁，并同步武装指示灯。
  * @details 对应 demo 的 SafetyTask：上电默认锁定（所有电机路径保持失能命令），
  *          连续健康 200 ms 才解锁，健康帧超时 200 ms 立即重新锁定。
+ *          SBUS 驱动切换为框架版后，框架只提供瞬时健康查询 SBUS_IsHealthy()，
+ *          原驱动内部的去抖语义（SBUS_IsControlHealthyFor / SBUS_IsControlLostFor）
+ *          在这里用时间戳状态机等价复现。
  */
 static void Communication_UpdateArmState(void)
 {
+    const uint32_t now = HAL_GetTick();
+
+    if (SBUS_IsHealthy())
+    {
+        Communication_Last_Healthy_Tick = now;
+        Communication_Ever_Healthy = true;
+    }
+    else
+    {
+        Communication_Last_Unhealthy_Tick = now;
+    }
+
     if (!Communication_Armed)
     {
-        if (SBUS_IsControlHealthyFor(COMMUNICATION_RECOVERY_TIME_MS))
+        /* 等价于原 SBUS_IsControlHealthyFor：连续健康 200 ms，且最近 50 ms
+         * 内仍有健康帧（链路彻底断开时 last_healthy 不再刷新，不会误解锁）。 */
+        if (Communication_Ever_Healthy &&
+            now - Communication_Last_Unhealthy_Tick >= COMMUNICATION_RECOVERY_TIME_MS &&
+            now - Communication_Last_Healthy_Tick <= COMMUNICATION_HEALTH_FRESH_MS)
         {
             Communication_Armed = true;
             Communication_IndicateArmed(true);
         }
     }
-    else if (SBUS_IsControlLostFor(COMMUNICATION_LOSS_TIMEOUT_MS))
+    else if (now - Communication_Last_Healthy_Tick > COMMUNICATION_LOSS_TIMEOUT_MS)
     {
+        /* 等价于原 SBUS_IsControlLostFor：健康帧超时立即重新锁定。 */
         Communication_Armed = false;
         Communication_IndicateArmed(false);
     }
@@ -248,13 +278,17 @@ bool Communication_Init(void)
 {
     Communication_Armed = false;
     Communication_Board_Divider = 0U;
+    Communication_Ever_Healthy = false;
+    Communication_Last_Healthy_Tick = 0U;
+    Communication_Last_Unhealthy_Tick = 0U;
 #if COMMUNICATION_DEBUG_CHANNELS
     Communication_Debug_Divider = 0U;
 #endif
     /* 上电默认失能，与 demo 一致先点亮红色指示灯。 */
     Communication_IndicateArmed(false);
 
-    const bool sbus_ready = SBUS_Init();
+    /* SBUS 驱动为框架版，显式绑定 UART5（SBUS 参数已在 CubeMX 里配好）。 */
+    const bool sbus_ready = SBUS_Init(&huart5);
     /* 老步兵的底盘板固定在 FDCAN2 上向云台板发送状态。 */
     const bool board_ready = Communication_Gimbal_Board.Init(&hfdcan2);
 
@@ -263,13 +297,10 @@ bool Communication_Init(void)
 
 void Communication_Update(void)
 {
-    int16_t channels[SBUS_CHANNEL_COUNT] = {0};
-    uint8_t frame_lost = 0U;
-    uint8_t failsafe = 0U;
-
-    const bool available = SBUS_GetLatestFrame(channels, &frame_lost, &failsafe);
-    (void)frame_lost;
-    (void)failsafe;
+    /* 框架 SBUS 驱动返回完整帧结构；通道值已减去中位 1024，语义与原驱动一致。 */
+    Struct_SBUS_Frame sbus_frame{};
+    const bool available = SBUS_ReadLatest(&sbus_frame);
+    const int16_t *channels = sbus_frame.channels;
 
     Communication_UpdateArmState();
 
