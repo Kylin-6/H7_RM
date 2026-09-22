@@ -37,6 +37,7 @@ static uint8_t Shoot_Feedback_Divider;
  * - 热量按摩擦轮力矩突变点估计单发累积，超过上限后停止拨弹。
  * ========================================================================== */
 
+#include "alg_fsm.h"
 #include "dji_motor.h"
 #include "dmmotor.h"
 #include "fdcan.h"
@@ -107,12 +108,16 @@ enum class FireState : uint8_t
     POST_SHOT,
 };
 
-enum class JamState : uint8_t
+/* 卡弹状态序号：作 Class_FSM 的状态编号使用，超时判定用框架的
+ * Count_Time 周期计数（1 kHz 调用时单位即 ms），替代手写 tick 差值。 */
+enum JamState : uint8_t
 {
-    NORMAL,
-    SUSPECT,
-    HANDLING,
+    JAM_NORMAL = 0,
+    JAM_SUSPECT,
+    JAM_HANDLING,
 };
+
+Class_FSM<3> Jam_FSM;
 
 Class_DMMotor Friction_Left;
 Class_DMMotor Friction_Right;
@@ -120,13 +125,10 @@ Class_DJIMotor Loader;
 Class_DJIMotor_Group Loader_Group;
 
 FireState Fire_State;
-JamState Jam_State;
 uint32_t Press_Start_Tick;
 uint32_t Single_Start_Tick;
 uint32_t Single_Hold_Start_Tick;
 uint32_t Post_Shot_Start_Tick;
-uint32_t Jam_Start_Tick;
-uint32_t Jam_Handle_Start_Tick;
 uint32_t Heat_Start_Tick;
 uint32_t Last_Loop_Tick;
 uint32_t Last_Enable_Tick;
@@ -187,7 +189,7 @@ void StopAll(void)
     SetLoaderStopped();
     Fire_State = FireState::IDLE;
     Single_Holding = false;
-    Jam_State = JamState::NORMAL;
+    Jam_FSM.Set_Status(JAM_NORMAL);
     Heat_Suspect = false;
     Heat_Latched = false;
 }
@@ -223,39 +225,53 @@ void UpdateHeat(uint32_t now, bool loader_active)
     }
 }
 
-bool UpdateJam(uint32_t now, bool loader_active)
+/**
+ * @brief 卡弹状态机（框架 Class_FSM 驱动）。
+ *
+ * NORMAL --(电流超阈值)--> SUSPECT --(持续 300 ms)--> HANDLING --(回退 200 ms)--> NORMAL；
+ * SUSPECT 期间条件消失直接回 NORMAL。各状态驻留时长由 Count_Time 周期计数判定，
+ * 进入状态的清零动作由 Set_Status 完成，与原手写 tick 差值判定逐拍等价。
+ *
+ * @param loader_active 本周期拨弹盘是否在出弹。
+ * @return true 表示本周期由卡弹状态机接管拨弹盘（回退或保持回退）。
+ */
+bool UpdateJam(bool loader_active)
 {
-    if (Jam_State == JamState::HANDLING)
+    switch (Jam_FSM.Get_Now_Status_Serial())
     {
+    case JAM_HANDLING:
         Loader.Set_Outer_Loop(DJI_MOTOR_ANGLE_LOOP);
         Loader_Group.Control(Jam_Target_Angle);
-        if (now - Jam_Handle_Start_Tick >= JAM_HANDLE_MS)
-            Jam_State = JamState::NORMAL;
+        if (Jam_FSM.Status[JAM_HANDLING].Count_Time >= JAM_HANDLE_MS)
+            Jam_FSM.Set_Status(JAM_NORMAL);
         return true;
-    }
 
-    if (!loader_active ||
-        std::abs(Loader.feedback.current_raw) <= JAM_CURRENT_THRESHOLD)
-    {
-        Jam_State = JamState::NORMAL;
+    case JAM_SUSPECT:
+        if (!loader_active ||
+            std::abs(Loader.feedback.current_raw) <= JAM_CURRENT_THRESHOLD)
+        {
+            Jam_FSM.Set_Status(JAM_NORMAL);
+            return false;
+        }
+        if (Jam_FSM.Status[JAM_SUSPECT].Count_Time >= JAM_CONFIRM_MS)
+        {
+            Jam_FSM.Set_Status(JAM_HANDLING);
+            Jam_Target_Angle = Loader.feedback.output_total_angle - JAM_BACKOFF_RAD;
+            Loader.Set_Outer_Loop(DJI_MOTOR_ANGLE_LOOP);
+            Loader_Group.Control(Jam_Target_Angle);
+            return true;
+        }
+        return false;
+
+    case JAM_NORMAL:
+    default:
+        if (loader_active &&
+            std::abs(Loader.feedback.current_raw) > JAM_CURRENT_THRESHOLD)
+        {
+            Jam_FSM.Set_Status(JAM_SUSPECT);
+        }
         return false;
     }
-
-    if (Jam_State == JamState::NORMAL)
-    {
-        Jam_State = JamState::SUSPECT;
-        Jam_Start_Tick = now;
-    }
-    else if (now - Jam_Start_Tick >= JAM_CONFIRM_MS)
-    {
-        Jam_State = JamState::HANDLING;
-        Jam_Handle_Start_Tick = now;
-        Jam_Target_Angle = Loader.feedback.output_total_angle - JAM_BACKOFF_RAD;
-        Loader.Set_Outer_Loop(DJI_MOTOR_ANGLE_LOOP);
-        Loader_Group.Control(Jam_Target_Angle);
-        return true;
-    }
-    return false;
 }
 
 /** 初始化两台摩擦轮与拨弹盘；返回 false 时上层保持不控制硬件。 */
@@ -297,8 +313,7 @@ bool Shoot_Legacy_Init(void)
     Single_Start_Tick = 0U;
     Single_Hold_Start_Tick = 0U;
     Post_Shot_Start_Tick = 0U;
-    Jam_Start_Tick = 0U;
-    Jam_Handle_Start_Tick = 0U;
+    Jam_FSM.Init(JAM_NORMAL);
     Heat_Start_Tick = 0U;
     Single_Target_Angle = 0.0f;
     Single_Holding = false;
@@ -343,6 +358,9 @@ void Shoot_Legacy_Loop(void)
             Friction_Right.Enable();
         Last_Enable_Tick = now;
     }
+
+    /* 卡弹 FSM 状态驻留计数（1 kHz 下 Count_Time 单位即 ms），先于转移判定自增。 */
+    Jam_FSM.TIM_Calculate_PeriodElapsedCallback();
 
     /* 扳机状态机：短按单发、长按连发、松扳机后摩擦轮延时停转。 */
     if (Fire_State == FireState::IDLE && trigger_pressed)
@@ -437,7 +455,7 @@ void Shoot_Legacy_Loop(void)
         SetLoaderStopped();
     }
 
-    if (UpdateJam(now, loader_active))
+    if (UpdateJam(loader_active))
         loader_active = true;
     UpdateHeat(now, loader_active);
     Last_Loop_Tick = now;
