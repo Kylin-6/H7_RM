@@ -11,7 +11,10 @@
 #include "Pitch.h"
 
 #include "alg_basic.h"
+#include "alg_filter_iir.h"
 #include "alg_pid.h"
+#include "alg_slope.h"
+#include "alg_trajectory.h"
 #include "dvc_dm_imu.h"
 #include "fdcan.h"
 #include "stm32h7xx_hal.h"
@@ -38,6 +41,18 @@ enum class EnableState : uint8_t
 Class_DMMotor pitch_motor;
 Class_PID pitch_position_pid;
 
+/*
+ * 目标规划与滤波均复用框架算法库：
+ * - 手工目标路径：Class_Trajectory 三阶在线 S 曲线（限速度/加速度/加加速度）；
+ * - 遥控目标路径：Class_Slope 斜率限幅；
+ * - 电机反馈速度：Class_Filter_IIR_First_Order 一阶低通。
+ * 唯一保留手写的是 IMU 差分角速度低通：其采样间隔随丢帧数变化，
+ * 框架一阶 IIR 假定固定采样率，不适用（见 Pitch_Update 内注释）。
+ */
+Class_Trajectory pitch_trajectory;
+Class_Slope pitch_remote_slope;
+Class_Filter_IIR_First_Order pitch_motor_velocity_filter;
+
 /**
  * @brief Pitch 位置环 PID 参数。
  *
@@ -63,11 +78,7 @@ bool pitch_manual_target;
 float pitch_manual_target_angle;
 float pitch_target_angle;
 bool pitch_trajectory_initialized;
-float pitch_trajectory_position;
-float pitch_trajectory_velocity;
-float pitch_trajectory_acceleration;
 bool pitch_remote_target_initialized;
-float pitch_remote_last_target;
 float pitch_output_torque;
 float pitch_motor_velocity_filtered;
 bool pitch_imu_velocity_initialized;
@@ -78,19 +89,11 @@ float pitch_disturbance_torque;
 EnableState pitch_enable_state;
 uint32_t pitch_enable_arm_tick;
 
-/** 把目标角度限制在 DM-IMU 可达范围内。 */
-float ClampTarget(float value)
-{
-    if (value < PITCH_TARGET_MIN_RAD)
-    {
-        return PITCH_TARGET_MIN_RAD;
-    }
-    if (value > PITCH_TARGET_MAX_RAD)
-    {
-        return PITCH_TARGET_MAX_RAD;
-    }
-    return value;
-}
+/** 一阶低通截止频率换算：tau = 1 / (2*pi*fc)。 */
+constexpr float kMotorVelocityFilterCutoffHz =
+    1.0f / (6.283185307179586f * PITCH_VELOCITY_FILTER_TAU_S);
+/** 采样频率，与 1 kHz 控制任务一致。 */
+constexpr float kSamplingFrequencyHz = 1.0f / kControlPeriodS;
 
 /**
  * @brief 推进使能状态；ARMING 期间等到 PITCH_ENABLE_DELAY_MS 后下发使能帧。
@@ -137,92 +140,6 @@ bool UpdateEnableState(bool enabled)
     return pitch_enable_state == EnableState::ENABLED;
 }
 
-/**
- * @brief 遥控目标路径：只限制目标最大斜率，避免指令快于机构能力。
- * @param requested_target_rad 上层目标角度，单位 rad。
- * @param imu_pitch_rad 当前 DM-IMU 角度，用于首次对齐。
- * @param[out] target_velocity_rad_s 本周期目标速度，用于速度前馈。
- * @return 本周期目标角，单位 rad。
- */
-float ShapeRemoteTarget(float requested_target_rad,
-                        float imu_pitch_rad,
-                        float &target_velocity_rad_s)
-{
-    if (!pitch_remote_target_initialized)
-    {
-        pitch_remote_last_target = imu_pitch_rad;
-        pitch_remote_target_initialized = true;
-    }
-
-    const float max_target_step =
-        PITCH_REMOTE_TARGET_VELOCITY_MAX_RAD_S * kControlPeriodS;
-    const float target_step =
-        Basic_Math_Constrain(requested_target_rad - pitch_remote_last_target,
-                             -max_target_step,
-                             max_target_step);
-    const float target_rad = pitch_remote_last_target + target_step;
-    target_velocity_rad_s = target_step / kControlPeriodS;
-    pitch_remote_last_target = target_rad;
-    /* 两条路径互斥：进入遥控路径即作废 S 曲线状态。 */
-    pitch_trajectory_initialized = false;
-    return target_rad;
-}
-
-/**
- * @brief 手工 / 上层目标路径：在线限加加速度 S 曲线。
- * @return 本周期目标角，单位 rad。
- */
-float ShapeTrajectoryTarget(float requested_target_rad, float imu_pitch_rad)
-{
-    if (!pitch_trajectory_initialized)
-    {
-        pitch_trajectory_position = imu_pitch_rad;
-        pitch_trajectory_velocity = 0.0f;
-        pitch_trajectory_acceleration = 0.0f;
-        pitch_trajectory_initialized = true;
-    }
-
-    const float trajectory_error = requested_target_rad - pitch_trajectory_position;
-    const float trajectory_direction = trajectory_error >= 0.0f ? 1.0f : -1.0f;
-    const float braking_velocity =
-        std::sqrt(2.0f * PITCH_TRAJECTORY_MAX_ACCEL_RAD_S2 *
-                  std::fabs(trajectory_error));
-    const float desired_velocity =
-        trajectory_direction * std::fmin(PITCH_TRAJECTORY_MAX_VELOCITY_RAD_S,
-                                         braking_velocity);
-    const float desired_acceleration =
-        Basic_Math_Constrain((desired_velocity - pitch_trajectory_velocity) /
-                                 kControlPeriodS,
-                             -PITCH_TRAJECTORY_MAX_ACCEL_RAD_S2,
-                             PITCH_TRAJECTORY_MAX_ACCEL_RAD_S2);
-    const float acceleration_step = PITCH_TRAJECTORY_MAX_JERK_RAD_S3 * kControlPeriodS;
-    pitch_trajectory_acceleration +=
-        Basic_Math_Constrain(desired_acceleration - pitch_trajectory_acceleration,
-                             -acceleration_step,
-                             acceleration_step);
-    pitch_trajectory_velocity += pitch_trajectory_acceleration * kControlPeriodS;
-    pitch_trajectory_velocity =
-        Basic_Math_Constrain(pitch_trajectory_velocity,
-                             -PITCH_TRAJECTORY_MAX_VELOCITY_RAD_S,
-                             PITCH_TRAJECTORY_MAX_VELOCITY_RAD_S);
-
-    const float next_position =
-        pitch_trajectory_position + pitch_trajectory_velocity * kControlPeriodS;
-    if ((requested_target_rad - pitch_trajectory_position) *
-            (requested_target_rad - next_position) <=
-        0.0f)
-    {
-        pitch_trajectory_position = requested_target_rad;
-        pitch_trajectory_velocity = 0.0f;
-        pitch_trajectory_acceleration = 0.0f;
-    }
-    else
-    {
-        pitch_trajectory_position = next_position;
-    }
-
-    return pitch_trajectory_position;
-}
 } // namespace
 
 bool Pitch_Init(void)
@@ -236,11 +153,7 @@ bool Pitch_Init(void)
     pitch_manual_target_angle = 0.0f;
     pitch_target_angle = 0.0f;
     pitch_trajectory_initialized = false;
-    pitch_trajectory_position = 0.0f;
-    pitch_trajectory_velocity = 0.0f;
-    pitch_trajectory_acceleration = 0.0f;
     pitch_remote_target_initialized = false;
-    pitch_remote_last_target = 0.0f;
     pitch_output_torque = 0.0f;
     pitch_motor_velocity_filtered = 0.0f;
     pitch_imu_velocity_initialized = false;
@@ -250,6 +163,20 @@ bool Pitch_Init(void)
     pitch_disturbance_torque = 0.0f;
     pitch_enable_state = EnableState::DISABLED;
     pitch_enable_arm_tick = 0U;
+
+    /* 目标规划与滤波组件：常量均为编译期正值，Init 不会失败。 */
+    (void)pitch_trajectory.Init(PITCH_TRAJECTORY_MAX_VELOCITY_RAD_S,
+                                PITCH_TRAJECTORY_MAX_ACCEL_RAD_S2,
+                                PITCH_TRAJECTORY_MAX_JERK_RAD_S3,
+                                kControlPeriodS);
+    {
+        const float max_target_step =
+            PITCH_REMOTE_TARGET_VELOCITY_MAX_RAD_S * kControlPeriodS;
+        pitch_remote_slope.Init(max_target_step, max_target_step,
+                                Slope_First_TARGET);
+    }
+    pitch_motor_velocity_filter.Init(kMotorVelocityFilterCutoffHz,
+                                     kSamplingFrequencyHz);
 
     /* DM-IMU 是本轴唯一的角度反馈来源；注册失败时仍允许初始化，由上层判故障。 */
     const bool imu_ok = DM_IMU_Init(&hfdcan3,
@@ -284,7 +211,8 @@ bool Pitch_Init(void)
 
 void Pitch_SetTargetAngle(float angle_rad)
 {
-    pitch_manual_target_angle = ClampTarget(angle_rad);
+    pitch_manual_target_angle =
+        Basic_Math_Constrain(angle_rad, PITCH_TARGET_MIN_RAD, PITCH_TARGET_MAX_RAD);
     pitch_manual_target = true;
 }
 
@@ -338,20 +266,47 @@ void Pitch_Update(float requested_target_rad, bool target_valid, bool enabled)
         return;
     }
 
-    requested_target_rad = ClampTarget(requested_target_rad);
+    requested_target_rad =
+        Basic_Math_Constrain(requested_target_rad, PITCH_TARGET_MIN_RAD,
+                             PITCH_TARGET_MAX_RAD);
 
     const float imu_pitch_rad = imu_pitch_deg * kDegreeToRadian;
     float target_rad;
     float target_velocity_rad_s;
     if (pitch_manual_target)
     {
-        target_rad = ShapeTrajectoryTarget(requested_target_rad, imu_pitch_rad);
-        target_velocity_rad_s = pitch_trajectory_velocity;
+        /* 手工目标路径：框架三阶 S 曲线，限速度/加速度/加加速度，从当前
+         * IMU 角度起步（路径切换时由 _initialized 标志触发 Reset）。 */
+        if (!pitch_trajectory_initialized)
+        {
+            pitch_trajectory.Reset(imu_pitch_rad);
+            pitch_trajectory_initialized = true;
+        }
+        pitch_trajectory.Set_Target_Position(requested_target_rad);
+        pitch_trajectory.TIM_Calculate_PeriodElapsedCallback();
+        target_rad = pitch_trajectory.Get_Position();
+        target_velocity_rad_s = pitch_trajectory.Get_Velocity();
+        /* 两条路径互斥：进入手工路径即作废斜坡状态。 */
     }
     else
     {
-        target_rad = ShapeRemoteTarget(requested_target_rad, imu_pitch_rad,
-                                       target_velocity_rad_s);
+        /* 遥控目标路径：框架斜坡限幅，从当前 IMU 角度起步。
+         * 每周期把 Now_Real 对齐到上一周期输出，保持纯斜坡语义；
+         * 前馈速度 = 本周期实际步长 / 周期，与原实现逐项一致。 */
+        if (!pitch_remote_target_initialized)
+        {
+            pitch_remote_slope.Reset(imu_pitch_rad);
+            pitch_remote_target_initialized = true;
+        }
+        const float previous_target = pitch_remote_slope.Get_Out();
+        pitch_remote_slope.Set_Now_Real(previous_target);
+        pitch_remote_slope.Set_Target(requested_target_rad);
+        pitch_remote_slope.TIM_Calculate_PeriodElapsedCallback();
+        target_rad = pitch_remote_slope.Get_Out();
+        target_velocity_rad_s =
+            (target_rad - previous_target) / kControlPeriodS;
+        /* 两条路径互斥：进入遥控路径即作废 S 曲线状态。 */
+        pitch_trajectory_initialized = false;
     }
 
     /* 保存规划后的目标，供遥测 / 上层读取。 */
@@ -373,6 +328,8 @@ void Pitch_Update(float requested_target_rad, bool target_valid, bool enabled)
             Basic_Math_Constrain((imu_pitch_rad - pitch_imu_last_angle) / sample_period,
                                  -PITCH_IMU_VELOCITY_MAX_RAD_S,
                                  PITCH_IMU_VELOCITY_MAX_RAD_S);
+        /* 框架 Class_Filter_IIR_First_Order 假定固定采样率（Init 时定死 alpha）；
+         * 此处采样间隔随 DM-IMU 丢帧数变化，需按实际间隔重算 alpha，故保留手写。 */
         const float imu_velocity_alpha =
             sample_period / (PITCH_IMU_VELOCITY_FILTER_TAU_S + sample_period);
         pitch_imu_velocity_filtered +=
@@ -381,12 +338,12 @@ void Pitch_Update(float requested_target_rad, bool target_valid, bool enabled)
         pitch_imu_last_angle = imu_pitch_rad;
     }
 
-    /* 电机速度只做滤波与遥测，不参与控制（阻尼系数为 0）。 */
-    constexpr float kVelocityFilterAlpha =
-        kControlPeriodS / (PITCH_VELOCITY_FILTER_TAU_S + kControlPeriodS);
-    pitch_motor_velocity_filtered +=
-        kVelocityFilterAlpha *
-        (pitch_motor.feedback.velocity - pitch_motor_velocity_filtered);
+    /* 电机速度只做滤波与遥测，不参与控制（阻尼系数为 0）。
+     * 框架一阶 IIR：截止频率由 tau 换算，首帧自动对齐输入（原实现从 0 收敛，
+     * 电机使能前速度为 0，两者稳态一致，框架版无启动爬升）。 */
+    pitch_motor_velocity_filter.Set_Now(pitch_motor.feedback.velocity);
+    pitch_motor_velocity_filter.TIM_Calculate_PeriodElapsedCallback();
+    pitch_motor_velocity_filtered = pitch_motor_velocity_filter.Get_Out();
 
     /* 位置环反馈使用 DM-IMU pitch，不使用电机单圈编码器角度。 */
     pitch_position_pid.Set_Target(target_rad);

@@ -46,6 +46,8 @@ public:
 
     inline void Set_Now_Real(const float &__Now_Real);
 
+    inline void Reset(const float &__Value);
+
     inline void Set_Increase_Value(const float &__Increase_Value);
 
     inline void Set_Decrease_Value(const float &__Decrease_Value);
@@ -109,6 +111,21 @@ inline float Class_Slope::Get_Out() const
 inline void Class_Slope::Set_Now_Real(const float &__Now_Real)
 {
     Now_Real = __Now_Real;
+}
+
+/**
+ * @brief 将规划器整体重定位到指定值
+ *
+ * @param __Value 起始值, 输出/规划值/真实值/目标值一并对齐
+ * @note 供目标路径切换后从当前实际状态重新起步, 避免从零爬升;
+ *       语义与 Class_Filter_IIR_First_Order::Reset 一致。
+ */
+inline void Class_Slope::Reset(const float &__Value)
+{
+    Out = __Value;
+    Now_Planning = __Value;
+    Now_Real = __Value;
+    Target = __Value;
 }
 
 /**

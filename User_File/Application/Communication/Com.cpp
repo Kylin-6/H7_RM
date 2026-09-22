@@ -17,6 +17,7 @@
 #include "Com.h"
 
 #include "RobotCmd.h"
+#include "alg_filter_iir.h"
 
 #include <cstdint>
 #include <string.h>
@@ -35,13 +36,13 @@ void Communication_Callback(uint8_t* Buffer, uint16_t Length)
 
 namespace
 {
-/** 控制周期，与 1 kHz 控制任务一致。 */
-constexpr float kControlPeriodS = 0.001f;
-
 /* Pitch 通道 -> DM-IMU 目标角（数值取自云台板原 Pitch 模块）。 */
 constexpr float kPitchChannelMin = -770.0f;
 constexpr float kPitchChannelSpan = 1520.0f;
 constexpr float kPitchChannelFilterTauS = 0.025f;
+/** 由时间常数换算的一阶低通截止频率：fc = 1 / (2*pi*tau)，Hz。 */
+constexpr float kPitchChannelFilterCutoffHz =
+    1.0f / (6.283185307179586f * kPitchChannelFilterTauS);
 
 /* 火控开关双阈值：端点约为 +/-780，中间区保持上次状态以抑制抖动。 */
 constexpr int16_t kFirePressedThreshold = -500;
@@ -59,32 +60,13 @@ constexpr float kLoaderMaxOutputRadS =
 Class_ChassisBoard chassis_board;
 bool communication_initialized;
 bool fire_trigger_pressed;
-bool pitch_filter_initialized;
-float pitch_filter_stage1;
-float pitch_filtered;
+/* Pitch 通道两级一阶低通（框架 Class_Filter_IIR_First_Order 级联），
+ * 每级时间常数 25 ms，总延迟约 50 ms，与原手写实现一致。 */
+Class_Filter_IIR_First_Order pitch_filter_stage1;
+Class_Filter_IIR_First_Order pitch_filter_stage2;
 GimbalCmd last_gimbal_command;
 ShootCmd last_shoot_command;
 bool last_command_valid;
-
-/** 两级一阶低通，抑制通道抖动；每级时间常数 25 ms。 */
-float FilterPitchChannel(int16_t channel)
-{
-    constexpr float alpha =
-        kControlPeriodS / (kPitchChannelFilterTauS + kControlPeriodS);
-
-    if (!pitch_filter_initialized)
-    {
-        pitch_filter_stage1 = static_cast<float>(channel);
-        pitch_filtered = pitch_filter_stage1;
-        pitch_filter_initialized = true;
-        return pitch_filtered;
-    }
-
-    pitch_filter_stage1 +=
-        alpha * (static_cast<float>(channel) - pitch_filter_stage1);
-    pitch_filtered += alpha * (pitch_filter_stage1 - pitch_filtered);
-    return pitch_filtered;
-}
 
 /** 通道值线性映射到 DM-IMU Pitch 限位。 */
 float MapPitchChannel(float channel)
@@ -159,9 +141,9 @@ void Communication_Init(void)
     /* 板间链路走云台板的 FDCAN2，与底盘板的下行帧一致。 */
     chassis_board.Init(&hfdcan2);
     fire_trigger_pressed = false;
-    pitch_filter_initialized = false;
-    pitch_filter_stage1 = 0.0f;
-    pitch_filtered = 0.0f;
+    /* 两级低通：每级 tau = 25 ms（原工程数值），1 kHz 采样。 */
+    pitch_filter_stage1.Init(kPitchChannelFilterCutoffHz, 1000.0f);
+    pitch_filter_stage2.Init(kPitchChannelFilterCutoffHz, 1000.0f);
     last_gimbal_command = {};
     last_shoot_command = {};
     last_command_valid = false;
@@ -215,7 +197,14 @@ void Communication_Update(void)
     /* 云台板没有 Yaw 目标输入：Yaw 锁在使能时刻的姿态，目标角由 Gimbal 保持。 */
     gimbal_command.yaw_angle_rad = 0.0f;
     gimbal_command.yaw_speed_rad_s = 0.0f;
-    gimbal_command.pitch_angle_rad = MapPitchChannel(FilterPitchChannel(pitch));
+    /* 两级级联低通：首帧由 Set_Now 自动对齐通道值（与原实现一致）；
+     * 链路失效期间不喂数据、不清历史，恢复后经限速率路径平滑过渡。 */
+    pitch_filter_stage1.Set_Now(static_cast<float>(pitch));
+    pitch_filter_stage1.TIM_Calculate_PeriodElapsedCallback();
+    pitch_filter_stage2.Set_Now(pitch_filter_stage1.Get_Out());
+    pitch_filter_stage2.TIM_Calculate_PeriodElapsedCallback();
+    gimbal_command.pitch_angle_rad =
+        MapPitchChannel(pitch_filter_stage2.Get_Out());
     gimbal_command.pitch_speed_rad_s = 0.0f;
 
     ShootCmd shoot_command{};
