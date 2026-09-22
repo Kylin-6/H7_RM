@@ -57,20 +57,21 @@ Application 不应：
 顺序是契约：RobotCmd 先发布，消费者在同一控制周期读取；各 Application 更新后发布的
 反馈由 RobotCmd 在后续周期读取。Application 不创建额外控制任务。
 
-## 4. RobotCmd：命令唯一入口
+## 4. RobotCmd：命令入口与反馈聚合
 
-RobotCmd 不直接访问电机、CAN 或 IMU。上层输入模块通过以下 API 更新目标：
+RobotCmd 不直接访问电机、CAN 或 IMU。命令发布者归属：
+
+- **云台 / 发射命令**：由输入适配模块（如 Communication）直接发布
+  `Gimbal_Command_Topic` / `Shoot_Command_Topic`（Topic 为 Latest-Value 语义，
+  重复值发布幂等）；RobotCmd 只在 `RobotCmd_Init()` 发布一次安全启动命令。
+- **底盘命令**：仍经 setter 中转，由 dirty 标志控制发布：
 
 ```cpp
-void RobotCmd_SetGimbal(const GimbalCmd &command);
 void RobotCmd_SetChassis(const ChassisCmd &command);
-void RobotCmd_SetShoot(const ShootCmd &command);
 bool RobotCmd_PushShootEvent(const ShootEvent &event);
 ```
 
-连续命令写入本地缓存并设置 dirty 标志，`RobotCmd_Update()` 才发布到对应 Topic。多个
-上层输入若可能同时写同一类命令，必须在 RobotCmd 之前定义优先级和仲裁，不能绕过
-RobotCmd 直接发布。
+多个上层输入若可能同时写同一类命令，必须在发布前定义优先级和仲裁。
 
 启动默认值：
 

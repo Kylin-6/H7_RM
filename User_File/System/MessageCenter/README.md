@@ -184,10 +184,11 @@ Gimbal_Update（Control_Task，1 kHz）
 ### 6.2 RobotCmd 与 Application
 
 ```text
-上层输入
-  └─ RobotCmd_SetGimbal / SetChassis / SetShoot
-          ↓ dirty 标志
-     RobotCmd_Update
+上层输入（输入适配模块）
+  ├─ 云台/发射：直接 Publish Gimbal_Command_Topic / Shoot_Command_Topic
+  └─ 底盘：RobotCmd_SetChassis → dirty 标志
+          ↓
+     RobotCmd_Update（发布底盘命令；Init 发布一次安全启动命令）
           ↓ Publish 最新命令
  Gimbal / Chassis / Shoot Subscriber
           ↓ 直接控制所属 Device

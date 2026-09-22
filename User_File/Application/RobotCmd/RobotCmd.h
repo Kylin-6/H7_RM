@@ -3,15 +3,13 @@
 
 #include "message_types.h"
 
-/** 装载机器人安全启动默认命令。 */
+/** 装载机器人安全启动默认命令并发布一次；云台/发射命令后续由输入适配模块直发 Topic。 */
 void RobotCmd_Init(void);
-/** 周期读取模块反馈，并发布发生变化的控制命令。 */
+/** 周期读取模块反馈，并发布发生变化的底盘控制命令。 */
 void RobotCmd_Update(void);
 
-/** 以下接口由遥控器、视觉或上层状态机更新对应应用目标。 */
-void RobotCmd_SetGimbal(const GimbalCmd &command);
+/** 底盘命令仍经此中转；云台/发射命令请直接发布对应 Topic。 */
 void RobotCmd_SetChassis(const ChassisCmd &command);
-void RobotCmd_SetShoot(const ShootCmd &command);
 /** 将一次性射击动作压入固定容量 FIFO；队列已满时返回 false。 */
 bool RobotCmd_PushShootEvent(const ShootEvent &event);
 

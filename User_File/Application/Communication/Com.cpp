@@ -16,7 +16,8 @@
 
 #include "Com.h"
 
-#include "RobotCmd.h"
+#include "message_center.h"
+
 #include "alg_filter_iir.h"
 
 #include <cstdint>
@@ -64,9 +65,10 @@ bool fire_trigger_pressed;
  * 每级时间常数 25 ms，总延迟约 50 ms，与原手写实现一致。 */
 Class_Filter_IIR_First_Order pitch_filter_stage1;
 Class_Filter_IIR_First_Order pitch_filter_stage2;
-GimbalCmd last_gimbal_command;
-ShootCmd last_shoot_command;
-bool last_command_valid;
+/* 云台 / 发射命令直发 Topic：Topic 为 Latest-Value 语义，重复值发布幂等，
+ * 不再经 RobotCmd 全局 setter 中转，也无须逐字段 change-detection。 */
+Publisher<GimbalCmd> Gimbal_Command_Publisher(MessageCenter::Gimbal_Command_Topic);
+Publisher<ShootCmd> Shoot_Command_Publisher(MessageCenter::Shoot_Command_Topic);
 
 /** 通道值线性映射到 DM-IMU Pitch 限位。 */
 float MapPitchChannel(float channel)
@@ -90,44 +92,11 @@ float MapDialToLoaderSpeed(int16_t dial)
            static_cast<float>(kDialMax - kDialMin);
 }
 
-/** 逐字段比较，避免每次控制周期都重复发布未变化的命令。 */
-bool GimbalCommandChanged(const GimbalCmd &command)
-{
-    return !last_command_valid ||
-           command.yaw_angle_rad != last_gimbal_command.yaw_angle_rad ||
-           command.pitch_angle_rad != last_gimbal_command.pitch_angle_rad ||
-           command.yaw_speed_rad_s != last_gimbal_command.yaw_speed_rad_s ||
-           command.pitch_speed_rad_s != last_gimbal_command.pitch_speed_rad_s ||
-           command.mode != last_gimbal_command.mode;
-}
-
-bool ShootCommandChanged(const ShootCmd &command)
-{
-    return !last_command_valid ||
-           command.friction_speed_deg_s != last_shoot_command.friction_speed_deg_s ||
-           command.loader_speed_deg_s != last_shoot_command.loader_speed_deg_s ||
-           command.shoot_rate_hz != last_shoot_command.shoot_rate_hz ||
-           command.shoot_mode != last_shoot_command.shoot_mode ||
-           command.friction_mode != last_shoot_command.friction_mode ||
-           command.loader_mode != last_shoot_command.loader_mode;
-}
-
-/** 发布一次云台与发射命令，并记录已发布内容。 */
+/** 发布一次云台与发射命令。 */
 void PublishCommands(const GimbalCmd &gimbal_command, const ShootCmd &shoot_command)
 {
-    if (GimbalCommandChanged(gimbal_command))
-    {
-        RobotCmd_SetGimbal(gimbal_command);
-        last_gimbal_command = gimbal_command;
-    }
-    if (ShootCommandChanged(shoot_command))
-    {
-        RobotCmd_SetShoot(shoot_command);
-        last_shoot_command = shoot_command;
-    }
-
-    /* 首帧也必须参与发布；否则全零的 DISABLED 安全命令会被默认值误判为未变化。 */
-    last_command_valid = true;
+    Gimbal_Command_Publisher.Publish(gimbal_command);
+    Shoot_Command_Publisher.Publish(shoot_command);
 }
 } // namespace
 
@@ -144,9 +113,6 @@ void Communication_Init(void)
     /* 两级低通：每级 tau = 25 ms（原工程数值），1 kHz 采样。 */
     pitch_filter_stage1.Init(kPitchChannelFilterCutoffHz, 1000.0f);
     pitch_filter_stage2.Init(kPitchChannelFilterCutoffHz, 1000.0f);
-    last_gimbal_command = {};
-    last_shoot_command = {};
-    last_command_valid = false;
     communication_initialized = true;
 }
 

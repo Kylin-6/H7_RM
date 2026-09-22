@@ -1,9 +1,10 @@
 /**
  * @file RobotCmd.cpp
- * @brief 机器人命令所有权与分发中心，参考 Meta-Embedded-NG 设计。
+ * @brief 机器人命令分发与反馈聚合，参考 Meta-Embedded-NG 设计。
  * @details
- * RobotCmd 是各 Application 命令的唯一发布者，同时订阅各模块反馈。它只负责
- * 命令组织与模块间通信，不直接访问电机、CAN 或 IMU 设备。
+ * 云台/发射命令由输入适配模块（Communication）直接发布到 Topic；底盘命令仍经
+ * 这里的 setter 中转。RobotCmd 负责安全启动命令的一次性发布与各模块反馈聚合，
+ * 不直接访问电机、CAN 或 IMU 设备。
  */
 
 #include "RobotCmd.h"
@@ -23,17 +24,18 @@ static Subscriber<ChassisFeedback> Chassis_Feedback_Subscriber(
 static Subscriber<ShootFeedback> Shoot_Feedback_Subscriber(
     MessageCenter::Shoot_Feedback_Topic);
 
-static GimbalCmd Gimbal_Command;
+/*
+ * 命令发布者归属：云台/发射命令由输入适配模块（Communication）直接发布到
+ * Topic；底盘命令仍经这里的 setter 中转。RobotCmd 只保留安全启动命令的
+ * 一次性发布与反馈聚合，不再缓存云台/发射命令。
+ */
 static ChassisCmd Chassis_Command;
-static ShootCmd Shoot_Command;
 static GimbalFeedback Gimbal_Feedback;
 static ChassisFeedback Chassis_Feedback;
 static ShootFeedback Shoot_Feedback;
 
 /* Dirty 标志避免没有变化时重复发布命令。 */
-static bool Gimbal_Command_Dirty;
 static bool Chassis_Command_Dirty;
-static bool Shoot_Command_Dirty;
 static bool Gimbal_Feedback_Valid;
 static bool Chassis_Feedback_Valid;
 static bool Shoot_Feedback_Valid;
@@ -41,17 +43,16 @@ static uint8_t RobotCmd_Feedback_Divider;
 
 void RobotCmd_Init(void)
 {
-    Gimbal_Command = {};
     Chassis_Command = {};
-    Shoot_Command = {};
     /*
-     * RM 安全启动默认值：云台保持 Gimbal_Init 捕获的姿态；底盘保持零力矩，
-     * 发射机构保持关闭。
+     * RM 安全启动默认值：云台保持 Gimbal_Init 捕获的姿态（LOCK），发射机构
+     * 保持关闭。直接发布一次；后续周期由输入适配模块接管命令发布。
      */
-    Gimbal_Command.mode = GimbalMode::LOCK;
-    Gimbal_Command_Dirty = true;
+    GimbalCmd gimbal_safe_command;
+    gimbal_safe_command.mode = GimbalMode::LOCK;
+    Gimbal_Command_Publisher.Publish(gimbal_safe_command);
+    Shoot_Command_Publisher.Publish(ShootCmd{});
     Chassis_Command_Dirty = true;
-    Shoot_Command_Dirty = true;
     Gimbal_Feedback_Valid = false;
     Chassis_Feedback_Valid = false;
     Shoot_Feedback_Valid = false;
@@ -85,40 +86,18 @@ void RobotCmd_Update(void)
     }
     RobotCmd_Feedback_Divider = (RobotCmd_Feedback_Divider + 1U) % 10U;
 
-    /* 只发布被上层更新过的目标；发布后清除 Dirty 标志。 */
-    if (Gimbal_Command_Dirty)
-    {
-        Gimbal_Command_Publisher.Publish(Gimbal_Command);
-        Gimbal_Command_Dirty = false;
-    }
+    /* 云台/发射命令由输入适配模块直接发布；这里只发布底盘目标。 */
     if (Chassis_Command_Dirty)
     {
         Chassis_Command_Publisher.Publish(Chassis_Command);
         Chassis_Command_Dirty = false;
     }
-    if (Shoot_Command_Dirty)
-    {
-        Shoot_Command_Publisher.Publish(Shoot_Command);
-        Shoot_Command_Dirty = false;
-    }
-}
-
-void RobotCmd_SetGimbal(const GimbalCmd &command)
-{
-    Gimbal_Command = command;
-    Gimbal_Command_Dirty = true;
 }
 
 void RobotCmd_SetChassis(const ChassisCmd &command)
 {
     Chassis_Command = command;
     Chassis_Command_Dirty = true;
-}
-
-void RobotCmd_SetShoot(const ShootCmd &command)
-{
-    Shoot_Command = command;
-    Shoot_Command_Dirty = true;
 }
 
 bool RobotCmd_PushShootEvent(const ShootEvent &event)
