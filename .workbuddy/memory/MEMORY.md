@@ -21,5 +21,5 @@
 - 设备接入在线检测用 Daemon + DaemonManager::Register；离线恢复用 Daemon 离线跃迁回调（dmmotor OfflineCallback 为范例）。
 - 状态机用 Class_FSM（Count_Time 周期计数即 ms）；超时判定不再手写 tick 差值。
 - 算法复用优先级：Class_Trajectory（S 曲线）/ Class_Slope（斜坡）/ Class_Filter_IIR_First_Order（一阶低通，注意变采样间隔场景不适用）/ Basic_Math_Constrain。
-- FDCAN 三总线 AutoRetransmission 统一 DISABLE，使能帧靠软件兜底（Daemon 回调 + 应用层周期补发）。
+- 老步兵云台 FDCAN1 AutoRetransmission 保持 ENABLE（fdcan.c 与 .ioc 同步）；FDCAN2/3 保持 DISABLE。关闭 FDCAN1 后用户反馈右摩擦轮持续不转，已恢复配置、待上板复验；Daemon 回调与周期使能补发无法兜底在线且已使能时的速度帧仲裁丢失，不能据此关闭硬件重传。
 - 排查文档：《重复造轮子排查_云台板移植代码.md》《框架修复清单.md》为活文档，修一项勾一项。

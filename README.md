@@ -274,6 +274,30 @@ foreach ($suite in @("Fuzzy", "Boundary", "Trajectory", "FilterPolynomial")) {
 - EricTool：通过 USB / UART 输出数据；`TransportTask` 中保留了 USB 周期输出的使用示例。
 - [sysid](sysid/README.md)：系统辨识数据、采集分析脚本与实验报告。
 
+### 已知故障记录：关闭 FDCAN1 自动重传后右摩擦轮不转
+
+**记录日期：2026-09-22；分支：`老步兵云台`；状态：恢复硬件自动重传后，用户实机确认恢复正常。**
+
+提交 `c1e765b` 将 FDCAN1 的 `AutoRetransmission` 从 `ENABLE` 改为 `DISABLE` 后，右摩擦轮持续不转。USART1 JustFloat 遥测显示：
+
+| 通道 | 含义 | 故障时数值 |
+| --- | --- | --- |
+| I4 / I5 | 左 / 右摩擦轮在线 | 均为 1 |
+| I14 / I15 | 左 / 右电机状态码 | 均为 1（已使能） |
+| I8 / I9 | 左 / 右实际速度 | 约 -25.05 / -0.049 rad/s |
+| I10 / I11 | 左 / 右目标速度 | -25 / +25 rad/s |
+| I7 | 摩擦轮就绪 | 0，拨弹被就绪条件拦截 |
+
+**原因与证据边界：** 恢复自动重传即可恢复运行，将问题指向 CAN 控制帧交付。关闭自动重传后，仲裁失败或传输错误的帧会被取消，见 [Bosch M_CAN 手册 §3.1.7](https://www.bosch-semiconductors.com/media/ip_modules/pdf_2/m_can/mcan_users_manual_v331.pdf)。当前 [CAN BSP](User_File/Middleware/BSP/CAN/bsp_can.c) 在 `HAL_FDCAN_AddMessageToTxFifoQ` 返回成功后就更新周期槽的 `sent_version`，仅确认进入硬件 FIFO，没有跟踪总线发送成功或取消结果。现有发送统计也不能据此排除入 FIFO 之后的丢帧。
+
+右轮速度帧 `0x208` 的仲裁优先级低于电机反馈帧 `0x019/0x027/0x028`。固定的 1 ms 发布周期和相对发送顺序可能使右轮指令反复遇到反馈帧、仲裁失败；周期重发并不保证下一帧能够交付。**具体是否由反复仲裁失败导致、与哪一帧竞争，尚未抓包确认；不能排除传输错误。**
+
+[Shoot](User_File/Application/Shoot/Shoot.cpp) 的周期使能补发只在掉线或未使能时触发，Daemon 离线回调也依赖掉线判定；右轮在线且已使能时，两者均无法兜底速度指令丢失。遥测目标值来自应用状态推导，也不代表电机已收到目标。这说明“Daemon + 使能补发 + 1 kHz 周期控制”尚不能完整替代硬件重传。
+
+**当前处理：** 保持 [fdcan.c](Core/Src/fdcan.c) 和 [H7_BSP.ioc](H7_BSP.ioc) 中 FDCAN1 `AutoRetransmission=ENABLE`；FDCAN2/3 配置不变。两台摩擦轮在 FDCAN1，Yaw 在 FDCAN2，此故障不要求改变 Yaw 开关。Yaw 开启、关闭两套固件均编译通过，用户已确认恢复自动重传后故障消失。
+
+**后续若需关闭硬件重传：** 先在 CAN BSP 跟踪实际发送完成/取消结果，失败时重新提交最新控制目标，并设置重试期限或次数、保证不同发送 ID 的公平性；再通过实机仲裁竞争与传输故障测试。仅补发使能、调整发送顺序或降低频率，不作为完整修复。复验时持续请求摩擦轮转动，检查 I9 稳定接近 +25 rad/s、I7 变为 1，并验证启停及重启后的行为。
+
 ## 文档与参考
 
 - [BSP 开发指南](User_File/Middleware/BSP/README.md) · [Message Center](User_File/System/MessageCenter/README.md) · [Application 开发指南](User_File/Application/README.md)。
