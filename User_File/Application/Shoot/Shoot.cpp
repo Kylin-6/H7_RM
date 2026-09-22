@@ -77,10 +77,10 @@ constexpr float LOADER_SPEED_KI =
 constexpr float LOADER_SINGLE_SPEED_KP = 10.0f * 180.0f / SHOOT_PI;
 constexpr float LOADER_SINGLE_SPEED_KI = 1.0f * 180.0f / SHOOT_PI;
 constexpr float LOADER_SINGLE_SPEED_LIMIT_RAD_S = 400.0f * SHOOT_PI / 180.0f;
-constexpr float ONE_BULLET_OUTPUT_DEG = 35.0f;
-constexpr float EXTERNAL_REDUCTION_RATIO = 54.74f / 25.16f;
+/* 拨弹盘直连 M2006 减速箱输出轴，7 个弹位均布一圈。 */
+constexpr float ONE_BULLET_OUTPUT_DEG = 360.0f / 7.0f;
 constexpr float ONE_BULLET_MOTOR_OUTPUT_RAD =
-    ONE_BULLET_OUTPUT_DEG * EXTERNAL_REDUCTION_RATIO * SHOOT_PI / 180.0f;
+    ONE_BULLET_OUTPUT_DEG * SHOOT_PI / 180.0f;
 constexpr float SINGLE_DONE_ANGLE_RAD = 2.0f * SHOOT_PI / 180.0f;
 constexpr uint32_t SINGLE_TIMEOUT_MS = 1000U;
 constexpr uint32_t SINGLE_HOLD_MS = 100U;
@@ -91,7 +91,7 @@ constexpr uint32_t LONG_PRESS_MS = 300U;
 constexpr int16_t JAM_CURRENT_THRESHOLD = 3800;
 constexpr uint32_t JAM_CONFIRM_MS = 300U;
 constexpr uint32_t JAM_HANDLE_MS = 200U;
-constexpr float JAM_BACKOFF_RAD = 15.0f * EXTERNAL_REDUCTION_RATIO * SHOOT_PI / 180.0f;
+constexpr float JAM_BACKOFF_RAD = 15.0f * SHOOT_PI / 180.0f;
 constexpr float HEAT_LEFT_TORQUE_THRESHOLD_NM = -0.6f;
 constexpr float HEAT_RIGHT_TORQUE_THRESHOLD_NM = 0.5f;
 constexpr uint32_t HEAT_CONFIRM_MS = 20U;
