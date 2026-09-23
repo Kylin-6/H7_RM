@@ -14,7 +14,8 @@
 - /tmp 是 10MB tmpfs：编译必须 `env TMPDIR=$PWD/build/tmp cmake --build ...`。
 - 新建构建树必须带 `-DCMAKE_TOOLCHAIN_FILE=cmake/gcc-arm-none-eabi.cmake`，否则 linker guard（h7_linker.cmake）FATAL_ERROR。
 - 配置失败过的构建树缓存被污染，必须删除重建。
-- 构建树：build/gimbal（云台板 Yaw 关）、build/gimbal-yaw、build/rm-standard（标准 RM 板型）；host 测试 build/Tests_*（boundary_tests 需传用例名 pid/kalman/commands/parser）。
+- 2026-09-23 起单一构建：CMakePresets 只留 Debug（build/Debug）；根 CMakeLists 已删除全部 option 多板型开关，宏硬编码为老步兵云台板（GIMBAL=1/CHASSIS=0/SHOOT=1/LEGACY_INFANTRY_GIMBAL=1/LEGACY_INFANTRY_GIMBAL_YAW=0），Pitch.cpp、dvc_dm_imu.cpp、chassis_board.cpp 无条件编入。原 build/gimbal、build/gimbal-yaw、build/rm-standard 多板型构建树已废弃。host 测试 build/Tests_*（boundary_tests 需传用例名 pid/kalman/commands/parser）。
+- 双板分工（2026-09-23 用户确认）：Yaw 轴由底盘板主控控制，云台板固件固定不编译 Yaw（LEGACY_INFANTRY_GIMBAL_YAW=0 是架构决定，不是临时措施）；LEGACY_INFANTRY_GIMBAL_YAW 相关的 Yaw 代码块保留在源码里但永不启用。
 
 ## 框架约定
 - 控制律迁移纪律：替换手写算法前必须先做 host 数值等价对拍（参考 2026-09-22 的 slope/jam FSM 对拍模式，存 build/tmp/ 下可复用）。

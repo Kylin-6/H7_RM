@@ -33,7 +33,8 @@ Application 不应：
 | `Shoot` | 摩擦轮、拨弹连续模式和离散射击动作 | 3 个 DJI 电机、ShootEvent FIFO |
 | `Communication` | 当前通信应用骨架 | 后续外部输入或传输接入点 |
 
-硬件路径由 `H7_APP_GIMBAL`、`H7_APP_CHASSIS`、`H7_APP_SHOOT` 控制。默认关闭的模块
+硬件路径由根 `CMakeLists.txt` 中固定的宏（`GIMBAL`、`CHASSIS`、`SHOOT`）控制；本分支
+为老步兵云台板单一构建（Gimbal + Shoot 启用，Chassis 关闭）。关闭的模块
 仍保留消息端点和反馈结构，但不会访问对应电机硬件。
 
 ## 3. Control_Task 生命周期

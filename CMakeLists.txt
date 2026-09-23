@@ -242,44 +242,27 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Application/Balance/
 )
 
-option(H7_APP_GIMBAL "Build the Gimbal hardware-control path" OFF)
-option(H7_APP_CHASSIS "Build the Chassis hardware-control path" OFF)
-option(H7_APP_SHOOT "Build the Shoot hardware-control path" OFF)
-
-# 老步兵云台板：DM Pitch 轴（MIT + DM-IMU 反馈）+ DM3519 摩擦轮 + M2006 拨弹盘，
-# 遥控通道由底盘板经 FDCAN2 的 0x065 帧转发。该配置固定使用 Gimbal 与 Shoot
-# 两条硬件路径，并且不控制底盘。
-option(H7_LEGACY_INFANTRY_GIMBAL
-    "Build the legacy-infantry gimbal board: DM pitch + DM friction wheels + M2006 loader" OFF)
-# 云台板当前 BMI088 硬件故障，云台板原工程没有调度 Yaw 轴，因此默认关闭；
-# 硬件恢复后打开该选项即可启用 QD4310 + INS 的 Yaw 轴。
-option(H7_LEGACY_INFANTRY_GIMBAL_YAW
-    "Also build the legacy-infantry gimbal board Yaw axis (QD4310 + INS)" OFF)
-
-if(H7_LEGACY_INFANTRY_GIMBAL AND H7_APP_CHASSIS)
-    message(FATAL_ERROR
-        "H7_LEGACY_INFANTRY_GIMBAL 与 H7_APP_CHASSIS 互斥：老步兵云台板不控制底盘")
-endif()
-
-# Add project symbols (macros)
+# 本分支固定为老步兵云台板单一构建（Debug）：
+# DM Pitch 轴（MIT + DM-IMU 反馈）+ DM3519 摩擦轮 + M2006 拨弹盘，
+# 遥控通道由底盘板经 FDCAN2 的 0x065 帧转发。不控制底盘。
+# Yaw 轴由底盘板主控负责（双板分工），云台板固件固定不编译 Yaw 轴
+# （LEGACY_INFANTRY_GIMBAL_YAW=0），不是临时措施，不要因 BMI088 修复而打开。
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
     BALANCE=1
-    GIMBAL=$<OR:$<BOOL:${H7_APP_GIMBAL}>,$<BOOL:${H7_LEGACY_INFANTRY_GIMBAL}>>
-    CHASSIS=$<BOOL:${H7_APP_CHASSIS}>
-    SHOOT=$<OR:$<BOOL:${H7_APP_SHOOT}>,$<BOOL:${H7_LEGACY_INFANTRY_GIMBAL}>>
-    LEGACY_INFANTRY_GIMBAL=$<BOOL:${H7_LEGACY_INFANTRY_GIMBAL}>
-    LEGACY_INFANTRY_GIMBAL_YAW=$<BOOL:${H7_LEGACY_INFANTRY_GIMBAL_YAW}>
+    GIMBAL=1
+    CHASSIS=0
+    SHOOT=1
+    LEGACY_INFANTRY_GIMBAL=1
+    LEGACY_INFANTRY_GIMBAL_YAW=0
 )
 
-# 老步兵云台板专属源文件：只在对应配置下参与编译，其他配置保持原有构建内容不变。
-if(H7_LEGACY_INFANTRY_GIMBAL)
-    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-        ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Pitch/Pitch.cpp
-        ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/IMU/DM_IMU/dvc_dm_imu.cpp
-        ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/ChassisBoard/chassis_board.cpp
-    )
-endif()
+# 老步兵云台板专属源文件，无条件参与编译。
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/Pitch/Pitch.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/IMU/DM_IMU/dvc_dm_imu.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/ChassisBoard/chassis_board.cpp
+)
 
 # Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)

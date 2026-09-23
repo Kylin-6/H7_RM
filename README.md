@@ -230,14 +230,9 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-产物为 `build/Debug/H7_BSP.elf`，链接映射为同目录下的 `H7_BSP.map`。Release 使用对应 preset：
+产物为 `build/Debug/H7_BSP.elf`，链接映射为同目录下的 `H7_BSP.map`。
 
-```powershell
-cmake --preset Release
-cmake --build --preset Release
-```
-
-[CMakePresets.json](CMakePresets.json) 管理构建配置。Debug 使用 `-Og -g3`，Release 使用 `-Os -g0`。
+[CMakePresets.json](CMakePresets.json) 只保留 Debug 一个构建（`-Og -g3`）。板型为老步兵云台板单一配置，宏开关在根 [CMakeLists.txt](CMakeLists.txt) 中固定，不再提供多板型 option。
 
 ### 主机回归
 
