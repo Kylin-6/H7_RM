@@ -280,3 +280,14 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # Add user defined libraries
     "${CMSIS_DSP_LIBRARY}"
 )
+
+# 生成烧录用 bin/hex，保证与 elf 同步更新
+find_program(ARM_OBJCOPY arm-none-eabi-objcopy)
+if(NOT ARM_OBJCOPY)
+    message(FATAL_ERROR "arm-none-eabi-objcopy not found")
+endif()
+add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+    COMMAND ${ARM_OBJCOPY} -O binary  $<TARGET_FILE:${CMAKE_PROJECT_NAME}> $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${CMAKE_PROJECT_NAME}.bin
+    COMMAND ${ARM_OBJCOPY} -O ihex   $<TARGET_FILE:${CMAKE_PROJECT_NAME}> $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${CMAKE_PROJECT_NAME}.hex
+    COMMENT "Generating ${CMAKE_PROJECT_NAME}.bin / .hex"
+)

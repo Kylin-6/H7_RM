@@ -12,23 +12,8 @@
         },
         {
             "name": "Debug",
+            "displayName": "唯一构建 (老步兵完整代码)",
             "inherits": "default",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Debug"
-            }
-        },
-        {
-            "name": "Release",
-            "inherits": "default",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release"
-            }
-        },
-        {
-            "name": "LegacyInfantry",
-            "displayName": "老步兵配置 (DM 底盘 + DM MIT 云台 + SBUS)",
-            "inherits": "default",
-            "binaryDir": "${sourceDir}/build/legacy",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "H7_LEGACY_INFANTRY": "ON"
@@ -39,14 +24,6 @@
         {
             "name": "Debug",
             "configurePreset": "Debug"
-        },
-        {
-            "name": "Release",
-            "configurePreset": "Release"
-        },
-        {
-            "name": "LegacyInfantry",
-            "configurePreset": "LegacyInfantry"
         }
     ]
 }
