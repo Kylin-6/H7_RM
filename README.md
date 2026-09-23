@@ -6,7 +6,7 @@
 
 > **打开 `H7_BSP.ioc` 遇到版本迁移提示时，选择 Continue，不要选择 Migrate。** 迁移并重新生成可能使 `Middlewares/` 中的 FreeRTOS 与现有 SystemView 适配不兼容。请保持项目原有固件包，详见 [CubeMX 与构建边界](#cubemx-与构建边界)。
 
-[整体架构](#整体架构) · [通信与外设](#通信与外设-bsp) · [设备层](#设备层) · [算法层](#算法层) · [接入方式](#接入方式) · [构建与调试](#构建与调试) · [主机回归](#主机回归)
+[整体架构](#整体架构) · [通信与外设](#通信与外设-bsp) · [设备层](#设备层) · [算法层](#算法层) · [小陀螺](#小陀螺-spinmode) · [接入方式](#接入方式) · [构建与调试](#构建与调试) · [主机回归](#主机回归)
 
 ## 整体架构
 
@@ -131,6 +131,28 @@ EricTool 的 USB/UART 解析均只读取回调传入的缓冲区及有效长度�
 - **Kalman**：每周期先预测，缺测时跳过测量更新，状态与协方差仍连续推进；恢复有效测量后再执行更新。
 - **Sugeno**：调用方提供有序节点和完整规则表，节点/规则在使用期间保持有效且只读；输入超范围时保持边界值。输入缩放、微分、规则设计及 PID 增益映射由应用负责，库中没有预设的电机或云台控制规则。使用方式与独立参考对照见 [模糊推理说明](Tests/Fuzzy/README.md)。
 
+## 小陀螺 SpinMode
+
+[SpinMode](User_File/Application/SpinMode/spin_mode.h) 提供可复用的云台与底盘协调计算接口，复用现有 FSM、Basic 和 Matrix 数学库。调用方选择数据来源、更新输入并读取输出；模块不绑定 IMU、电机、任务或硬件，也不包含 PID 或其他角度/速度控制器。
+
+坐标约定为 X 向前、Y 向左、逆时针为正；角度使用 rad，角速度使用 rad/s，平移速度使用 m/s。`theta - zero_point` 表示校准后的“云台朝向减底盘朝向”，计算时归一化为最短相对角。
+
+| 模式 | 行为 | `gimbal_yaw_target` | `forward` | `chassis_yaw_error` |
+| --- | --- | --- | --- | --- |
+| `SpinMode_GIMBAL_FOLLOW` 云台跟随底盘 | 保持云台与底盘的相对夹角 | 进入模式后首次计算锁存的校准相对角 | `0` | `0` |
+| `SpinMode_GIMBAL_LOCK` 云台锁定 | 云台保持调用方设置的世界 Yaw 目标，底盘可独立旋转 | `Set_WorldTarget()` 设置的连续角度 | `-vw` | `0` |
+| `SpinMode_CHASSIS_FOLLOW` 底盘跟随云台 | 输出底盘转向云台当前朝向的最短角误差，供调用方控制底盘 | `Set_WorldTarget()` 设置的连续角度 | `-vw` | 校准后的最短相对角，正值表示底盘应逆时针转 |
+
+小陀螺使用 **云台锁定模式 + 非零 `vw`**，无需单独的第四种模式。
+
+- `Init(&config)` 配置零位偏移与初始模式；`Init()` 默认零偏移、云台跟随底盘。配置非法时返回 `false` 并保留原状态。
+- `Set_theta(theta)` 更新云台与底盘的相对夹角；进入云台跟随模式后，应在首次计算前更新该值。重复设置同一模式不会重新锁存目标。
+- `Set_WorldTarget(world_angle)` 保存上层期望保持的云台世界 Yaw，可由上层按 IMU 姿态生成；保留输入的连续角度，切换模式不会自动抓取当前 IMU 值。
+- `Set_MoveTarget(vx, vy, vw)` 设置云台坐标系的平移指令和底盘角速度指令。三个模式均将平移指令旋转为底盘坐标系的 `x/y`，并原样输出 `w = vw`。
+- `Set_Spin_Mode(mode)` 选择上述三种模式。调用方在同一上下文提供有限输入，然后调用 `TIM_Calculate_PeriodElapsedCallback()`，通过 `Get_Output()` 取得当次计算结果。
+
+`forward` 依据传入的底盘角速度 `vw` 计算，叠加到云台相对底盘的速度目标。`chassis_yaw_error` 是角度误差，由调用方的控制器生成后续 `vw`；本模块不会自行将角度误差换算为角速度，也不会直接驱动底盘。
+
 ## 系统服务
 
 | 服务 | 作用 | 入口 |
@@ -227,12 +249,13 @@ cmake --build --preset Release
 | [Boundary](Tests/Boundary) | PID 积分/死区/D 低通、KF 连续缺测、电机命令失败返回、EricTool 有界解析、UART DMA 发送寿命及忙/失败路径，共 5 组 |
 | [Trajectory](Tests/Trajectory/README.md) | 输入契约、6 万组随机初态、1657 组边界初态、10 万次逐周期改目标、连续信号跟随及分段连续性，共 5 组 |
 | [FilterPolynomial](Tests/FilterPolynomial/README.md) | 0～3 阶独立系数、流式卷积、解析导数、生命周期及配置失败状态保留，共 5 组 |
+| [SpinMode](Tests/SpinMode) | 坐标转换、三模式目标与前馈、最短角误差、模式切换及生命周期，共 4 组 |
 | [Health](Tests/Health/README.md) | 快照一致性、IMU 增量告警、DJI 只读超时检测、24 电机容量及任务调度，共 5 组 |
 
 在仓库根目录运行下列 PowerShell 命令；将 `g++` 替换为本机主机编译器路径：
 
 ```powershell
-foreach ($suite in @("Fuzzy", "Boundary", "Trajectory", "FilterPolynomial", "Health")) {
+foreach ($suite in @("Fuzzy", "Boundary", "Trajectory", "FilterPolynomial", "Health", "SpinMode")) {
     cmake -S "Tests/$suite" -B "build/Tests_$suite" -G Ninja -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release
     if ($LASTEXITCODE -ne 0) { throw "$suite 配置失败" }
     cmake --build "build/Tests_$suite"
