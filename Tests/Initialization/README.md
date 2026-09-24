@@ -17,6 +17,10 @@ ctest --test-dir build/Initialization --output-on-failure -V
 Flash 第四字节残留、旧 ID 不得冒充新响应、内存映射失败，以及失败后的 Flash 操作拒绝。
 每组还有进程超时保护。
 
+另有 Flash 提交失败与 Quad 配置回归：注入 OSPI 的 ERROR/BUSY/TIMEOUT，验证读、写、
+擦除和自动轮询拒绝时立即返回失败，不继续后续步骤；正常 Quad 流程检查 WIP 读取的
+数据阶段。当前共 7 组测试，主机模型不模拟真实 Flash 写入耗时或总线电气条件。
+
 资料依据：
 
 - [Bosch 官方寄存器定义](https://github.com/boschsensortec/BMI08x_SensorAPI/blob/master/bmi08_defs.h)：ACC_PWR_CTRL 为 0x7D，ACC_SOFTRESET 为 0x7E；工作模式为 0，挂起模式为 3。
