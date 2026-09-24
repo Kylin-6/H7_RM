@@ -5,15 +5,22 @@ set(BSP "${BSP_ROOT}/User_File/Middleware/BSP")
 enable_testing()
 
 # Build entire production translation units; replace only hardware/RTOS services.
+add_executable(usb_tests usb_tests.cpp ${BSP}/USB/bsp_usb.cpp
+    ${BSP_ROOT}/USB_DEVICE/App/usbd_cdc_if.c)
+target_include_directories(usb_tests PRIVATE stubs ${BSP}/USB
+    ${BSP_ROOT}/USB_DEVICE/App)
 add_executable(can_tests can_tests.cpp ${BSP}/CAN/bsp_can.c)
 target_include_directories(can_tests PRIVATE stubs ${BSP}/CAN)
 add_executable(ospi_tests ospi_tests.cpp ${BSP}/OSPI/bsp_ospi.cpp)
 target_include_directories(ospi_tests PRIVATE stubs ${BSP}/OSPI)
-foreach(target can_tests ospi_tests)
+foreach(target usb_tests can_tests ospi_tests)
     target_compile_features(${target} PRIVATE cxx_std_17)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${target} PRIVATE -Wall -Wextra -Werror=return-type)
     endif()
+endforeach()
+foreach(group receive reconnect startup transmit busy invalid)
+    add_test(NAME communication_usb_${group} COMMAND usb_tests ${group})
 endforeach()
 foreach(group data remote filter classic_dlc storage unsupported)
     add_test(NAME communication_can_${group} COMMAND can_tests ${group})
