@@ -31,8 +31,8 @@ struct Struct_OSPI_Manage_Object {
     uint64_t Auto_Polling_Timestamp;
 };
 extern Struct_OSPI_Manage_Object OSPI2_Manage_Object;
-void OSPI_Command_Receive_Data(OSPI_HandleTypeDef *, OSPI_RegularCmdTypeDef *);
-void OSPI_Command_Transmit_Data(OSPI_HandleTypeDef *, OSPI_RegularCmdTypeDef *);
-void OSPI_Command(OSPI_HandleTypeDef *, OSPI_RegularCmdTypeDef *);
-void OSPI_Auto_Polling(OSPI_HandleTypeDef *, OSPI_AutoPollingTypeDef *);
+HAL_StatusTypeDef OSPI_Command_Receive_Data(OSPI_HandleTypeDef *, OSPI_RegularCmdTypeDef *);
+HAL_StatusTypeDef OSPI_Command_Transmit_Data(OSPI_HandleTypeDef *, OSPI_RegularCmdTypeDef *);
+HAL_StatusTypeDef OSPI_Command(OSPI_HandleTypeDef *, OSPI_RegularCmdTypeDef *);
+HAL_StatusTypeDef OSPI_Auto_Polling(OSPI_HandleTypeDef *, OSPI_AutoPollingTypeDef *);
 HAL_StatusTypeDef HAL_OSPI_MemoryMapped(OSPI_HandleTypeDef *, OSPI_MemoryMappedTypeDef *);

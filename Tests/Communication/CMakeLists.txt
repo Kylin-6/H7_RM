@@ -1,0 +1,18 @@
+cmake_minimum_required(VERSION 3.22)
+project(H7_BSP_Communication_Tests LANGUAGES C CXX)
+get_filename_component(BSP_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
+set(BSP "${BSP_ROOT}/User_File/Middleware/BSP")
+enable_testing()
+
+# Build entire production translation units; replace only hardware/RTOS services.
+add_executable(ospi_tests ospi_tests.cpp ${BSP}/OSPI/bsp_ospi.cpp)
+target_include_directories(ospi_tests PRIVATE stubs ${BSP}/OSPI)
+foreach(target ospi_tests)
+    target_compile_features(${target} PRIVATE cxx_std_17)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Werror=return-type)
+    endif()
+endforeach()
+foreach(group normal command_failure bounds dma_failure unsupported)
+    add_test(NAME communication_ospi_${group} COMMAND ospi_tests ${group})
+endforeach()

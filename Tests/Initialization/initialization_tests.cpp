@@ -36,6 +36,8 @@ static uint16_t pending_length;
 static bool spi_pending, flash_pending;
 static unsigned flash_reads, ospi_commands, autopolls;
 static HAL_StatusTypeDef mapped_result;
+static HAL_StatusTypeDef ospi_result = HAL_OK, poll_result = HAL_OK;
+static bool flash_auto_complete;
 
 uint8_t SPI_Transmit_Data(SPI_HandleTypeDef *, GPIO_TypeDef *, uint16_t pin,
                           GPIO_PinState, const uint8_t *data, uint16_t length)
@@ -73,16 +75,32 @@ uint8_t SPI_Transmit_Receive_Data(SPI_HandleTypeDef *, GPIO_TypeDef *port, uint1
     return HAL_OK;
 }
 
-void OSPI_Command_Receive_Data(OSPI_HandleTypeDef *, OSPI_RegularCmdTypeDef *command)
+HAL_StatusTypeDef OSPI_Command_Receive_Data(OSPI_HandleTypeDef *, OSPI_RegularCmdTypeDef *command)
 {
     ++ospi_commands;
-    CHECK(command->Instruction == 0x9f && command->NbData == 3);
-    ++flash_reads;
-    flash_pending = true;
+    if (ospi_result != HAL_OK) return ospi_result;
+    if (command->Instruction == 0x9f)
+    {
+        CHECK(command->NbData == 3);
+        ++flash_reads;
+        flash_pending = true;
+    }
+    else if (flash_auto_complete)
+    {
+        CHECK(command->DataMode == HAL_OSPI_DATA_1_LINE && command->NbData == 1);
+        OSPI2_Manage_Object.Rx_Buffer[0] = command->Instruction == 0x35 ? 2 : 0;
+        BSP_W25Q64JV.OSPI_RxCallback();
+    }
+    return HAL_OK;
 }
-void OSPI_Command_Transmit_Data(OSPI_HandleTypeDef *, OSPI_RegularCmdTypeDef *) { ++ospi_commands; }
-void OSPI_Command(OSPI_HandleTypeDef *, OSPI_RegularCmdTypeDef *) { ++ospi_commands; }
-void OSPI_Auto_Polling(OSPI_HandleTypeDef *, OSPI_AutoPollingTypeDef *) { ++autopolls; }
+HAL_StatusTypeDef OSPI_Command_Transmit_Data(OSPI_HandleTypeDef *, OSPI_RegularCmdTypeDef *) { ++ospi_commands; return ospi_result; }
+HAL_StatusTypeDef OSPI_Command(OSPI_HandleTypeDef *, OSPI_RegularCmdTypeDef *) { ++ospi_commands; return ospi_result; }
+HAL_StatusTypeDef OSPI_Auto_Polling(OSPI_HandleTypeDef *, OSPI_AutoPollingTypeDef *)
+{
+    ++autopolls;
+    if (poll_result == HAL_OK && flash_auto_complete) BSP_W25Q64JV.OSPI_StatusMatchCallback();
+    return poll_result;
+}
 HAL_StatusTypeDef HAL_OSPI_MemoryMapped(OSPI_HandleTypeDef *, OSPI_MemoryMappedTypeDef *)
 { return mapped_result; }
 
@@ -268,6 +286,58 @@ static void TestFlash()
     }
 }
 
+static void TestFlashSubmission()
+{
+    Reset();
+    CHECK(BSP_W25Q64JV.Init());
+    const HAL_StatusTypeDef failures[] = {HAL_ERROR, HAL_BUSY, HAL_TIMEOUT};
+    for (unsigned index = 0; index < sizeof(failures) / sizeof(failures[0]); ++index)
+    {
+        HAL_StatusTypeDef failure = failures[index];
+        unsigned before = BSP_W25Q64JV.Get_Auto_Polling_Error_Count();
+        ospi_result = failure;
+        CHECK(!BSP_W25Q64JV.Get_Buffer(0, 1));
+        CHECK(BSP_W25Q64JV.Is_Ready());
+        CHECK(BSP_W25Q64JV.Get_Auto_Polling_Error_Count() == before + 1);
+        const unsigned polls_before = autopolls;
+        CHECK(!BSP_W25Q64JV.Set_Write_Enable());
+        CHECK(autopolls == polls_before && BSP_W25Q64JV.Is_Ready());
+        ospi_result = HAL_OK;
+        poll_result = failure;
+        CHECK(!BSP_W25Q64JV.Set_Write_Enable());
+        CHECK(BSP_W25Q64JV.Is_Ready());
+        poll_result = HAL_OK;
+        CHECK(BSP_W25Q64JV.Set_Write_Enable());
+        BSP_W25Q64JV.OSPI_StatusMatchCallback();
+        ospi_result = failure;
+        uint8_t byte = 1;
+        CHECK(!BSP_W25Q64JV.Set_Buffer(&byte, 0, 1));
+        CHECK(BSP_W25Q64JV.Is_Ready());
+        ospi_result = HAL_OK;
+        CHECK(BSP_W25Q64JV.Set_Write_Enable());
+        BSP_W25Q64JV.OSPI_StatusMatchCallback();
+        ospi_result = failure;
+        CHECK(!BSP_W25Q64JV.Set_Sector_Erased(0));
+        CHECK(BSP_W25Q64JV.Is_Ready());
+        const unsigned commands_before = ospi_commands;
+        BSP_W25Q64JV.Enable_Quad_Mode();
+        CHECK(ospi_commands == commands_before + 1 && BSP_W25Q64JV.Is_Ready());
+        ospi_result = HAL_OK;
+    }
+}
+
+static void TestFlashQuad()
+{
+    Reset();
+    CHECK(BSP_W25Q64JV.Init());
+    flash_auto_complete = true;
+    const unsigned errors_before = BSP_W25Q64JV.Get_Auto_Polling_Error_Count();
+    BSP_W25Q64JV.Enable_Quad_Mode();
+    CHECK(BSP_W25Q64JV.Is_Ready());
+    CHECK(BSP_W25Q64JV.Get_Auto_Polling_Error_Count() == errors_before);
+    CHECK(autopolls == 1 && ospi_commands == 10);
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2) return 2;
@@ -275,6 +345,8 @@ int main(int argc, char **argv)
     else if (strcmp(argv[1], "gyro") == 0) TestSensor(false);
     else if (strcmp(argv[1], "bmi088") == 0) TestBMI088();
     else if (strcmp(argv[1], "flash") == 0) TestFlash();
+    else if (strcmp(argv[1], "flash_submission") == 0) TestFlashSubmission();
+    else if (strcmp(argv[1], "flash_quad") == 0) TestFlashQuad();
     else return 2;
     printf("PASS %s: %u checks\n", argv[1], checks);
     return 0;

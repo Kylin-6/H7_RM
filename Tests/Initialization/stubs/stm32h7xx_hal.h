@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
-enum HAL_StatusTypeDef { HAL_OK, HAL_ERROR };
+enum HAL_StatusTypeDef { HAL_OK, HAL_ERROR, HAL_BUSY, HAL_TIMEOUT };
 enum GPIO_PinState { GPIO_PIN_RESET, GPIO_PIN_SET };
 struct GPIO_TypeDef {};
 struct GPIO_InitTypeDef { uint32_t Pin, Mode, Pull; };
