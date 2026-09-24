@@ -8,7 +8,7 @@
  *
  * 原 rm/demo 中散落在 TransmitTask 与 SafetyTask 的职责在此合并：
  * - TransmitTask 的 SBUS 取帧与通道映射
- * - SafetyTask 的遥控健康互锁（健康 200 ms 解锁，失联 200 ms 锁定）
+ * - SafetyTask 的遥控健康互锁（健康 200 ms 解锁，健康帧失效立即锁定）
  * 板间链路的 0x065/0x070/0x075 转发顺序也保持与 demo 的 GimbalTask 一致。
  */
 

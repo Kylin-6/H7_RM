@@ -40,8 +40,6 @@
 
 /* ============================== 控制参数 ============================== */
 
-/** 遥控失联判定门限，毫秒。 */
-#define COMMUNICATION_LOSS_TIMEOUT_MS (200U)
 /** 遥控恢复需要持续健康的时长，毫秒。 */
 #define COMMUNICATION_RECOVERY_TIME_MS (200U)
 
@@ -241,16 +239,16 @@ static void Communication_IndicateArmed(bool armed)
 /**
  * @brief 维护遥控健康互锁，并同步武装指示灯。
  * @details 对应 demo 的 SafetyTask：上电默认锁定（所有电机路径保持失能命令），
- *          连续健康 200 ms 才解锁，健康帧超时 200 ms 立即重新锁定。
+ *          连续健康 200 ms 才解锁，健康帧一旦失效立即重新锁定。
  *          SBUS 驱动切换为框架版后，框架只提供瞬时健康查询 SBUS_IsHealthy()，
- *          原驱动内部的去抖语义（SBUS_IsControlHealthyFor / SBUS_IsControlLostFor）
- *          在这里用时间戳状态机等价复现。
+ *          在这里保留恢复去抖；失联直接锁定，不继续执行旧摇杆命令。
  */
 static void Communication_UpdateArmState(void)
 {
     const uint32_t now = HAL_GetTick();
 
-    if (SBUS_IsHealthy())
+    const bool healthy = SBUS_IsHealthy();
+    if (healthy)
     {
         Communication_Last_Healthy_Tick = now;
         Communication_Ever_Healthy = true;
@@ -258,6 +256,11 @@ static void Communication_UpdateArmState(void)
     else
     {
         Communication_Last_Unhealthy_Tick = now;
+        if (Communication_Armed)
+        {
+            Communication_Armed = false;
+            Communication_IndicateArmed(false);
+        }
     }
 
     if (!Communication_Armed)
@@ -271,12 +274,6 @@ static void Communication_UpdateArmState(void)
             Communication_Armed = true;
             Communication_IndicateArmed(true);
         }
-    }
-    else if (now - Communication_Last_Healthy_Tick > COMMUNICATION_LOSS_TIMEOUT_MS)
-    {
-        /* 等价于原 SBUS_IsControlLostFor：健康帧超时立即重新锁定。 */
-        Communication_Armed = false;
-        Communication_IndicateArmed(false);
     }
 }
 
@@ -312,7 +309,8 @@ void Communication_Update(void)
 
     /* 云台反馈每周期读取：供板间链路与底盘坐标旋转共同使用。 */
     GimbalFeedback gimbal_feedback{};
-    const bool gimbal_feedback_valid = RobotCmd_GetGimbalFeedback(gimbal_feedback);
+    const bool gimbal_feedback_valid =
+        RobotCmd_GetGimbalFeedback(gimbal_feedback) && gimbal_feedback.enabled;
 
     /* 板间链路按 2 ms 下发，与老工程的 GimbalTask 周期一致，避免压满 CAN 总线。 */
     Communication_Board_Divider++;
@@ -320,11 +318,10 @@ void Communication_Update(void)
     {
         Communication_Board_Divider = 0U;
 
-        /* 遥控帧只在拿到有效数据时转发；状态帧与解锁与否无关。 */
-        if (available)
-        {
-            Communication_Gimbal_Board.SendRemoteChannels(channels);
-        }
+        /* 失联或未解锁时转发零通道，避免云台板持续使用最后一帧旧摇杆值。 */
+        const int16_t safe_channels[SBUS_CHANNEL_COUNT] = {};
+        Communication_Gimbal_Board.SendRemoteChannels(
+            Communication_Armed && available ? channels : safe_channels);
 
         /* 地面系 Yaw 尚无外部陀螺仪来源，与 demo 一致地暂用云台电机角度代替。 */
 #if COMMUNICATION_DEBUG_FREEZE_YAW

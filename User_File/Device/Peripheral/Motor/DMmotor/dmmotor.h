@@ -85,7 +85,6 @@ private:
                                  uint8_t *data,
                                  uint32_t len,
                                  void *context);
-    static void OfflineCallback(void *owner);
     bool SendModeCommand(uint8_t command);
     void Publish(const Struct_CAN_Tx_Msg &message);
     uint32_t ControlId() const;
@@ -104,7 +103,7 @@ private:
     bool feedback_initialized = false;
     float last_position = 0.0f;
     int32_t total_round = 0;
-    Daemon feedback_daemon{100U, OfflineCallback, this}; ///< 合法反馈喂狗，掉线时尝试一次使能
+    Daemon feedback_daemon{100U}; ///< 只检测反馈掉线；使能由 Application 决定
 };
 
 #endif

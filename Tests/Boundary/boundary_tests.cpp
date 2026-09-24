@@ -437,19 +437,15 @@ static void TestDaemonTransitions()
     CHECK(without_callback.Check() == DaemonTransition::OnlineToOffline);
 }
 
-static void TestDMMotorOfflineRecovery()
+static void TestDMMotorOfflineDoesNotEnable()
 {
     static Class_DMMotor motor;
     test_timestamp_us = 0U;
     test_irq_mask = 0U;
-    submit_ok = false;
+    submit_ok = true;
     perform_ok = true;
     CHECK(motor.Init(&bus, 3U, 0x120U, Enum_DMMotor_Mode::SPEED));
-
-    submit_ok = true;
     CHECK(motor.SetMode(Enum_DMMotor_Mode::SPEED));
-    submit_ok = false;
-
     const unsigned submit_before = submit_calls;
     DaemonManager::CheckAll();
     CHECK(submit_calls == submit_before && !motor.IsOnline());
@@ -473,30 +469,30 @@ static void TestDMMotorOfflineRecovery()
     DaemonManager::CheckAll();
     test_timestamp_us = 299000U;
     DaemonManager::CheckAll();
-    CHECK(submit_calls == submit_before);
-
+    CHECK(motor.IsOnline() && submit_calls == submit_before);
     test_timestamp_us = 300000U;
     DaemonManager::CheckAll();
-    CHECK(!motor.IsOnline() && submit_calls == submit_before + 1U);
+    CHECK(!motor.IsOnline() && submit_calls == submit_before);
+
+    CHECK(motor.Enable());
+    const unsigned enabled_submit_count = submit_calls;
     CHECK(last_message.hfdcan == &bus && last_message.id == 0x203U && last_message.len == 8U);
     for (int index = 0; index < 7; ++index) CHECK(last_message.data[index] == 0xFFU);
     CHECK(last_message.data[7] == 0xFCU);
-    test_timestamp_us = 500000U;
-    DaemonManager::CheckAll();
-    CHECK(submit_calls == submit_before + 1U);
-
-    submit_ok = true;
     rx_callback(&bus, 0x120U, feedback, 8U, rx_context);
     DaemonManager::CheckAll();
-    test_timestamp_us = 600000U;
+    test_timestamp_us = 400000U;
     DaemonManager::CheckAll();
-    CHECK(submit_calls == submit_before + 2U);
+    CHECK(!motor.IsOnline() && submit_calls == enabled_submit_count);
 
-    const unsigned perform_before = perform_calls;
-    motor.SetSpeed(1.0f);
-    CHECK(perform_calls == perform_before + 1U);
+    CHECK(motor.Disable());
+    const unsigned disabled_submit_count = submit_calls;
+    CHECK(last_message.data[7] == 0xFDU);
+    rx_callback(&bus, 0x120U, feedback, 8U, rx_context);
     DaemonManager::CheckAll();
-    CHECK(submit_calls == submit_before + 2U);
+    test_timestamp_us = 500000U;
+    DaemonManager::CheckAll();
+    CHECK(submit_calls == disabled_submit_count);
     test_timestamp_us = 0U;
 }
 
@@ -514,7 +510,7 @@ static void ModeFeedback(Enum_DMMotor_Mode mode)
 static void TestCommands()
 {
     TestDaemonTransitions();
-    TestDMMotorOfflineRecovery();
+    TestDMMotorOfflineDoesNotEnable();
 
     Class_DMMotor motor;
     CHECK(motor.Init(&bus, 1, 0x101, Enum_DMMotor_Mode::MIT));

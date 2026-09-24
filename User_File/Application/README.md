@@ -253,7 +253,10 @@ SBUS(UART5) ─► Communication ──RobotCmd_SetChassis / SetGimbal──► 
 
 - 上电默认失能：`Chassis_Init` 与 `Gimbal_Init` 完成后主动下发失能命令。
 - `Communication` 未解锁期间，每周期显式下发 `ZERO_FORCE` 与 `GimbalMode::DISABLED`。
-- 解锁条件是连续 200 ms 健康 SBUS 帧（`frame_lost` 与 `failsafe` 均为 0）；健康帧超时 200 ms 立即重新锁定。
+- 解锁条件是连续 200 ms 健康 SBUS 帧（`frame_lost` 与 `failsafe` 均为 0）；健康状态一旦失效就重新锁定，不再延用最后一帧摇杆命令。
+- 锁定时向四轮持续发布零速并每 20 ms 重试失能；云台 yaw 同样发布零速 MIT 目标并重试失能。达妙反馈掉线不再自动发送使能帧，解锁状态下由应用每 100 ms 补发使能。
+- 板间遥控帧在锁定时转发零通道，避免云台板沿用旧输入。上述保护依赖控制任务与 CAN 发送任务运行；实机紧急停机仍需使用实体急停或断开动力电源。
+- 云台 yaw 电机反馈掉线或报告未使能时，其角度不再参与底盘跟随计算。
 - 武装指示灯随互锁状态切换：未解锁为红灯、解锁为蓝灯，与 demo 的 `SafetyTask` 语义一致。
 - 老步兵的四路底盘电机与云台电机各自独立使能，不再使用 demo 的整板使能门控。
 

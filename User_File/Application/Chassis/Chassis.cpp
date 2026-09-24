@@ -54,6 +54,8 @@ static constexpr float CHASSIS_CONTROL_DT = 0.002f;
 static constexpr uint8_t CHASSIS_CONTROL_DIVIDER = 2U;
 /** 使能重发的分频基准是 2 ms，50 表示每 100 ms 重发一次使能命令。 */
 static constexpr uint8_t CHASSIS_ENABLE_RETRY_DIVIDER = 50U;
+/** 禁用期间每 20 ms 重发零速和失能，覆盖 CAN 帧丢失与电机重新上线。 */
+static constexpr uint8_t CHASSIS_DISABLE_RETRY_DIVIDER = 10U;
 /** 零速吸附门限。 */
 static constexpr float CHASSIS_PLANNING_THRESHOLD = 0.1f;
 
@@ -90,6 +92,7 @@ static float Chassis_Planned_Velocity_Y;
 static float Chassis_Planned_Velocity_W;
 static uint8_t Chassis_Control_Divider;
 static uint8_t Chassis_Enable_Retry_Divider;
+static uint8_t Chassis_Disable_Retry_Divider;
 
 /** 使能或失能四台底盘电机；状态未变化时不重复下发命令。 */
 static void Chassis_SetEnabled(bool enabled)
@@ -100,6 +103,17 @@ static void Chassis_SetEnabled(bool enabled)
     }
     Chassis_Output_Enabled = enabled;
 
+    if (!enabled)
+    {
+        SpeedPlanning_Init(&Chassis_X_Planning, 0.0f);
+        SpeedPlanning_Init(&Chassis_Y_Planning, 0.0f);
+        SpeedPlanning_Init(&Chassis_W_Planning, 0.0f);
+        Chassis_Planned_Velocity_X = 0.0f;
+        Chassis_Planned_Velocity_Y = 0.0f;
+        Chassis_Planned_Velocity_W = 0.0f;
+        Chassis_Disable_Retry_Divider = 0U;
+    }
+
     for (uint32_t index = 0U; index < 4U; ++index)
     {
         if (enabled)
@@ -108,6 +122,7 @@ static void Chassis_SetEnabled(bool enabled)
         }
         else
         {
+            Chassis_Motor[index].SetSpeed(0.0f);
             (void)Chassis_Motor[index].Disable();
         }
     }
@@ -335,14 +350,12 @@ bool Chassis_Init(void)
     Chassis_Planned_Velocity_W = 0.0f;
     Chassis_Control_Divider = 0U;
     Chassis_Enable_Retry_Divider = 0U;
+    Chassis_Disable_Retry_Divider = 0U;
 
     Chassis_Initialized = initialized;
     Chassis_Output_Enabled = true;
-    if (initialized)
-    {
-        /* 上电默认失能，与老步兵 SafetyTask 一致：等遥控健康互锁解锁后才输出。 */
-        Chassis_SetEnabled(false);
-    }
+    /* 即使部分反馈注册失败，也尝试停止全部已配置的电机。 */
+    Chassis_SetEnabled(false);
     return initialized;
 #elif CHASSIS
     Struct_DJIMotor_Init_Config wheel_config{};
@@ -396,9 +409,10 @@ void Chassis_Update(void)
     }
 
 #if LEGACY_INFANTRY
-    if (Chassis_Initialized)
+    if (Chassis_Initialized || !Chassis_Output_Enabled)
     {
-        const bool enabled = Chassis_Command.mode != ChassisMode::ZERO_FORCE;
+        const bool enabled = Chassis_Initialized &&
+                             Chassis_Command.mode != ChassisMode::ZERO_FORCE;
         Chassis_SetEnabled(enabled);
 
         /* 老步兵控制路径按 2 ms 执行：与老工程一致，同时把 CAN 负载压回总线承载范围内。 */
@@ -447,6 +461,19 @@ void Chassis_Update(void)
                     for (uint32_t index = 0U; index < 4U; ++index)
                     {
                         (void)Chassis_Motor[index].Enable();
+                    }
+                }
+            }
+            else
+            {
+                Chassis_Disable_Retry_Divider++;
+                if (Chassis_Disable_Retry_Divider >= CHASSIS_DISABLE_RETRY_DIVIDER)
+                {
+                    Chassis_Disable_Retry_Divider = 0U;
+                    Chassis_ControlMotors(0.0f, 0.0f, 0.0f);
+                    for (uint32_t index = 0U; index < 4U; ++index)
+                    {
+                        (void)Chassis_Motor[index].Disable();
                     }
                 }
             }

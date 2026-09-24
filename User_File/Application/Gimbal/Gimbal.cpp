@@ -36,6 +36,8 @@ static constexpr float GIMBAL_CONTROL_DT = 0.002f;
 static constexpr uint8_t GIMBAL_CONTROL_DIVIDER = 2U;
 /** 使能重发的分频基准是 2 ms，50 表示每 100 ms 重发一次使能命令。 */
 static constexpr uint8_t GIMBAL_ENABLE_RETRY_DIVIDER = 50U;
+/** 禁用期间每 20 ms 重发零速和失能。 */
+static constexpr uint8_t GIMBAL_DISABLE_RETRY_DIVIDER = 10U;
 /** 零速吸附门限。 */
 static constexpr float GIMBAL_PLANNING_THRESHOLD = 0.1f;
 
@@ -66,6 +68,7 @@ DMGimbal_t Gimbal;
 static bool Gimbal_Yaw_Output_Enabled;
 static uint8_t Gimbal_Loop_Divider;
 static uint8_t Gimbal_Enable_Retry_Divider;
+static uint8_t Gimbal_Disable_Retry_Divider;
 
 /** 把 value 约束到 [minimum, maximum]。 */
 static float Gimbal_Constrain(float value, float minimum, float maximum)
@@ -98,13 +101,13 @@ void Gimbal_Init(void)
     Gimbal_Yaw_Output_Enabled = false;
     Gimbal_Loop_Divider = 0U;
     Gimbal_Enable_Retry_Divider = 0U;
+    Gimbal_Disable_Retry_Divider = 0U;
     Gimbal.Yaw_Speed_Command = 0.0f;
     Gimbal.Yaw_Mit_Kd = GIMBAL_YAW_MIT_KD_CENTER;
     Gimbal.Yaw_Mit_Torque_Feedforward = 0.0f;
     SpeedPlanning_Init(&Gimbal.Yaw_Speed_Planning, 0.0f);
 
-    const bool initialized =
-        Gimbal.Yaw_Motor.Init(&hfdcan1,
+    (void)Gimbal.Yaw_Motor.Init(&hfdcan1,
                               GIMBAL_YAW_MOTOR_CAN_ID,
                               GIMBAL_YAW_MOTOR_MASTER_ID,
                               Enum_DMMotor_Mode::MIT,
@@ -112,11 +115,10 @@ void Gimbal_Init(void)
                               GIMBAL_MOTOR_POSITION_MAX_RAD,
                               GIMBAL_MOTOR_VELOCITY_MAX_RAD_S,
                               GIMBAL_MOTOR_TORQUE_MAX_NM);
-    if (initialized)
-    {
-        /* 上电默认失能，等 RobotCmd 的云台命令进入使能模式后再输出。 */
-        (void)Gimbal.Yaw_Motor.Disable();
-    }
+    /* 反馈注册失败时也尝试停止已配置的电机。 */
+    Gimbal.Yaw_Motor.SetMIT(0.0f, 0.0f, GIMBAL_YAW_MIT_KP,
+                            GIMBAL_YAW_MIT_KD_CENTER, 0.0f);
+    (void)Gimbal.Yaw_Motor.Disable();
 }
 
 void Gimbal_Loop(void)
@@ -479,8 +481,14 @@ void Gimbal_Update(void)
         {
             if (Gimbal_Last_Mode != GimbalMode::DISABLED)
             {
+                Gimbal.Yaw_Motor.SetMIT(0.0f, 0.0f, GIMBAL_YAW_MIT_KP,
+                                        GIMBAL_YAW_MIT_KD_CENTER, 0.0f);
                 (void)Gimbal.Yaw_Motor.Disable();
                 Gimbal_Yaw_Output_Enabled = false;
+                Gimbal_Disable_Retry_Divider = 0U;
+                Gimbal.Yaw_Speed_Command = 0.0f;
+                Gimbal.Yaw_Mit_Torque_Feedforward = 0.0f;
+                SpeedPlanning_Init(&Gimbal.Yaw_Speed_Planning, 0.0f);
             }
         }
         else if (Gimbal_Last_Mode == GimbalMode::DISABLED)
@@ -547,6 +555,17 @@ void Gimbal_Update(void)
                 (void)Gimbal.Yaw_Motor.Enable();
             }
         }
+        else
+        {
+            Gimbal_Disable_Retry_Divider++;
+            if (Gimbal_Disable_Retry_Divider >= GIMBAL_DISABLE_RETRY_DIVIDER)
+            {
+                Gimbal_Disable_Retry_Divider = 0U;
+                Gimbal.Yaw_Motor.SetMIT(0.0f, 0.0f, GIMBAL_YAW_MIT_KP,
+                                        GIMBAL_YAW_MIT_KD_CENTER, 0.0f);
+                (void)Gimbal.Yaw_Motor.Disable();
+            }
+        }
     }
 #elif GIMBAL
     /* 只有初始化完成且两轴就绪时才允许输出，故障状态不得继续下发控制量。 */
@@ -570,7 +589,7 @@ void Gimbal_Update(void)
         feedback.yaw_speed_rad_s = Gimbal.Yaw_Speed_Command;
         feedback.pitch_speed_rad_s = 0.0f;
         feedback.ins_valid = Gimbal_INS_Valid;
-        feedback.enabled = Gimbal_Yaw_Output_Enabled;
+        feedback.enabled = Gimbal_Yaw_Output_Enabled && Gimbal.Yaw_Motor.IsHealthy();
 #else
         feedback.yaw_rad = Gimbal_INS_State.yaw_rad;
         feedback.pitch_rad = Gimbal_INS_State.pitch_rad;

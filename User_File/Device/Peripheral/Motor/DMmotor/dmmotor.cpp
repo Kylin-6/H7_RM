@@ -125,16 +125,6 @@ void Class_DMMotor::FeedbackCallback(FDCAN_HandleTypeDef *callback_hfdcan,
     motor->feedback_daemon.Feed();
 }
 
-/** @brief Daemon 首次判定掉线时快速提交一帧使能命令。 */
-void Class_DMMotor::OfflineCallback(void *owner)
-{
-    Class_DMMotor *motor = static_cast<Class_DMMotor *>(owner);
-    if (motor != nullptr)
-    {
-        (void)motor->Enable();
-    }
-}
-
 /**
  * @brief 发送使能、失能、清错或置零命令：前 7 字节固定为 0xFF，末字节为命令码。
  * @return 命令是否成功入队，不代表电机已执行。
