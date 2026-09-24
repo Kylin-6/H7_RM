@@ -22,10 +22,17 @@
 
 // 全局初始化完成标志位
 volatile bool init_finished = false;
+static unsigned int init_errors = SYSTEM_INIT_ERROR_NONE;
 
+extern "C" unsigned int System_Get_Init_Errors(void)
+{
+    return init_errors;
+}
 
 extern "C" void System_Init(void)
 {
+    init_finished = false;
+    init_errors = SYSTEM_INIT_ERROR_NONE;
     SEGGER_SYSVIEW_Conf();
     // SEGGER_SYSVIEW_Stop();
     SYS_Timestamp.Init(&htim5);
@@ -55,15 +62,24 @@ extern "C" void System_Init(void)
     HAL_TIM_Base_Start_IT(&htim4);
     HAL_TIM_Base_Start_IT(&htim5);
     System_IMU_Configure();
-    BSP_BMI088.Init();
+    if (!BSP_BMI088.Init())
+    {
+        init_errors |= SYSTEM_INIT_ERROR_BMI088;
+    }
     BSP_WS2812.Init();
     BSP_Buzzer.Init();
     BSP_Key.Init();
-    BSP_W25Q64JV.Init();
+    if (!BSP_W25Q64JV.Init())
+    {
+        init_errors |= SYSTEM_INIT_ERROR_FLASH;
+    }
     ADC_Init(&hadc1, 1);
     BSP_Power.Init(true, true, true);
     EricTool_USB.Init();
-    BSP_BMI088.BMI088_Gyro.Start_FIFO_Acquisition();
+    if (BSP_BMI088.Is_Initialized())
+    {
+        BSP_BMI088.BMI088_Gyro.Start_FIFO_Acquisition();
+    }
     
     init_finished = true;
 }

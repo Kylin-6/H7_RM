@@ -62,7 +62,8 @@ static_assert(sizeof(Struct_BMI088_Gyro_Sample) == 32U,
 class Class_BMI088_Gyro
 {
 public:
-    void Init();
+    // 每个通信/配置步骤最多尝试 5 次，失败返回 false。
+    bool Init();
 
     void Start_FIFO_Acquisition();
 

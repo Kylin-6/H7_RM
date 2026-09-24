@@ -29,12 +29,15 @@ Class_W25Q64JV BSP_W25Q64JV;
 /* Function prototypes -------------------------------------------------------*/
 
 /**
- * @brief 初始化 W25Q64JV，轮询 JEDEC ID 直到芯片就绪
+ * @brief 初始化 W25Q64JV，有限次读取 JEDEC ID，失败返回 false
  *
  * @param __Flash_Mode 工作模式（Normal / MemoryMapped）
  */
-void Class_W25Q64JV::Init(const Enum_W25Q64JV_Mode &__Flash_Mode)
+bool Class_W25Q64JV::Init(const Enum_W25Q64JV_Mode &__Flash_Mode)
 {
+    Initialized = false;
+    Busy_Flag = false;
+    Write_Enable_Activated_Flag = false;
     OSPI_Manage_Object = &OSPI2_Manage_Object;
     Flash_Mode = __Flash_Mode;
 
@@ -46,10 +49,20 @@ void Class_W25Q64JV::Init(const Enum_W25Q64JV_Mode &__Flash_Mode)
     Command = COMMAND_DEFAULT_CONFIG;
     Command.DataMode = HAL_OSPI_DATA_1_LINE;
     Command.NbData = 3;
-    while (*reinterpret_cast<uint32_t *>(OSPI_Manage_Object->Rx_Buffer) != 0x001740EF)
+    bool id_valid = false;
+    for (uint8_t attempt = 0; attempt < 5 && !id_valid; attempt++)
     {
+        // JEDEC ID 只有 3 字节；清除旧值，不能用上一次接收结果判定成功。
+        memset(OSPI_Manage_Object->Rx_Buffer, 0, 3);
         OSPI_Command_Receive_Data(OSPI_Manage_Object->OSPI_Handler, &Command);
         Namespace_SYS_Timestamp::Delay_Millisecond(100);
+        id_valid = OSPI_Manage_Object->Rx_Buffer[0] == 0xef &&
+                   OSPI_Manage_Object->Rx_Buffer[1] == 0x40 &&
+                   OSPI_Manage_Object->Rx_Buffer[2] == 0x17;
+    }
+    if (!id_valid)
+    {
+        return false;
     }
 
     if (__Flash_Mode == W25Q64JV_Mode_MemoryMapped)
@@ -64,8 +77,13 @@ void Class_W25Q64JV::Init(const Enum_W25Q64JV_Mode &__Flash_Mode)
         Namespace_SYS_Timestamp::Delay_Millisecond(100);
 
         OSPI_MemoryMappedTypeDef tmp_config = {0};
-        HAL_OSPI_MemoryMapped(OSPI_Manage_Object->OSPI_Handler, &tmp_config);
+        if (HAL_OSPI_MemoryMapped(OSPI_Manage_Object->OSPI_Handler, &tmp_config) != HAL_OK)
+        {
+            return false;
+        }
     }
+    Initialized = true;
+    return true;
 }
 
 /**
@@ -75,6 +93,10 @@ void Class_W25Q64JV::Init(const Enum_W25Q64JV_Mode &__Flash_Mode)
  */
 void Class_W25Q64JV::Enable_Quad_Mode()
 {
+    if (!Initialized)
+    {
+        return;
+    }
     SEGGER_RTT_printf(0, "QE start\n");
 
     // 硬件复位 Flash（确保干净状态）
@@ -193,6 +215,10 @@ void Class_W25Q64JV::Enable_Quad_Mode()
  */
 void Class_W25Q64JV::OSPI_StatusMatchCallback()
 {
+    if (!Initialized)
+    {
+        return;
+    }
     SEGGER_RTT_printf(0, "StatMatch Busy=%d Instr=%02X\n", Busy_Flag, Current_Instruction);
 
     Busy_Flag = false;
@@ -210,7 +236,7 @@ void Class_W25Q64JV::OSPI_StatusMatchCallback()
  */
 void Class_W25Q64JV::OSPI_RxCallback()
 {
-    if (!Suppress_AutoPolling)
+    if (Initialized && !Suppress_AutoPolling)
         Auto_Polling_With_Timeout();
 }
 
@@ -220,7 +246,7 @@ void Class_W25Q64JV::OSPI_RxCallback()
  */
 void Class_W25Q64JV::OSPI_TxCallback()
 {
-    if (!Suppress_AutoPolling)
+    if (Initialized && !Suppress_AutoPolling)
         Auto_Polling_With_Timeout();
 }
 
@@ -230,7 +256,7 @@ void Class_W25Q64JV::OSPI_TxCallback()
  */
 void Class_W25Q64JV::TIM_1ms_AutoPollingTimeout_PeriodElapsedCallback()
 {
-    if (Busy_Flag && (SYS_Timestamp.Get_Current_Timestamp() - OSPI_Manage_Object->Auto_Polling_Timestamp > Current_Auto_Polling_Timeout))
+    if (Initialized && Busy_Flag && (SYS_Timestamp.Get_Current_Timestamp() - OSPI_Manage_Object->Auto_Polling_Timestamp > Current_Auto_Polling_Timeout))
     {
         Busy_Flag = false;
         Auto_Polling_Error_Count++;

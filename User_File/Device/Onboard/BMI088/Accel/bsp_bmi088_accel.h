@@ -58,7 +58,8 @@ public:
     // 温控PID
     Class_PID PID_Temperature;
 
-    void Init(const bool &__Heater_Enable = false);
+    // 每个通信/配置步骤最多尝试 5 次，失败返回 false。
+    bool Init(const bool &__Heater_Enable = false);
 
     inline float Get_Now_Temperature() const;
 

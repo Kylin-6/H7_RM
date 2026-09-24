@@ -41,7 +41,9 @@ enum Enum_W25Q64JV_Mode
 class Class_W25Q64JV
 {
 public:
-    void Init(const Enum_W25Q64JV_Mode &__Flash_Mode = W25Q64JV_Mode_Normal);
+    // JEDEC ID 最多尝试 5 次；失败后读写接口保持不可用。
+    bool Init(const Enum_W25Q64JV_Mode &__Flash_Mode = W25Q64JV_Mode_Normal);
+    bool Is_Initialized() const { return Initialized; }
 
     void Enable_Quad_Mode();
 
@@ -59,7 +61,7 @@ public:
 
     inline bool Set_Buffer(const uint8_t *Buffer, const uint32_t &Address, const uint16_t &Length);
 
-    bool Is_Ready() { return !Is_Busy(); }
+    bool Is_Ready() { return Initialized && !Is_Busy(); }
 
     uint32_t Get_Auto_Polling_Error_Count() { return Auto_Polling_Error_Count; }
 
@@ -76,6 +78,7 @@ public:
     void TIM_1ms_AutoPollingTimeout_PeriodElapsedCallback();
 
   protected:
+    bool Initialized = false;
     // 绑定的OSPI管理对象
     Struct_OSPI_Manage_Object *OSPI_Manage_Object;
     // Flash工作模式
@@ -172,7 +175,7 @@ extern Class_W25Q64JV BSP_W25Q64JV;
  */
 inline bool Class_W25Q64JV::Get_Buffer(const uint32_t &Address, const uint16_t &Length)
 {
-    if (Is_Busy() || Length == 0U || Length > OSPI_BUFFER_SIZE ||
+    if (!Initialized || Is_Busy() || Length == 0U || Length > OSPI_BUFFER_SIZE ||
         Address >= W25Q64JV_FLASH_SIZE || Length > (W25Q64JV_FLASH_SIZE - Address))
     {
         return false;
@@ -199,7 +202,7 @@ inline bool Class_W25Q64JV::Get_Buffer(const uint32_t &Address, const uint16_t &
  */
 inline bool Class_W25Q64JV::Set_Write_Enable()
 {
-    if (Is_Busy())
+    if (!Initialized || Is_Busy())
     {
         return false;
     }
@@ -221,7 +224,7 @@ inline bool Class_W25Q64JV::Set_Write_Enable()
  */
 inline bool Class_W25Q64JV::Set_Sector_Erased(const uint32_t &Address)
 {
-    if (Is_Busy())
+    if (!Initialized || Is_Busy())
     {
         return false;
     }
@@ -257,7 +260,7 @@ inline bool Class_W25Q64JV::Set_Sector_Erased(const uint32_t &Address)
  */
 inline void Class_W25Q64JV::Set_Bolck_Erased_32K(const uint32_t &Address)
 {
-    if (Is_Busy())
+    if (!Initialized || Is_Busy())
     {
         return;
     }
@@ -293,7 +296,7 @@ inline void Class_W25Q64JV::Set_Bolck_Erased_32K(const uint32_t &Address)
  */
 inline void Class_W25Q64JV::Set_Bolck_Erased_64K(const uint32_t &Address)
 {
-    if (Is_Busy())
+    if (!Initialized || Is_Busy())
     {
         return;
     }
@@ -329,7 +332,7 @@ inline void Class_W25Q64JV::Set_Bolck_Erased_64K(const uint32_t &Address)
  */
 inline void Class_W25Q64JV::Set_Chip_Erased()
 {
-    if (Is_Busy())
+    if (!Initialized || Is_Busy())
     {
         return;
     }
@@ -361,7 +364,7 @@ inline void Class_W25Q64JV::Set_Chip_Erased()
  */
 inline bool Class_W25Q64JV::Set_Buffer(const uint8_t *Buffer, const uint32_t &Address, const uint16_t &Length)
 {
-    if (Is_Busy() || Buffer == nullptr || Length == 0U || Length > W25Q64JV_PAGE_SIZE ||
+    if (!Initialized || Is_Busy() || Buffer == nullptr || Length == 0U || Length > W25Q64JV_PAGE_SIZE ||
         Address >= W25Q64JV_FLASH_SIZE || Length > (W25Q64JV_FLASH_SIZE - Address))
     {
         return false;

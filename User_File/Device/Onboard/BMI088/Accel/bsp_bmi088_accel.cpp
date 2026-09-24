@@ -91,8 +91,10 @@ Struct_BMI088_Accel_Temperature_State Class_BMI088_Accel::Get_Temperature_State(
  *
  * @param Heater_Enable 是否使能加热电阻
  */
-void Class_BMI088_Accel::Init(const bool &__Heater_Enable)
+bool Class_BMI088_Accel::Init(const bool &__Heater_Enable)
 {
+    const uint8_t max_attempts = 5;
+    Valid_Flag = false;
     // 绑定SPI
     SPI_Manage_Object = &SPI2_Manage_Object;
 
@@ -121,29 +123,39 @@ void Class_BMI088_Accel::Init(const bool &__Heater_Enable)
 
     // 检测通信是否正常
     Register.ACC_CHIP_ID_RO = 0x00;
-    while (Register.ACC_CHIP_ID_RO != 0x1e)
+    for (uint8_t attempt = 0; attempt < max_attempts && Register.ACC_CHIP_ID_RO != 0x1e; attempt++)
     {
         Read_Single_Register(offsetof(Struct_BMI088_Accel_Register, ACC_CHIP_ID_RO));
         Namespace_SYS_Timestamp::Delay_Millisecond(100);
+    }
+    if (Register.ACC_CHIP_ID_RO != 0x1e)
+    {
+        return false;
     }
 
     // 软重启
     res = 0xb6;
-    Write_Single_Register(offsetof(Struct_BMI088_Accel_Register, ACC_PWR_CTRL_RW), &res);
+    Write_Single_Register(offsetof(Struct_BMI088_Accel_Register, ACC_SOFTRESET_WO), &res);
     Namespace_SYS_Timestamp::Delay_Millisecond(100);
 
     // 检测通信是否正常
     Register.ACC_CHIP_ID_RO = 0x00;
-    while (Register.ACC_CHIP_ID_RO != 0x1e)
+    for (uint8_t attempt = 0; attempt < max_attempts && Register.ACC_CHIP_ID_RO != 0x1e; attempt++)
     {
         Read_Single_Register(offsetof(Struct_BMI088_Accel_Register, ACC_CHIP_ID_RO));
         Namespace_SYS_Timestamp::Delay_Millisecond(100);
     }
+    if (Register.ACC_CHIP_ID_RO != 0x1e)
+    {
+        return false;
+    }
 
     for (uint8_t i = 0; i < BMI088_ACCEL_INIT_INSTRUCTION_NUM; i++)
     {
-        ((uint8_t *) (&Register))[BMI088_ACCEL_REGISTER_CONFIG[i][0]] = 0x00;
-        while (((uint8_t *) (&Register))[BMI088_ACCEL_REGISTER_CONFIG[i][0]] != BMI088_ACCEL_REGISTER_CONFIG[i][1])
+        // 使用与目标不同的哨兵值，值为 0 的配置也必须实际写入并回读。
+        uint8_t *readback = ((uint8_t *) (&Register)) + BMI088_ACCEL_REGISTER_CONFIG[i][0];
+        *readback = ~BMI088_ACCEL_REGISTER_CONFIG[i][1];
+        for (uint8_t attempt = 0; attempt < max_attempts && *readback != BMI088_ACCEL_REGISTER_CONFIG[i][1]; attempt++)
         {
             // 写入寄存器
             Write_Single_Register(BMI088_ACCEL_REGISTER_CONFIG[i][0], &BMI088_ACCEL_REGISTER_CONFIG[i][1]);
@@ -153,11 +165,16 @@ void Class_BMI088_Accel::Init(const bool &__Heater_Enable)
             Read_Single_Register(BMI088_ACCEL_REGISTER_CONFIG[i][0]);
             Namespace_SYS_Timestamp::Delay_Millisecond(100);
         }
+        if (*readback != BMI088_ACCEL_REGISTER_CONFIG[i][1])
+        {
+            return false;
+        }
     }
 
     // 预读取一次加速度计数据
     Read_Multi_Register(offsetof(Struct_BMI088_Accel_Register, ACC_X_RO), 6);
     Namespace_SYS_Timestamp::Delay_Millisecond(100);
+    return true;
 }
 
 /**

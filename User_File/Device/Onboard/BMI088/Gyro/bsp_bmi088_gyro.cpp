@@ -59,8 +59,9 @@ bool Class_BMI088_Gyro::Pop_Sample(Struct_BMI088_Gyro_Sample &__Sample)
  *
  * @param Heater_Enable 是否使能加热电阻
  */
-void Class_BMI088_Gyro::Init()
+bool Class_BMI088_Gyro::Init()
 {
+    const uint8_t max_attempts = 5;
     // 绑定SPI
     SPI_Manage_Object = &SPI2_Manage_Object;
 
@@ -102,10 +103,14 @@ void Class_BMI088_Gyro::Init()
 
     // 检测通信是否正常
     Register.GYRO_CHIP_ID_RO = 0x00;
-    while (Register.GYRO_CHIP_ID_RO != 0x0f)
+    for (uint8_t attempt = 0; attempt < max_attempts && Register.GYRO_CHIP_ID_RO != 0x0f; attempt++)
     {
         Read_Single_Register(offsetof(Struct_BMI088_Gyro_Register, GYRO_CHIP_ID_RO));
         Namespace_SYS_Timestamp::Delay_Millisecond(100);
+    }
+    if (Register.GYRO_CHIP_ID_RO != 0x0f)
+    {
+        return false;
     }
 
     // 软重启
@@ -115,16 +120,21 @@ void Class_BMI088_Gyro::Init()
 
     // 检测通信是否正常
     Register.GYRO_CHIP_ID_RO = 0x00;
-    while (Register.GYRO_CHIP_ID_RO != 0x0f)
+    for (uint8_t attempt = 0; attempt < max_attempts && Register.GYRO_CHIP_ID_RO != 0x0f; attempt++)
     {
         Read_Single_Register(offsetof(Struct_BMI088_Gyro_Register, GYRO_CHIP_ID_RO));
         Namespace_SYS_Timestamp::Delay_Millisecond(100);
     }
+    if (Register.GYRO_CHIP_ID_RO != 0x0f)
+    {
+        return false;
+    }
 
     for (uint8_t i = 0; i < BMI088_GYRO_INIT_INSTRUCTION_NUM; i++)
     {
-        ((uint8_t *) (&Register))[BMI088_GYRO_REGISTER_CONFIG[i][0]] = 0x00;
-        while (((uint8_t *) (&Register))[BMI088_GYRO_REGISTER_CONFIG[i][0]] != BMI088_GYRO_REGISTER_CONFIG[i][1])
+        uint8_t *readback = ((uint8_t *) (&Register)) + BMI088_GYRO_REGISTER_CONFIG[i][0];
+        *readback = ~BMI088_GYRO_REGISTER_CONFIG[i][1];
+        for (uint8_t attempt = 0; attempt < max_attempts && *readback != BMI088_GYRO_REGISTER_CONFIG[i][1]; attempt++)
         {
             // 写入寄存器
             Write_Single_Register(BMI088_GYRO_REGISTER_CONFIG[i][0], &BMI088_GYRO_REGISTER_CONFIG[i][1]);
@@ -134,6 +144,10 @@ void Class_BMI088_Gyro::Init()
             Read_Single_Register(BMI088_GYRO_REGISTER_CONFIG[i][0]);
             Namespace_SYS_Timestamp::Delay_Millisecond(100);
         }
+        if (*readback != BMI088_GYRO_REGISTER_CONFIG[i][1])
+        {
+            return false;
+        }
     }
 
     GPIO_InitTypeDef gpio_init = {};
@@ -141,6 +155,7 @@ void Class_BMI088_Gyro::Init()
     gpio_init.Mode = GPIO_MODE_IT_RISING;
     gpio_init.Pull = GPIO_NOPULL;
     HAL_GPIO_Init(BMI088_GYRO__INTERRUPT_GPIO_Port, &gpio_init);
+    return true;
 }
 
 void Class_BMI088_Gyro::Start_FIFO_Acquisition()
