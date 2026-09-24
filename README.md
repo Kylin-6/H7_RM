@@ -137,21 +137,34 @@ EricTool 的 USB/UART 解析均只读取回调传入的缓冲区及有效长度�
 
 坐标约定为 X 向前、Y 向左、逆时针为正；角度使用 rad，角速度使用 rad/s，平移速度使用 m/s。`theta - zero_point` 表示校准后的“云台朝向减底盘朝向”，计算时归一化为最短相对角。
 
-| 模式 | 行为 | `gimbal_yaw_target` | `forward` | `chassis_yaw_error` |
-| --- | --- | --- | --- | --- |
-| `SpinMode_GIMBAL_FOLLOW` 云台跟随底盘 | 保持云台与底盘的相对夹角 | 进入模式后首次计算锁存的校准相对角 | `0` | `0` |
-| `SpinMode_GIMBAL_LOCK` 云台锁定 | 云台保持调用方设置的世界 Yaw 目标，底盘可独立旋转 | `Set_WorldTarget()` 设置的连续角度 | `-vw` | `0` |
-| `SpinMode_CHASSIS_FOLLOW` 底盘跟随云台 | 输出底盘转向云台当前朝向的最短角误差，供调用方控制底盘 | `Set_WorldTarget()` 设置的连续角度 | `-vw` | 校准后的最短相对角，正值表示底盘应逆时针转 |
+| 模式 | 上层控制行为 | 传入的 `vw` | 本模块的 `forward` |
+| --- | --- | --- | --- |
+| `SpinMode_GIMBAL_FOLLOW` 云台跟随底盘 | 云台保持相对底盘的朝向，随底盘一起转 | 上层底盘角速度指令 | `0` |
+| `SpinMode_GIMBAL_LOCK` 云台锁定 | 云台保持世界 Yaw 目标，底盘独立旋转 | 上层底盘角速度指令，可为小陀螺转速 | `-vw` |
+| `SpinMode_CHASSIS_FOLLOW` 底盘跟随云台 | 底盘车头转向云台，上层根据相对夹角控制底盘 | 上层跟随控制器生成的底盘角速度指令 | `-vw` |
+
+`SpinOutput_t` 只包含底盘坐标系平移速度 `x/y`（m/s）、底盘角速度 `w`（rad/s）和云台角速度前馈 `forward`（rad/s）。三个模式均将云台坐标系平移指令旋转到底盘坐标系，原样输出 `w = vw`；锁定与底盘跟随采用相同的前馈公式，差别在于上层生成角速度的策略。本模块不生成车头对齐的控制律，也不维护云台角度环的相对目标。
 
 小陀螺使用 **云台锁定模式 + 非零 `vw`**，无需单独的第四种模式。
 
 - `Init(&config)` 配置零位偏移与初始模式；`Init()` 默认零偏移、云台跟随底盘。配置非法时返回 `false` 并保留原状态。
-- `Set_theta(theta)` 更新云台与底盘的相对夹角；进入云台跟随模式后，应在首次计算前更新该值。重复设置同一模式不会重新锁存目标。
-- `Set_WorldTarget(world_angle)` 保存上层期望保持的云台世界 Yaw，可由上层按 IMU 姿态生成；保留输入的连续角度，切换模式不会自动抓取当前 IMU 值。
+- `Set_theta(theta)` 更新云台与底盘的相对夹角；每次计算使用最新值，不锁存为控制目标。
+- `Set_WorldTarget(world_angle)` / `Get_WorldTarget()` 暂存和读取上层需要保持的世界 Yaw（rad），可由上层按 IMU 姿态设置。保留连续角度，不参与四项速度输出的计算，切换模式或更新反馈也不会自动改写它。
 - `Set_MoveTarget(vx, vy, vw)` 设置云台坐标系的平移指令和底盘角速度指令。三个模式均将平移指令旋转为底盘坐标系的 `x/y`，并原样输出 `w = vw`。
 - `Set_Spin_Mode(mode)` 选择上述三种模式。调用方在同一上下文提供有限输入，然后调用 `TIM_Calculate_PeriodElapsedCallback()`，通过 `Get_Output()` 取得当次计算结果。
 
-`forward` 依据传入的底盘角速度 `vw` 计算，叠加到云台相对底盘的速度目标。`chassis_yaw_error` 是角度误差，由调用方的控制器生成后续 `vw`；本模块不会自行将角度误差换算为角速度，也不会直接驱动底盘。
+`forward` 依据传入的底盘角速度 `vw` 计算，叠加到云台相对底盘的速度目标。底盘跟随时，调用方可使用同源相对角反馈与现有数学库处理零偏、跨周误差，再由自己的控制器生成 `vw`。角度误差（rad）不能直接充当角速度（rad/s）；本模块不包含 PID，也不直接驱动底盘。
+
+**云台串级 PID 的前馈接法**：若速度环反馈为云台相对底盘的角速度，则在角度环之后、速度环之前相加。以下各项均为 `rad/s`，`angle_loop_output` 表示角度环生成的速度目标：
+
+```c
+speed_loop_target = angle_loop_output + output.forward;
+speed_loop_error = speed_loop_target - gimbal_relative_yaw_rate;
+```
+
+速度 PID 用该误差计算电流/力矩等控制输出。`forward` 不加在速度 PID 的控制输出端；如果速度环直接闭环 IMU 世界角速度，则世界速度目标中不应重复加入这项相对运动补偿。角度环的目标与反馈也须匹配：云台跟随使用校准后的相对角，其余模式使用同一世界参考零位下的 Yaw。
+
+例如锁定模式下底盘指令 `vw = +2 rad/s`，则 `forward = -2 rad/s`；角度环输出为零时，相对速度目标为 `-2 rad/s`，底盘实际以 `+2 rad/s` 旋转时两者抵消。当前前馈使用底盘指令，补偿精度取决于底盘实际速度的跟随情况。接入使用 `deg/s`、`rpm` 或电机轴单位的控制环时，由调用方统一换算单位、方向和减速比，再设置适合执行器的速度限幅。
 
 ## 系统服务
 
@@ -249,7 +262,7 @@ cmake --build --preset Release
 | [Boundary](Tests/Boundary) | PID 积分/死区/D 低通、KF 连续缺测、电机命令失败返回、EricTool 有界解析、UART DMA 发送寿命及忙/失败路径，共 5 组 |
 | [Trajectory](Tests/Trajectory/README.md) | 输入契约、6 万组随机初态、1657 组边界初态、10 万次逐周期改目标、连续信号跟随及分段连续性，共 5 组 |
 | [FilterPolynomial](Tests/FilterPolynomial/README.md) | 0～3 阶独立系数、流式卷积、解析导数、生命周期及配置失败状态保留，共 5 组 |
-| [SpinMode](Tests/SpinMode) | 坐标转换、三模式目标与前馈、最短角误差、模式切换及生命周期，共 4 组 |
+| [SpinMode](Tests/SpinMode) | 坐标转换与跨周零偏、三模式速度与前馈、切换历史独立性、世界目标暂存及生命周期，共 4 组 |
 | [Health](Tests/Health/README.md) | 快照一致性、IMU 增量告警、DJI 只读超时检测、24 电机容量及任务调度，共 5 组 |
 
 在仓库根目录运行下列 PowerShell 命令；将 `g++` 替换为本机主机编译器路径：

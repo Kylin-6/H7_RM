@@ -14,14 +14,13 @@ bool SpinMode::Init(const SpinConfig_t *config)
         return false;
     }
 
+    /* 角度均为 rad；初始化 theta = zero_point，使初始校准相对角为 0。 */
     zero_point = Basic_Math_Modulus_Normalization(config->zero_point, 2.0f * PI);
     world_angle = 0.0f;
     theta = zero_point;
     x_target = 0.0f;
     y_target = 0.0f;
     w_target = 0.0f;
-    relative_target = 0.0f;
-    capture_relative_target = true;
     Output = {};
     SpinMode_FSM.Init(config->mode);
     return true;
@@ -52,40 +51,31 @@ void SpinMode::Set_Spin_Mode(SpinMode_e mode)
         return;
     }
     SpinMode_FSM.Set_Status(mode);
-    capture_relative_target = true;
 }
 
 void SpinMode::TIM_Calculate_PeriodElapsedCallback()
 {
     SpinMode_FSM.TIM_Calculate_PeriodElapsedCallback();
+    /* rad；云台朝向减底盘朝向，扣除零偏并取最短角，正值表示云台在底盘左侧。 */
     const float relative_angle = Basic_Math_Modulus_Normalization(theta - zero_point, 2.0f * PI);
+    /* m/s；[x, y] = R(relative_angle) * [vx, vy]，从云台坐标系转到底盘坐标系。 */
     Class_Matrix_f32<2, 1> velocity;
     velocity[0][0] = x_target;
     velocity[1][0] = y_target;
     velocity = Namespace_ALG_Matrix::From_Angle(relative_angle) * velocity;
     Output.x = velocity[0][0];
     Output.y = velocity[1][0];
+    /* rad/s；所有模式均直通上层的角速度指令，不在本模块由角度误差生成速度。 */
     Output.w = w_target;
-    Output.chassis_yaw_error = 0.0f;
 
     switch (Get_Spin_Mode())
     {
     case SpinMode_GIMBAL_FOLLOW:
-        if (capture_relative_target)
-        {
-            relative_target = relative_angle;
-            capture_relative_target = false;
-        }
-        Output.gimbal_yaw_target = relative_target;
         Output.forward = 0.0f;
         break;
-    case SpinMode_CHASSIS_FOLLOW:
-        Output.gimbal_yaw_target = world_angle;
-        Output.chassis_yaw_error = relative_angle;
-        Output.forward = -Output.w;
-        break;
     case SpinMode_GIMBAL_LOCK:
-        Output.gimbal_yaw_target = world_angle;
+    case SpinMode_CHASSIS_FOLLOW:
+        /* rad/s；世界角速度 = 底盘角速度 + 相对角速度，因此相对速度目标补偿 -vw。 */
         Output.forward = -Output.w;
         break;
     }

@@ -104,10 +104,8 @@ static void Angular()
                 Near(out.w, speeds[speed], 0.0, "caller owns angular speed at any angle");
                 Near(out.forward, mode == SpinMode_GIMBAL_FOLLOW ? 0.0 : -speeds[speed],
                      0.0, "compensation uses caller angular speed");
-                const double a = angles[angle];
-                const double shortest = atan2(sin(a), cos(a));
-                Near(out.chassis_yaw_error, mode == SpinMode_CHASSIS_FOLLOW ? shortest : 0.0,
-                     0.000002, "chassis follow uses shortest signed angle only");
+                Near(out.w + out.forward, mode == SpinMode_GIMBAL_FOLLOW ? speeds[speed] : 0.0,
+                     0.0, "feedforward preserves the requested gimbal world rate");
             }
         }
     }
@@ -135,11 +133,8 @@ static void Modes()
             Near(out.w, expected_w, 0.00001, "mode speed source");
             Near(out.forward, to == SpinMode_GIMBAL_FOLLOW ? 0.0 : -expected_w, 0.00001, "mode compensation");
             Near(out.x, cos(0.375) + 0.5 * sin(0.375), 0.00001, "mode keeps input frame");
+            Near(out.y, sin(0.375) - 0.5 * cos(0.375), 0.00001, "mode keeps lateral input frame");
             Near(spin.Get_WorldTarget(), 12.75, 0.0, "mode preserves world target");
-            Near(out.gimbal_yaw_target, to == SpinMode_GIMBAL_FOLLOW ? 0.375 : 12.75,
-                 0.000001, "relative or continuous world yaw target");
-            Near(out.chassis_yaw_error, to == SpinMode_CHASSIS_FOLLOW ? 0.375 : 0.0,
-                 0.000001, "leaving chassis follow clears error");
         }
     }
     spin.Set_Spin_Mode(SpinMode_GIMBAL_LOCK);
@@ -149,35 +144,36 @@ static void Modes()
     SpinOutput_t copy = spin.Get_Output();
     copy.w = 123.0f;
     Check(copy.w != spin.Get_Output().w, "output returned by value");
-    spin.Set_WorldTarget(-41.0f);
-    spin.TIM_Calculate_PeriodElapsedCallback();
-    Near(spin.Get_Output().w, -7.0, 0.0, "world reference is independent of motion");
-    Near(spin.Get_Output().gimbal_yaw_target, -41.0, 0.0, "world target reaches output without wrapping");
+    for (int mode = 0; mode < 3; mode++)
+    {
+        spin.Set_Spin_Mode((SpinMode_e)mode);
+        spin.Set_MoveTarget(1.0f, -0.5f, -7.0f);
+        spin.TIM_Calculate_PeriodElapsedCallback();
+        const SpinOutput_t before = spin.Get_Output();
+        const float world_target = -41.0f - mode * 8.0f;
+        spin.Set_WorldTarget(world_target);
+        spin.TIM_Calculate_PeriodElapsedCallback();
+        const SpinOutput_t after = spin.Get_Output();
+        Near(spin.Get_WorldTarget(), world_target, 0.0, "world target cache retains continuous angle");
+        Check(before.x == after.x && before.y == after.y && before.w == after.w &&
+              before.forward == after.forward, "world cache does not drive motion");
+        spin.Set_theta(-0.9f);
+        spin.TIM_Calculate_PeriodElapsedCallback();
+        Near(spin.Get_Output().x, cos(-0.9) + 0.5 * sin(-0.9), 0.00001, "latest angle used without latch");
+        Near(spin.Get_Output().y, sin(-0.9) - 0.5 * cos(-0.9), 0.00001, "latest lateral angle used without latch");
+        Near(spin.Get_WorldTarget(), world_target, 0.0, "feedback never captures or overwrites world target");
 
-    spin.Set_Spin_Mode(SpinMode_GIMBAL_FOLLOW);
-    spin.Set_theta(0.7f);
-    spin.TIM_Calculate_PeriodElapsedCallback();
-    Near(spin.Get_Output().gimbal_yaw_target, 0.7, 0.000001, "capture latest angle on first calculation");
-    spin.Set_theta(-0.2f);
-    spin.Set_WorldTarget(8.0f);
-    spin.Set_Spin_Mode(SpinMode_GIMBAL_FOLLOW);
-    spin.TIM_Calculate_PeriodElapsedCallback();
-    Near(spin.Get_Output().gimbal_yaw_target, 0.7, 0.000001, "same mode and new feedback preserve relative target");
-    spin.Set_Spin_Mode(SpinMode_CHASSIS_FOLLOW);
-    spin.TIM_Calculate_PeriodElapsedCallback();
-    Near(spin.Get_Output().chassis_yaw_error, -0.2, 0.000001, "clockwise follow error");
-    Near(spin.Get_Output().gimbal_yaw_target, 8.0, 0.0, "chassis follow preserves world aim");
-    spin.Set_Spin_Mode(SpinMode_GIMBAL_FOLLOW);
-    spin.Set_theta(-0.9f);
-    spin.TIM_Calculate_PeriodElapsedCallback();
-    Near(spin.Get_Output().gimbal_yaw_target, -0.9, 0.000001, "reenter follow captures new angle");
-    Near(spin.Get_Output().chassis_yaw_error, 0.0, 0.0, "no stale error after switch");
-
-    config.zero_point = 0.4f;
-    Check(spin.Init(&config), "relative latch reinit");
-    spin.Set_theta(0.7f);
-    spin.TIM_Calculate_PeriodElapsedCallback();
-    Near(spin.Get_Output().gimbal_yaw_target, 0.3, 0.000001, "relative target subtracts configured zero");
+        SpinMode fresh;
+        config.mode = (SpinMode_e)mode;
+        Check(fresh.Init(&config), "fresh history reference");
+        fresh.Set_theta(-0.9f);
+        fresh.Set_MoveTarget(1.0f, -0.5f, -7.0f);
+        fresh.TIM_Calculate_PeriodElapsedCallback();
+        const SpinOutput_t reference = fresh.Get_Output();
+        const SpinOutput_t current = spin.Get_Output();
+        Check(reference.x == current.x && reference.y == current.y && reference.w == current.w &&
+              reference.forward == current.forward, "mode history does not change speed outputs");
+    }
 }
 
 static void Lifecycle()
@@ -226,7 +222,6 @@ static void Lifecycle()
     Near(first.Get_WorldTarget(), 0.0, 0.0, "reinit resets world target");
     SpinOutput_t reset = first.Get_Output();
     Check(reset.x == 0.0f && reset.y == 0.0f && reset.w == 0.0f && reset.forward == 0.0f, "reinit resets output");
-    Check(reset.gimbal_yaw_target == 0.0f && reset.chassis_yaw_error == 0.0f, "reinit resets target outputs");
     first.TIM_Calculate_PeriodElapsedCallback();
     Near(first.Get_Output().w, 0.0, 0.0, "reinit has no stale angular input");
     first.Set_MoveTarget(1.0f, 0.0f, 0.0f);
