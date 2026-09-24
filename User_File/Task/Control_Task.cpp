@@ -12,6 +12,7 @@
 #include "RobotCmd.h"
 #include "Shoot.h"
 #include "Init.h"
+#include "sys_imu.h"
 #include "user_task.h"
 
 extern "C" void Control_Task(void* argument)
@@ -45,6 +46,7 @@ extern "C" void Control_Task(void* argument)
         Communication_Update();
         /* 命令所有者先发布最新目标，再由各 Application 消费并执行。 */
         RobotCmd_Update();
+        System_IMU_Publish_Wit_Fallback();
         Gimbal_Update();
         Chassis_Update();
         Shoot_Update();

@@ -159,7 +159,7 @@ EricTool 的 USB/UART 解析均只读取回调传入的缓冲区及有效长度�
 - `Topic<T>` 使用 Latest-Value 语义，传递连续状态和控制目标；`Publisher`/`Subscriber` 只是其无分配访问封装。
 - `EventQueue<T,N>` 使用固定容量 FIFO，传递不能被最新值覆盖的离散事件；队列满时拒绝新事件并累计溢出次数。
 
-业务类型和唯一静态通道统一定义在 [MessageCenter](User_File/System/MessageCenter)。`INS_State_Topic` 由 BMI088 链路发布，云台读取最新姿态；RobotCmd 发布 Gimbal、Chassis、Shoot 连续命令并汇总反馈。单发和三连发通过固定容量 `ShootEvent` FIFO 传递。完整 API、并发语义、通道所有权、示例和验证清单见 [Message Center 专篇](User_File/System/MessageCenter/README.md)。
+业务类型和唯一静态通道统一定义在 [MessageCenter](User_File/System/MessageCenter)。`INS_State_Topic` 正常由 BMI088 链路发布；若 BMI088 初始化失败，则改用 UART7（PE7/PE8）的维特 0x52/0x53 帧发布姿态与角速度，云台继续读取同一通道。老步兵模式只要求 0x52 角速度帧在 120 ms 内更新即可提供 yaw 前馈；其他云台模式还要求 0x53 姿态帧。没有有效角速度时，老步兵云台仍响应遥控 yaw，但不做自转补偿；BMI088 故障灯保持紫色双闪。RobotCmd 发布 Gimbal、Chassis、Shoot 连续命令并汇总反馈。单发和三连发通过固定容量 `ShootEvent` FIFO 传递。完整 API、并发语义、通道所有权、示例和验证清单见 [Message Center 专篇](User_File/System/MessageCenter/README.md)。
 
 Daemon 只负责在线状态判断，不负责掉线后的停机、安全策略或消息路由。设备在收到合法反馈后直接 `Feed()`；`StatusTask` 每 10 ms 调用 `CheckAll()`，各设备使用独立超时时间。管理器采用固定容量注册，无动态分配。
 

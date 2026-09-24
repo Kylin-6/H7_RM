@@ -96,6 +96,7 @@ extern "C" void System_Init(void)
     {
         System_Init_RecordFailure(SYSTEM_INIT_FAILURE_BMI088,
                                   SYSTEM_INIT_DEGRADED);
+        System_IMU_Start_Wit_Fallback();
     }
     BSP_WS2812.Init();
     BSP_Buzzer.Init();

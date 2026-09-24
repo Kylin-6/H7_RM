@@ -125,9 +125,11 @@ void Gimbal_Loop(void)
     const float stick_speed_command = Gimbal_Constrain(
         Gimbal_Command.yaw_speed_rad_s, -GIMBAL_YAW_SPEED_MAX, GIMBAL_YAW_SPEED_MAX);
 
-    /* 机体系 Z 轴角速度前馈，抑制底盘旋转对云台的耦合。 */
+    /* INS 不可用时仅停用角速度补偿，保留遥控器 yaw 速度控制。 */
+    const float chassis_yaw_rate =
+        Gimbal_INS_Valid ? Gimbal_INS_State.gyro_z_rad_s : 0.0f;
     float yaw_speed_command =
-        stick_speed_command - GIMBAL_YAW_RATE_FEEDFORWARD_GAIN * Gimbal_INS_State.gyro_z_rad_s;
+        stick_speed_command - GIMBAL_YAW_RATE_FEEDFORWARD_GAIN * chassis_yaw_rate;
     yaw_speed_command =
         Gimbal_Constrain(yaw_speed_command, -GIMBAL_YAW_SPEED_MAX, GIMBAL_YAW_SPEED_MAX);
 

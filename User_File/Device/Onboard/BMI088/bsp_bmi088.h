@@ -104,6 +104,7 @@ public:
     inline uint32_t Get_Accel_Update_Rejected_Counter() const;
     inline uint32_t Get_Accel_Update_Attempt_Counter() const;
     inline uint32_t Get_SPI_Recovery_Counter() const;
+    inline uint64_t Get_Accel_Last_Update_Timestamp_Us() const;
     inline uint32_t Get_SPI_Transfer_Timeout_Counter() const;
     inline uint32_t Get_SPI_Accel_Timeout_Counter() const;
     inline uint32_t Get_SPI_Gyro_Timeout_Counter() const;
@@ -291,6 +292,11 @@ inline uint32_t Class_BMI088::Get_Accel_Update_Attempt_Counter() const
 inline uint32_t Class_BMI088::Get_SPI_Recovery_Counter() const
 {
     return SPI_Recovery_Counter;
+}
+
+inline uint64_t Class_BMI088::Get_Accel_Last_Update_Timestamp_Us() const
+{
+    return Get_Atomic_Copy(Accel_Status.Update_Timestamp);
 }
 
 inline uint32_t Class_BMI088::Get_SPI_Transfer_Timeout_Counter() const

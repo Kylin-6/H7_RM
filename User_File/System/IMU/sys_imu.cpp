@@ -11,6 +11,7 @@
 #include "sys_imu.h"
 
 #include "bsp_bmi088.h"
+#include "bsp_uart.h"
 #include "message_center.h"
 
 /* Private macros ------------------------------------------------------------*/
@@ -20,6 +21,95 @@
 /* Private variables ---------------------------------------------------------*/
 
 static Publisher<INS_State> INS_State_Publisher(MessageCenter::INS_State_Topic);
+
+static constexpr uint16_t WIT_FRAME_LENGTH = 11U;
+static constexpr uint64_t WIT_MAX_AGE_US = 120000U;
+static constexpr float WIT_ANGLE_SCALE = 3.14159265358979323846f / 32768.0f;
+static constexpr float WIT_RATE_SCALE = 2000.0f * WIT_ANGLE_SCALE / 180.0f;
+
+struct Wit_State
+{
+    INS_State ins;
+    uint64_t angle_timestamp_us = 0U;
+    uint64_t rate_timestamp_us = 0U;
+};
+
+static Wit_State Wit_Latest_State;
+static uint8_t Wit_Frame[WIT_FRAME_LENGTH];
+static uint8_t Wit_Frame_Index;
+static bool Wit_Yaw_Zero_Valid;
+static float Wit_Yaw_Zero;
+static bool Wit_Fallback_Enabled;
+
+static int16_t Wit_Read_Int16(const uint8_t *bytes)
+{
+    return static_cast<int16_t>(static_cast<uint16_t>(bytes[0]) |
+                                (static_cast<uint16_t>(bytes[1]) << 8U));
+}
+
+static void Wit_UART_Callback(uint8_t *buffer, uint16_t length)
+{
+    for (uint16_t i = 0U; i < length; ++i)
+    {
+        const uint8_t byte = buffer[i];
+        if (Wit_Frame_Index == 0U && byte != 0x55U)
+        {
+            continue;
+        }
+        Wit_Frame[Wit_Frame_Index++] = byte;
+        if (Wit_Frame_Index == 2U &&
+            Wit_Frame[1] != 0x52U && Wit_Frame[1] != 0x53U)
+        {
+            Wit_Frame_Index = byte == 0x55U ? 1U : 0U;
+            continue;
+        }
+        if (Wit_Frame_Index != WIT_FRAME_LENGTH)
+        {
+            continue;
+        }
+        Wit_Frame_Index = 0U;
+        uint8_t checksum = 0U;
+        for (uint8_t j = 0U; j < WIT_FRAME_LENGTH - 1U; ++j)
+        {
+            checksum = static_cast<uint8_t>(checksum + Wit_Frame[j]);
+        }
+        if (checksum != Wit_Frame[WIT_FRAME_LENGTH - 1U])
+        {
+            continue;
+        }
+
+        const uint64_t timestamp_us = SYS_Timestamp_Get_Microsecond();
+        if (Wit_Frame[1] == 0x52U)
+        {
+            Wit_Latest_State.ins.gyro_x_rad_s = Wit_Read_Int16(&Wit_Frame[2]) * WIT_RATE_SCALE;
+            Wit_Latest_State.ins.gyro_y_rad_s = Wit_Read_Int16(&Wit_Frame[4]) * WIT_RATE_SCALE;
+            Wit_Latest_State.ins.gyro_z_rad_s = Wit_Read_Int16(&Wit_Frame[6]) * WIT_RATE_SCALE;
+            Wit_Latest_State.rate_timestamp_us = timestamp_us;
+        }
+        else
+        {
+            Wit_Latest_State.ins.roll_rad = Wit_Read_Int16(&Wit_Frame[2]) * WIT_ANGLE_SCALE;
+            Wit_Latest_State.ins.pitch_rad = Wit_Read_Int16(&Wit_Frame[4]) * WIT_ANGLE_SCALE;
+            const float yaw = Wit_Read_Int16(&Wit_Frame[6]) * WIT_ANGLE_SCALE;
+            if (!Wit_Yaw_Zero_Valid)
+            {
+                Wit_Yaw_Zero = yaw;
+                Wit_Yaw_Zero_Valid = true;
+            }
+            float relative_yaw = yaw - Wit_Yaw_Zero;
+            if (relative_yaw > 3.14159265358979323846f)
+            {
+                relative_yaw -= 6.28318530717958647692f;
+            }
+            else if (relative_yaw < -3.14159265358979323846f)
+            {
+                relative_yaw += 6.28318530717958647692f;
+            }
+            Wit_Latest_State.ins.yaw_rad = relative_yaw;
+            Wit_Latest_State.angle_timestamp_us = timestamp_us;
+        }
+    }
+}
 
 /* Private function declarations ---------------------------------------------*/
 
@@ -102,4 +192,53 @@ void System_IMU_Publish_State()
     };
     /* 高频姿态使用静态 Topic，避免动态队列进入 1 kHz 闭环路径。 */
     INS_State_Publisher.Publish(ins_state);
+}
+
+void System_IMU_Start_Wit_Fallback()
+{
+    Wit_Latest_State = {};
+    Wit_Frame_Index = 0U;
+    Wit_Yaw_Zero_Valid = false;
+    Wit_Fallback_Enabled = false;
+
+    uint8_t wake[5] = {0xFFU, 0xAAU, 0x69U, 0x88U, 0xB5U};
+    (void)HAL_UART_Transmit(&huart7, wake, sizeof(wake), 20U);
+    uint8_t reset[5] = {0xFFU, 0xAAU, 0x00U, 0x01U, 0x00U};
+    uint8_t save[5] = {0xFFU, 0xAAU, 0x00U, 0x00U, 0x00U};
+    HAL_Delay(200U);
+    (void)HAL_UART_Transmit(&huart7, reset, sizeof(reset), 20U);
+    HAL_Delay(200U);
+    (void)HAL_UART_Transmit(&huart7, save, sizeof(save), 20U);
+
+    UART_Init(&huart7, Wit_UART_Callback);
+    // UART BSP 会在 DMA 启动失败后重试，保持回退发布路径可用。
+    Wit_Fallback_Enabled = true;
+}
+
+void System_IMU_Publish_Wit_Fallback()
+{
+    if (!Wit_Fallback_Enabled)
+    {
+        return;
+    }
+
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    const Wit_State snapshot = Wit_Latest_State;
+    __set_PRIMASK(primask);
+
+    const uint64_t now_us = SYS_Timestamp_Get_Microsecond();
+    if (snapshot.rate_timestamp_us == 0U || now_us < snapshot.rate_timestamp_us ||
+        now_us - snapshot.rate_timestamp_us > WIT_MAX_AGE_US)
+    {
+        return;
+    }
+#if !LEGACY_INFANTRY
+    if (snapshot.angle_timestamp_us == 0U || now_us < snapshot.angle_timestamp_us ||
+        now_us - snapshot.angle_timestamp_us > WIT_MAX_AGE_US)
+    {
+        return;
+    }
+#endif
+    INS_State_Publisher.Publish(snapshot.ins);
 }

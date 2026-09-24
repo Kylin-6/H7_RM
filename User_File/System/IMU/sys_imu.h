@@ -38,4 +38,10 @@ void System_IMU_Configure();
  */
 void System_IMU_Publish_State();
 
+/** @brief BMI088 初始化失败时，启用 UART7 维特陀螺仪接收。 */
+void System_IMU_Start_Wit_Fallback();
+
+/** @brief 在控制任务中发布有效且新鲜的维特姿态与角速度。 */
+void System_IMU_Publish_Wit_Fallback();
+
 #endif
