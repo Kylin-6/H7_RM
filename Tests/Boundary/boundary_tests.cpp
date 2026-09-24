@@ -482,6 +482,41 @@ static void TestCommands()
     }
 }
 
+static void TestDMModeResponses()
+{
+    const uint32_t modes[] = {0, 5, 0xffffffff, 2, 3};
+    for (int expired = 0; expired <= 1; expired++)
+    {
+        for (unsigned index = 0; index < sizeof(modes) / sizeof(modes[0]); ++index)
+        {
+            uint32_t value = modes[index];
+            test_timestamp_us = 0;
+            submit_ok = true;
+            Class_DMMotor motor;
+            CHECK(motor.Init(&bus, 1, 0x101, Enum_DMMotor_Mode::MIT));
+            PositionFeedback(65000);
+            const Struct_DMMotor_Feedback before = motor.feedback;
+            CHECK(motor.SetMode(Enum_DMMotor_Mode::SPEED));
+            if (expired) test_timestamp_us = 250001;
+            uint8_t reply[8] = {1, 0, 0x55, 0x0a, 0, 0, 0, 0};
+            memcpy(reply + 4, &value, sizeof(value));
+            rx_callback(&bus, 0x101, reply, 8, rx_context);
+            CHECK(motor.feedback.state == before.state);
+            CHECK(motor.feedback.position == before.position);
+            CHECK(motor.feedback.total_position == before.total_position);
+            CHECK(motor.feedback.velocity == before.velocity);
+            CHECK(motor.feedback.torque == before.torque);
+            CHECK(motor.feedback.mos_temperature == before.mos_temperature);
+            CHECK(motor.feedback.rotor_temperature == before.rotor_temperature);
+            CHECK(motor.Enable());
+            CHECK(last_message.id == (!expired && value == 3 ? 0x201 : 1));
+            PositionFeedback(65010);
+            CHECK(motor.feedback.total_position > before.total_position);
+            CHECK(motor.feedback.total_position < 12.5f);
+        }
+    }
+}
+
 static Class_EricTool_UART uart;
 static Class_EricTool_USB usb;
 static uint8_t *guarded_memory;
@@ -569,7 +604,7 @@ int main(int argc, char **argv)
     if (argc != 2) return 2;
     if (strcmp(argv[1], "pid") == 0) TestPID();
     else if (strcmp(argv[1], "kalman") == 0) TestKalman();
-    else if (strcmp(argv[1], "commands") == 0) TestCommands();
+    else if (strcmp(argv[1], "commands") == 0) { TestCommands(); TestDMModeResponses(); }
     else if (strcmp(argv[1], "parser") == 0) TestParser();
     else return 2;
     printf("PASS %s: %u checks\n", argv[1], checks);

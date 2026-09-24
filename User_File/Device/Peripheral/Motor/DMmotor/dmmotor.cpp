@@ -78,8 +78,9 @@ void Class_DMMotor::FeedbackCallback(FDCAN_HandleTypeDef *callback_hfdcan,
                 __DMB();
                 motor->mode_pending = false;
             }
-            return;
         }
+        // 已识别为模式参数应答，非法值也不能作为运动反馈解码。
+        return;
     }
 
     /** 运动反馈布局：状态/ID 各 4 位，位置 16 位，速度与转矩各 12 位，末尾为两路温度。 */
