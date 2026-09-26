@@ -365,6 +365,67 @@ static void TestFlashActiveTransferTimeout()
     CHECK(BSP_W25Q64JV.Get_Auto_Polling_Error_Count() == errors_before);
 }
 
+static uint64_t SubmitGyroFifoBatch(Class_BMI088_Gyro &device,
+                                    uint64_t interrupt_us, uint8_t frame_count,
+                                    bool notify_interrupt = true)
+{
+    if (notify_interrupt) device.Notify_FIFO_Interrupt(interrupt_us);
+    spi_pending = false;
+    CHECK(device.SPI_Request_Gyro() == HAL_OK);
+    CHECK(pending_length == 1);
+    SPI2_Manage_Object.Rx_Buffer[1] = frame_count;
+    CHECK(device.SPI_RxCallback(interrupt_us) != 0);
+
+    spi_pending = false;
+    CHECK(device.SPI_Request_Gyro() == HAL_OK);
+    CHECK(pending_length == frame_count * 6);
+    memset(SPI2_Manage_Object.Rx_Buffer + 1, 0, pending_length);
+    CHECK(device.SPI_RxCallback(interrupt_us) != 0);
+
+    Struct_BMI088_Gyro_Sample sample{};
+    uint64_t last_timestamp = 0;
+    for (uint8_t index = 0; index < frame_count; ++index)
+    {
+        CHECK(device.Pop_Sample(sample));
+        CHECK(sample.Timestamp_Us > last_timestamp);
+        last_timestamp = sample.Timestamp_Us;
+    }
+    CHECK(!device.Pop_Sample(sample));
+    return last_timestamp;
+}
+
+static void TestGyroFifoTimestamp()
+{
+    Reset();
+    Class_BMI088_Gyro device;
+    gyro = &device;
+    CHECK(device.Init());
+    device.Start_FIFO_Acquisition();
+
+    const uint64_t start_us = 1000000;
+    const uint64_t first_timestamp = SubmitGyroFifoBatch(device, start_us, 2);
+    // The latest data-ready edge belongs to the last FIFO frame.
+    CHECK(first_timestamp == start_us);
+
+    // A delayed status read may retain an older anchor. The correction must
+    // restore ordering without accumulating a synthetic 500 us every frame.
+    const uint64_t stale_timestamp = SubmitGyroFifoBatch(device, start_us, 1, false);
+    CHECK(stale_timestamp == start_us + 1);
+
+    uint64_t last_timestamp = stale_timestamp;
+    for (uint32_t index = 1; index <= 40000; ++index)
+    {
+        // The next interrupt arrives just before the rounded 500 us estimate.
+        const uint64_t interrupt_us = start_us +
+            (static_cast<uint64_t>(index) * 499875) / 1000;
+        const uint64_t timestamp = SubmitGyroFifoBatch(device, interrupt_us, 1);
+        CHECK(timestamp > last_timestamp);
+        CHECK(timestamp <= interrupt_us + 2);
+        last_timestamp = timestamp;
+    }
+    CHECK(device.Get_Queue_Drop_Count() == 0);
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2) return 2;
@@ -375,6 +436,7 @@ int main(int argc, char **argv)
     else if (strcmp(argv[1], "flash_submission") == 0) TestFlashSubmission();
     else if (strcmp(argv[1], "flash_quad") == 0) TestFlashQuad();
     else if (strcmp(argv[1], "flash_active_transfer_timeout") == 0) TestFlashActiveTransferTimeout();
+    else if (strcmp(argv[1], "gyro_fifo_timestamp") == 0) TestGyroFifoTimestamp();
     else return 2;
     printf("PASS %s: %u checks\n", argv[1], checks);
     return 0;
