@@ -115,7 +115,11 @@ bool Class_BMI088_Accel::Init(const bool &__Heater_Enable)
     // 启动PWM
     if (Heater_Enable)
     {
-        HAL_TIM_PWM_Start(htim, TIM_Channel);
+        if (HAL_TIM_PWM_Start(htim, TIM_Channel) != HAL_OK)
+        {
+            Heater_Enable = false;
+            return false;
+        }
         __HAL_TIM_SET_COMPARE(htim, TIM_Channel, 0);
     }
 

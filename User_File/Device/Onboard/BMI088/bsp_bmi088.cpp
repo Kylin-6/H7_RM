@@ -634,6 +634,10 @@ void Class_BMI088::BMI088_Service_Transfer_Locked(const bool &Allow_Recovery)
  */
 void Class_BMI088::Calculate()
 {
+    if (!Init_Finished_Flag)
+    {
+        return;
+    }
     const uint64_t calculate_start_timestamp = SYS_Timestamp.Get_Now_Microsecond();
     Struct_BMI088_Gyro_Sample gyro_sample = {};
     if (!BMI088_Gyro.Pop_Sample(gyro_sample))

@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-bool test_imu_ready, test_flash_ready;
+bool test_imu_ready, test_flash_ready, test_adc_ready;
 unsigned test_fifo_starts, test_other_inits;
 TestIMU BSP_BMI088;
 TestFlash BSP_W25Q64JV;
@@ -15,11 +15,12 @@ extern volatile bool init_finished;
 
 int main()
 {
-    // Begin with both failed and end with both healthy, proving errors are reset.
-    for (int failures = 3; failures >= 0; --failures)
+    // Exercise every combination and verify failures are reset between runs.
+    for (int failures = 7; failures >= 0; --failures)
     {
         test_imu_ready = (failures & 1) == 0;
         test_flash_ready = (failures & 2) == 0;
+        test_adc_ready = (failures & 4) == 0;
         test_fifo_starts = test_other_inits = 0;
         System_Init();
         if (!init_finished || System_Get_Init_Errors() != (unsigned)failures ||

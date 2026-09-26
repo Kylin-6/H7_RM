@@ -15,6 +15,7 @@ enum Enum_System_Init_Error
     SYSTEM_INIT_ERROR_NONE = 0,
     SYSTEM_INIT_ERROR_BMI088 = 1 << 0,
     SYSTEM_INIT_ERROR_FLASH = 1 << 1,
+    SYSTEM_INIT_ERROR_ADC1 = 1 << 2,
 };
 
 void System_Init(void);

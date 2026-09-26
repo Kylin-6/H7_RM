@@ -47,3 +47,11 @@ target_include_directories(system_init_tests PRIVATE ${SYSTEM_STUBS}
     ${CMAKE_CURRENT_LIST_DIR} ${BSP_ROOT}/User_File/System/Init)
 add_test(NAME initialization_system COMMAND system_init_tests)
 set_tests_properties(initialization_system PROPERTIES TIMEOUT 10)
+
+add_executable(adc_init_tests adc_init_tests.cpp
+    ${BSP_ROOT}/User_File/Middleware/BSP/ADC/bsp_adc.cpp)
+target_compile_features(adc_init_tests PRIVATE cxx_std_17)
+target_include_directories(adc_init_tests PRIVATE
+    adc_stubs ${BSP_ROOT}/User_File/Middleware/BSP/ADC)
+add_test(NAME initialization_adc COMMAND adc_init_tests)
+set_tests_properties(initialization_adc PROPERTIES TIMEOUT 10)

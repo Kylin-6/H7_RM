@@ -1,5 +1,5 @@
 #pragma once
-extern bool test_imu_ready, test_flash_ready;
+extern bool test_imu_ready, test_flash_ready, test_adc_ready;
 extern unsigned test_fifo_starts, test_other_inits;
 struct TestGyro { void Start_FIFO_Acquisition() { ++test_fifo_starts; } };
 struct TestIMU {
@@ -23,7 +23,7 @@ inline void HAL_TIM_Base_Start_IT(void *) {}
 inline void UART_Init(void *, void *) {}
 inline void SPI_Init(void *, void (*)()) {}
 inline void OSPI_Init(void *, void (*)(), void (*)(), void (*)()) {}
-inline void ADC_Init(void *, int) {}
+inline bool ADC_Init(void *, int) { return test_adc_ready; }
 inline void System_IMU_Configure() {}
 inline void SPI2_Callback() {}
 inline void OSPI2_Polling_Callback() {}

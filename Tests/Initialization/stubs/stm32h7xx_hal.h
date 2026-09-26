@@ -17,6 +17,7 @@ enum { HAL_DMA_ERROR_NONE = 0, HAL_DMA_STATE_READY = 0, HAL_UNLOCKED = 0,
 extern GPIO_TypeDef test_gpio;
 extern TIM_HandleTypeDef htim3;
 extern uint32_t test_pwm;
+extern HAL_StatusTypeDef test_pwm_start_result;
 #define BMI088_ACCEL__SPI_CS_GPIO_Port (&test_gpio)
 #define BMI088_GYRO__SPI_CS_GPIO_Port (&test_gpio)
 #define BMI088_GYRO__INTERRUPT_GPIO_Port (&test_gpio)
@@ -28,7 +29,7 @@ extern uint32_t test_pwm;
 #define GPIO_NOPULL 0
 #define TIM_CHANNEL_4 4
 #define __HAL_TIM_SET_COMPARE(timer, channel, value) (test_pwm = (value))
-inline HAL_StatusTypeDef HAL_TIM_PWM_Start(TIM_HandleTypeDef *, uint32_t) { return HAL_OK; }
+inline HAL_StatusTypeDef HAL_TIM_PWM_Start(TIM_HandleTypeDef *, uint32_t) { return test_pwm_start_result; }
 inline void HAL_GPIO_Init(GPIO_TypeDef *, GPIO_InitTypeDef *) {}
 inline void HAL_GPIO_WritePin(GPIO_TypeDef *, uint16_t, GPIO_PinState) {}
 inline HAL_StatusTypeDef HAL_DMA_Abort(DMA_HandleTypeDef *) { return HAL_OK; }

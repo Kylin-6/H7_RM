@@ -12,6 +12,7 @@ static unsigned checks;
 
 uint64_t test_time_us;
 uint32_t test_pwm;
+HAL_StatusTypeDef test_pwm_start_result;
 GPIO_TypeDef test_gpio;
 TIM_HandleTypeDef htim3;
 Class_Timestamp SYS_Timestamp;
@@ -149,6 +150,7 @@ static void Reset()
 {
     test_time_us = 0;
     test_pwm = 123;
+    test_pwm_start_result = HAL_OK;
     reset_seen = false;
     missing_after_reset = false;
     no_response = false;
@@ -205,6 +207,17 @@ static void TestSensor(bool accelerometer)
         if (is_accel) CHECK(test_pwm == 0);
         printf("PASS %s scenario %d (ID reads %u/%u)\n",
                is_accel ? "accel" : "gyro", scenario, id_reads[0], id_reads[1]);
+    }
+    if (accelerometer)
+    {
+        Reset();
+        test_pwm_start_result = HAL_BUSY;
+        Class_BMI088_Accel accel_device;
+        accel = &accel_device;
+        CHECK(!accel->Init(true));
+        CHECK(!accel->Get_Heater_Enable());
+        CHECK(spi_commands == 0 && test_time_us == 0);
+        printf("PASS accel PWM start failure\n");
     }
 }
 

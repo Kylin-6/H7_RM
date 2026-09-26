@@ -17,10 +17,11 @@
 
 #include "adc.h"
 #include "stm32h7xx_hal.h"
+#include <stdbool.h>
 
 /* Exported macros -----------------------------------------------------------*/
 
-// 缓冲区字节长度
+// 缓冲区采样值个数
 #define ADC_BUFFER_SIZE 128
 
 /* Exported types ------------------------------------------------------------*/
@@ -43,7 +44,7 @@ extern struct Struct_ADC_Manage_Object ADC3_Manage_Object;
 
 /* Exported function declarations --------------------------------------------*/
 
-void ADC_Init(ADC_HandleTypeDef *hadc, uint16_t Sample_Number);
+bool ADC_Init(ADC_HandleTypeDef *hadc, uint16_t Sample_Number);
 
 #endif
 

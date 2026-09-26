@@ -73,7 +73,10 @@ extern "C" void System_Init(void)
     {
         init_errors |= SYSTEM_INIT_ERROR_FLASH;
     }
-    ADC_Init(&hadc1, 1);
+    if (!ADC_Init(&hadc1, 1))
+    {
+        init_errors |= SYSTEM_INIT_ERROR_ADC1;
+    }
     BSP_Power.Init(true, true, true);
     EricTool_USB.Init();
     if (BSP_BMI088.Is_Initialized())
