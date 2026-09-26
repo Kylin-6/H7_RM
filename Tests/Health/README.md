@@ -46,7 +46,17 @@ cmake --build --preset Debug
 
 首次配置主机测试时运行 `cmake -S Tests/Health -B build/Tests_Health -G Ninja -DCMAKE_CXX_COMPILER=g++`。
 
-五组回归覆盖快照与 IRQ 状态、IMU 首帧/超时/九项增量异常及恢复、DJI 只读超时与后注册首帧宽限、24 电机容量、不同 tick 频率下的周期取整/回绕/超时跳过。测试编译生产健康模块、任务及 DJI 驱动，用桩替代硬件和 RTOS 调度。
+七组回归覆盖快照与 IRQ 状态、IMU 首帧/超时/九项增量异常及恢复、DJI 只读超时与后注册首帧宽限、DJI 协议反馈与命令边界、24 电机容量、不同 tick 频率下的周期取整/回绕/超时跳过。测试编译生产健康模块、任务及 DJI 驱动，用桩替代硬件和 RTOS 调度。
+
+2026-09-26：新增 `health_protocol_feedback`，确认超出 0~8191 的编码器字段不会更新反馈或刷新时间戳；新增 `health_protocol_command`，确认非有限目标值不会转成 CAN 指令。两组均先在修复前复现失败，再在修复后通过；Linux 主机另以 `-fsanitize=float-cast-overflow` 验证 7/7 通过。固件已烧录，但尚未连接电机做实物协议验证。
+
+Linux/WSL 可在工程根目录复测浮点转换边界：
+
+```bash
+cmake -S Tests/Health -B build/Tests_Health_UBSan -G "Unix Makefiles" -DCMAKE_CXX_FLAGS=-fsanitize=float-cast-overflow -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=float-cast-overflow
+cmake --build build/Tests_Health_UBSan -j 4
+UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir build/Tests_Health_UBSan --output-on-failure
+```
 
 2026-09-21：五组主机回归及 Debug、Release 构建通过。Release 使用 DTCMRAM 106488 B、FLASH 102208 B。相对精简前的 Debug 固件：
 

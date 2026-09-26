@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <setjmp.h>
+#include <math.h>
 
 uint64_t test_timestamp_us;
 uint64_t test_sample_us;
@@ -19,6 +20,7 @@ static unsigned checks;
 #define CHECK(x) do { ++checks; if (!(x)) { fprintf(stderr, "FAIL %d: %s\n", __LINE__, #x); exit(1); } } while (0)
 static Struct_Sys_Health output;
 static uint32_t tx_calls;
+static Struct_CAN_Tx_Msg last_tx;
 static CAN_RxCallback_t callbacks[32];
 static void *contexts[32];
 static FDCAN_HandleTypeDef *buses[32];
@@ -36,7 +38,7 @@ bool BSP_CAN_RegisterCallback(uint32_t id, FDCAN_HandleTypeDef *bus, CAN_RxCallb
     return true;
 }
 bool CAN_Tx_Submit(const Struct_CAN_Tx_Msg *) { ++tx_calls; return true; }
-bool CAN_Tx_Perform(const Struct_CAN_Tx_Msg *) { ++tx_calls; return true; }
+bool CAN_Tx_Perform(const Struct_CAN_Tx_Msg *message) { ++tx_calls; last_tx = *message; return true; }
 
 static void InitMotor(uint32_t index)
 {
@@ -208,6 +210,40 @@ static void Motor()
     Update(); CHECK(output.Motor[1].Health.State == HEALTH_OFFLINE);
 }
 
+static void ProtocolFeedback()
+{
+    InitMotor(0);
+    uint8_t invalid_encoder[8] = {0x20, 0x00, 0, 0, 0, 0, 25, 0};
+    test_timestamp_us = 500;
+    callbacks[0](buses[0], ids[0], invalid_encoder, 8, contexts[0]);
+    CHECK(!motors[0].online);
+    CHECK(motors[0].Get_Last_Feedback_Timestamp_Us() == 0);
+
+    test_timestamp_us = 1000;
+    Feedback(0);
+    CHECK(motors[0].feedback.encoder == 0x0102);
+    CHECK(motors[0].Get_Last_Feedback_Timestamp_Us() == 1000);
+
+    test_timestamp_us = 2000;
+    callbacks[0](buses[0], ids[0], invalid_encoder, 8, contexts[0]);
+    CHECK(motors[0].feedback.encoder == 0x0102);
+    CHECK(motors[0].Get_Last_Feedback_Timestamp_Us() == 1000);
+}
+
+static void ProtocolCommand()
+{
+    InitMotor(0);
+    Class_DJIMotor_Group group;
+    CHECK(group.Init(&motors[0]));
+    test_timestamp_us = 1000;
+    Feedback(0);
+
+    CHECK(group.Control(1234.0f));
+    CHECK(last_tx.data[0] == 0x04 && last_tx.data[1] == 0xD2);
+    CHECK(group.Control(NAN));
+    CHECK(last_tx.data[0] == 0 && last_tx.data[1] == 0);
+}
+
 static void Capacity()
 {
     Sys_Health_Init();
@@ -269,6 +305,8 @@ int main(int argc, char **argv)
     if (strcmp(argv[1], "contract") == 0) Contract();
     else if (strcmp(argv[1], "imu") == 0) IMU();
     else if (strcmp(argv[1], "motor") == 0) Motor();
+    else if (strcmp(argv[1], "protocol_feedback") == 0) ProtocolFeedback();
+    else if (strcmp(argv[1], "protocol_command") == 0) ProtocolCommand();
     else if (strcmp(argv[1], "capacity") == 0) Capacity();
     else if (strcmp(argv[1], "task") == 0) Task();
     else return 2;
