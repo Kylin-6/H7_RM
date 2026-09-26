@@ -6,7 +6,7 @@
 
 > **打开 `H7_BSP.ioc` 遇到版本迁移提示时，选择 Continue，不要选择 Migrate。** 迁移并重新生成可能使 `Middlewares/` 中的 FreeRTOS 与现有 SystemView 适配不兼容。请保持项目原有固件包，详见 [CubeMX 与构建边界](#cubemx-与构建边界)。
 
-[整体架构](#整体架构) · [通信与外设](#通信与外设-bsp) · [设备层](#设备层) · [算法层](#算法层) · [小陀螺](#小陀螺-spinmode) · [接入方式](#接入方式) · [构建与调试](#构建与调试) · [主机回归](#主机回归)
+[整体架构](#整体架构) · [通信与外设](#通信与外设-bsp) · [设备层](#设备层) · [算法层](#算法层) · [小陀螺](#小陀螺-spinmode) · [接入方式](#接入方式) · [构建与调试](#构建与调试) · [主机回归](#主机回归) · [更新日志](CHANGELOG.md)
 
 ## 整体架构
 
@@ -41,7 +41,6 @@ USB_DEVICE/                 USB CDC 设备配置
 User_Config/                链接脚本、FreeRTOS 补丁与烧录配置
 SystemView/                 SEGGER SystemView 与 RTT
 Tests/                      独立主机算法与通信边界回归
-sysid/                      系统辨识数据、脚本与报告
 ```
 
 ## 通信与外设 BSP
@@ -188,6 +187,8 @@ speed_loop_error = speed_loop_target - gimbal_relative_yaw_rate;
 
 [main.c](Core/Src/main.c) 完成 MPU、HAL 和外设初始化后调用 `System_Init()`，随后初始化 RTOS、创建任务并启动调度。CAN 发送资源在内核初始化后建立，周期服务与设备计算按职责由任务调度。
 
+`System_Init()` 对 BMI088、W25Q64JV 和 ADC1 的初始化结果分别记录错误位；`System_Get_Init_Errors()` 返回位掩码，`init_finished` 仅表示流程已结束。失败的 BMI088 不启动 FIFO 采集，计算入口也不消费样本。上层启动判断应读取错误位，不能把任务开始运行等同于设备就绪。
+
 当前应用接入仍需按项目配置：[Control_Task.cpp](User_File/Task/Control_Task.cpp) 中的 Gimbal / Balance 初始化与循环调用尚未启用。驱动和算法可作为框架组件使用，具体应用需要补齐资源绑定与调度。
 
 ## 接入方式
@@ -272,11 +273,14 @@ cmake --build --preset Release
 | [FilterPolynomial](Tests/FilterPolynomial/README.md) | 0～3 阶独立系数、流式卷积、解析导数、生命周期及配置失败状态保留，共 5 组 |
 | [SpinMode](Tests/SpinMode) | 坐标转换与跨周零偏、三模式速度与前馈、切换历史独立性、世界目标暂存及生命周期，共 4 组 |
 | [Health](Tests/Health/README.md) | 快照一致性、IMU 增量告警、DJI 只读超时检测、24 电机容量及任务调度，共 5 组 |
+| [Communication](Tests/Communication/README.md) | CAN 帧类型与长度、USB 缓冲所有权、OSPI 提交失败路径 |
+| [Initialization](Tests/Initialization/README.md) | BMI088、Flash、ADC 初始化失败与超时边界，FIFO 时间戳回归 |
+| [WS2812](Tests/WS2812) | 首次写入、颜色去重与 SPI 失败后重试 |
 
 在仓库根目录运行下列 PowerShell 命令；将 `g++` 替换为本机主机编译器路径：
 
 ```powershell
-foreach ($suite in @("Fuzzy", "Boundary", "Trajectory", "FilterPolynomial", "Health", "SpinMode")) {
+foreach ($suite in @("Fuzzy", "Boundary", "Trajectory", "FilterPolynomial", "Health", "SpinMode", "Communication", "Initialization", "WS2812")) {
     cmake -S "Tests/$suite" -B "build/Tests_$suite" -G Ninja -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release
     if ($LASTEXITCODE -ne 0) { throw "$suite 配置失败" }
     cmake --build "build/Tests_$suite"
@@ -286,7 +290,7 @@ foreach ($suite in @("Fuzzy", "Boundary", "Trajectory", "FilterPolynomial", "Hea
 }
 ```
 
-2026-09-19 的功能与边界修复已进行主机验证及 MC02 Debug 编译链接。主机测试不代替实际 DMA/CAN 通信、电机闭环和实时性验证；新增算法仍需由应用接入，Trajectory 尚未测量板上的最坏重规划耗时。
+截至 2026-09-27，近期通信、初始化、设备边界修复已配套主机回归；验证细节以各测试工程说明和[更新日志](CHANGELOG.md)为准。主机测试不代替实际 DMA/CAN 通信、电机闭环和实时性验证；新增算法仍需由应用接入，Trajectory 尚未测量板上的最坏重规划耗时。
 
 ### 烧录与观察
 
@@ -295,7 +299,6 @@ foreach ($suite in @("Fuzzy", "Boundary", "Trajectory", "FilterPolynomial", "Hea
 - Ozone / GDB：观察设备反馈、算法状态、系统调试数据与任务栈水位。
 - SystemView / RTT：观察任务调度、中断和运行时信息。
 - EricTool：通过 USB / UART 输出数据；`TransportTask` 中保留了 USB 周期输出的使用示例。
-- [sysid](sysid/README.md)：系统辨识数据、采集分析脚本与实验报告。
 
 ## 文档与参考
 
