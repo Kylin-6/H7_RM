@@ -287,7 +287,7 @@ void Class_W25Q64JV::OSPI_TxCallback()
  */
 void Class_W25Q64JV::TIM_1ms_AutoPollingTimeout_PeriodElapsedCallback()
 {
-    if (Initialized && Busy_Flag && (SYS_Timestamp.Get_Current_Timestamp() - OSPI_Manage_Object->Auto_Polling_Timestamp > Current_Auto_Polling_Timeout))
+    if (Initialized && Busy_Flag && (SYS_Timestamp.Get_Current_Timestamp() - Busy_Timestamp > Current_Auto_Polling_Timeout))
     {
         Busy_Flag = false;
         Auto_Polling_Error_Count++;

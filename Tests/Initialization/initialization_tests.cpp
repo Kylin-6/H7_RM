@@ -351,6 +351,20 @@ static void TestFlashQuad()
     CHECK(autopolls == 1 && ospi_commands == 10);
 }
 
+static void TestFlashActiveTransferTimeout()
+{
+    Reset();
+    CHECK(BSP_W25Q64JV.Init());
+    test_time_us = 10000000;
+    const unsigned errors_before = BSP_W25Q64JV.Get_Auto_Polling_Error_Count();
+    CHECK(BSP_W25Q64JV.Get_Buffer(0, 1));
+    test_time_us += 1000;
+    BSP_W25Q64JV.TIM_1ms_AutoPollingTimeout_PeriodElapsedCallback();
+    CHECK(!BSP_W25Q64JV.Is_Ready());
+    CHECK(!BSP_W25Q64JV.Get_Buffer(1, 1));
+    CHECK(BSP_W25Q64JV.Get_Auto_Polling_Error_Count() == errors_before);
+}
+
 int main(int argc, char **argv)
 {
     if (argc != 2) return 2;
@@ -360,6 +374,7 @@ int main(int argc, char **argv)
     else if (strcmp(argv[1], "flash") == 0) TestFlash();
     else if (strcmp(argv[1], "flash_submission") == 0) TestFlashSubmission();
     else if (strcmp(argv[1], "flash_quad") == 0) TestFlashQuad();
+    else if (strcmp(argv[1], "flash_active_transfer_timeout") == 0) TestFlashActiveTransferTimeout();
     else return 2;
     printf("PASS %s: %u checks\n", argv[1], checks);
     return 0;
