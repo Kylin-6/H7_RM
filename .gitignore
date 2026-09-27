@@ -3,6 +3,10 @@ build/
 cmake-build-*/
 out/
 
+# 本机辅助工具与主机回归工程
+/Tools/
+/Tests/
+
 # C/C++ 编译中间产物
 *.o
 *.d

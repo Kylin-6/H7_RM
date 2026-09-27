@@ -40,7 +40,6 @@ Middlewares/                FreeRTOS、USB Device、CMSIS-DSP 等依赖
 USB_DEVICE/                 USB CDC 设备配置
 User_Config/                链接脚本、FreeRTOS 补丁与烧录配置
 SystemView/                 SEGGER SystemView 与 RTT
-Tests/                      独立主机算法与通信边界回归
 ```
 
 ## 通信与外设 BSP
@@ -129,14 +128,14 @@ EricTool 的 USB/UART 解析均只读取回调传入的缓冲区及有效长度�
 
 - **PID**：死区作用于有效误差，不修改调用者目标；积分在本周期累加后限幅，支持负 `Ki`，`Ki=0` 时清空积分。积分限幅为零表示不限制积分，积分分离和变速积分的阈值约定见头文件。
 - **D 支路滤波**：`D_Filter_Cutoff` 使用 Hz，默认 `0` 关闭；与 `D_First` 微分先行独立配置。先滤波差分速率，再乘 `Kd`；DJI 的 `PID_InitTypeDef` 配置已透传该字段。首次启用或切换微分来源时滤波状态从零开始，持续启用且来源不变时保留滤波值。PID 参数更新不自动清空全部历史状态，死区也不保证总输出为零。
-- **Trajectory**：独立于原有 Slope，一个对象管理一个轴。位置目标以零速度、零加速度到达；速度目标到达后保持匀速，设置零速度可平滑停止。目标在下一周期从当前规划的 `p/v/a` 接续，重复目标不重新规划。模块不分配堆内存、不创建任务，不保证时间最优或多轴同步；制动距离内改目标允许必要的越过与返回。接口、错误处理和接入示例见 [轨迹说明](Tests/Trajectory/README.md)。
+- **Trajectory**：独立于原有 Slope，一个对象管理一个轴。位置目标以零速度、零加速度到达；速度目标到达后保持匀速，设置零速度可平滑停止。目标在下一周期从当前规划的 `p/v/a` 接续，重复目标不重新规划。模块不分配堆内存、不创建任务，不保证时间最优或多轴同步；制动距离内改目标允许必要的越过与返回。
 
 ### 滤波、估计与模糊推理约定
 
 - **One Euro**：固定周期标量输入，以首帧对齐初值；最低截止频率、速率系数 `Beta` 与导数截止频率可配置。周期或参数改变时重新初始化。
-- **Polynomial**：默认二阶、支持 0～3 阶，窗口最多 33 点，在最新样本时刻求值。0 阶为移动平均；未收满窗口时原量直通、导数清零且 `Ready=false`，高于拟合阶数的导数恒为零。调用方负责等间隔新样本、量纲与角度展开，缺测后重置；接口与验证见 [多项式滤波说明](Tests/FilterPolynomial/README.md)。
+- **Polynomial**：默认二阶、支持 0～3 阶，窗口最多 33 点，在最新样本时刻求值。0 阶为移动平均；未收满窗口时原量直通、导数清零且 `Ready=false`，高于拟合阶数的导数恒为零。调用方负责等间隔新样本、量纲与角度展开，缺测后重置。
 - **Kalman**：每周期先预测，缺测时跳过测量更新，状态与协方差仍连续推进；恢复有效测量后再执行更新。
-- **Sugeno**：调用方提供有序节点和完整规则表，节点/规则在使用期间保持有效且只读；输入超范围时保持边界值。输入缩放、微分、规则设计及 PID 增益映射由应用负责，库中没有预设的电机或云台控制规则。使用方式与独立参考对照见 [模糊推理说明](Tests/Fuzzy/README.md)。
+- **Sugeno**：调用方提供有序节点和完整规则表，节点/规则在使用期间保持有效且只读；输入超范围时保持边界值。输入缩放、微分、规则设计及 PID 增益映射由应用负责，库中没有预设的电机或云台控制规则。
 
 ## 小陀螺 SpinMode
 
@@ -182,7 +181,7 @@ speed_loop_error = speed_loop_target - gimbal_relative_yaw_rate;
 | 时间戳 | 提供统一微秒时间，供周期测量与超时判断使用 | [System/Timestamp](User_File/System/Timestamp) |
 | 参数配置 | 集中维护当前 IMU 采样、姿态与零偏估计参数 | [System/IMU](User_File/System/IMU) |
 | 调试数据 | 导出便于 Watch、绘图与遥测读取的状态 | [System/debug](User_File/System/debug) |
-| 健康状态 | 20 Hz 汇总 IMU 与已注册 DJI 电机，发布全局 `SYS_Health` 快照 | [健康系统与验证](Tests/Health/README.md) |
+| 健康状态 | 20 Hz 汇总 IMU 与已注册 DJI 电机，发布全局 `SYS_Health` 快照 | [System/Health](User_File/System/Health) |
 | 周期与任务 | CMSIS-RTOS V2 任务入口、线程标志和周期回调 | [Task](User_File/Task) |
 
 [main.c](Core/Src/main.c) 完成 MPU、HAL 和外设初始化后调用 `System_Init()`，随后初始化 RTOS、创建任务并启动调度。CAN 发送资源在内核初始化后建立，周期服务与设备计算按职责由任务调度。
@@ -261,37 +260,6 @@ cmake --build --preset Release
 
 [CMakePresets.json](CMakePresets.json) 管理构建配置。Debug 使用 `-Og -g3`，Release 使用 `-Os -g0`。
 
-### 主机回归
-
-仓库内提供独立 CMake 测试工程，使用主机 C++ 编译器直接编译生产源码，按需以桩函数替换硬件接口。不要给这些工程加载固件 ARM 工具链。
-
-| 工程 | 覆盖范围 |
-| --- | --- |
-| [Fuzzy](Tests/Fuzzy/README.md) | 独立 Sugeno 参考模型、9 万个随机输入、多输出、非均匀节点及配置/输入边界 |
-| [Boundary](Tests/Boundary) | PID 积分/死区/D 低通、KF 连续缺测、电机命令失败返回、EricTool 有界解析、UART DMA 发送寿命及忙/失败路径，共 5 组 |
-| [Trajectory](Tests/Trajectory/README.md) | 输入契约、6 万组随机初态、1657 组边界初态、10 万次逐周期改目标、连续信号跟随及分段连续性，共 5 组 |
-| [FilterPolynomial](Tests/FilterPolynomial/README.md) | 0～3 阶独立系数、流式卷积、解析导数、生命周期及配置失败状态保留，共 5 组 |
-| [SpinMode](Tests/SpinMode) | 坐标转换与跨周零偏、三模式速度与前馈、切换历史独立性、世界目标暂存及生命周期，共 4 组 |
-| [Health](Tests/Health/README.md) | 快照一致性、IMU 增量告警、DJI 只读超时检测、24 电机容量及任务调度，共 5 组 |
-| [Communication](Tests/Communication/README.md) | CAN 帧类型与长度、USB 缓冲所有权、OSPI 提交失败路径 |
-| [Initialization](Tests/Initialization/README.md) | BMI088、Flash、ADC 初始化失败与超时边界，FIFO 时间戳回归 |
-| [WS2812](Tests/WS2812) | 首次写入、颜色去重与 SPI 失败后重试 |
-
-在仓库根目录运行下列 PowerShell 命令；将 `g++` 替换为本机主机编译器路径：
-
-```powershell
-foreach ($suite in @("Fuzzy", "Boundary", "Trajectory", "FilterPolynomial", "Health", "SpinMode", "Communication", "Initialization", "WS2812")) {
-    cmake -S "Tests/$suite" -B "build/Tests_$suite" -G Ninja -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release
-    if ($LASTEXITCODE -ne 0) { throw "$suite 配置失败" }
-    cmake --build "build/Tests_$suite"
-    if ($LASTEXITCODE -ne 0) { throw "$suite 构建失败" }
-    ctest --test-dir "build/Tests_$suite" --output-on-failure
-    if ($LASTEXITCODE -ne 0) { throw "$suite 测试失败" }
-}
-```
-
-截至 2026-09-27，近期通信、初始化、设备边界修复已配套主机回归；验证细节以各测试工程说明和[更新日志](CHANGELOG.md)为准。主机测试不代替实际 DMA/CAN 通信、电机闭环和实时性验证；新增算法仍需由应用接入，Trajectory 尚未测量板上的最坏重规划耗时。
-
 ### 烧录与观察
 
 [VS Code 任务](.vscode/tasks.json) 提供 DAPLink、ST-Link、J-Link 选择与烧录入口；[调试配置](.vscode/launch.json) 和 [Ozone 工程](H7_BSP.jdebug) 提供源码调试入口。使用前按本机安装位置检查工具路径、探针和目标芯片配置。
@@ -312,16 +280,3 @@ foreach ($suite in @("Fuzzy", "Boundary", "Trajectory", "FilterPolynomial", "Hea
 感谢 [Kylin-6](https://github.com/Kylin-6) 在 [PR #4](https://github.com/MermaidFAR/H7_BSP/pull/4) 中贡献达妙电机驱动及初版使用说明，并在 [PR #5](https://github.com/MermaidFAR/H7_BSP/pull/5) 中贡献 DJI 电机原始驱动。
 
 部分驱动参考 [达妙 MC02 BSP](https://github.com/yssickjgd/damiao_mc02_bsp)；UART 实现参考 SCUT-Robotlab / 达妙 `drv_uart` 的组织方式。感谢相关开源项目与原作者。
-
-<details>
-<summary>维护架构图</summary>
-
-架构图由 [Archify](https://github.com/tt-a1i/archify) 生成。编辑 [H7_BSP.architecture.json](Tools/Architecture/H7_BSP.architecture.json)，使用 [版本记录](Tools/Architecture/Archify.lock.json) 对应的 Archify 技能目录执行：
-
-```powershell
-.\Tools\Architecture\Build.ps1 -ArchifyRoot "<Archify 技能目录>"
-```
-
-[Build.ps1](Tools/Architecture/Build.ps1) 更新 `Assets/Architecture/` 下的 SVG 与交互 HTML。
-
-</details>
