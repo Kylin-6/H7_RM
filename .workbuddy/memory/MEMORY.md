@@ -14,7 +14,7 @@
 - /tmp 是 10MB tmpfs：编译必须 `env TMPDIR=$PWD/build/tmp cmake --build ...`。
 - 配置失败过的构建树缓存被污染，必须删除重建。
 - 2026-09-27 起回归框架多板装配构建（合并 RoboMaster_H7 时用户确认"全面对齐框架架构"，取代 2026-09-23 的单一 Debug 构建决定）：
-  - 实机固件 = `cmake --preset GimbalBoard`（产物 build/GimbalBoard/GimbalBoard.elf）；
+  - 实机固件 = `cmake --preset GimbalBoard`（产物 build/GimbalBoard/H7_BSP.elf；2026-09-27 起 OUTPUT_NAME 固定为 H7_BSP，IDE 构建分析器与 flash_h7_bsp.ps1/probe-rs 不随板型改路径）；
   - Debug/Release 预设 = SingleBoard 安全模板（H7_APP_* 默认 OFF），build/Debug/H7_BSP.elf；
   - 板型预设存 CMakeUserPresets.json；板级硬件（CAN 分配/imu/flash/adc/电源轨/indicators/usb_debug）在 User_Config/Board/*_board_config.cpp 的 BoardHardware 结构（含 power_24v_1/2 两路 24V 轨）；
   - 任务装配在 board_tasks_*.c（Board_CreateTasks），freertos.c 只留 USER CODE 区调用，CubeMX 再生成安全；
