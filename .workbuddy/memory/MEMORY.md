@@ -12,10 +12,20 @@
 
 ## 构建（本机 Linux）
 - /tmp 是 10MB tmpfs：编译必须 `env TMPDIR=$PWD/build/tmp cmake --build ...`。
-- 新建构建树必须带 `-DCMAKE_TOOLCHAIN_FILE=cmake/gcc-arm-none-eabi.cmake`，否则 linker guard（h7_linker.cmake）FATAL_ERROR。
 - 配置失败过的构建树缓存被污染，必须删除重建。
-- 2026-09-23 起单一构建：CMakePresets 只留 Debug（build/Debug）；根 CMakeLists 已删除全部 option 多板型开关，宏硬编码为老步兵云台板（GIMBAL=1/CHASSIS=0/SHOOT=1/LEGACY_INFANTRY_GIMBAL=1/LEGACY_INFANTRY_GIMBAL_YAW=0），Pitch.cpp、dvc_dm_imu.cpp、chassis_board.cpp 无条件编入。原 build/gimbal、build/gimbal-yaw、build/rm-standard 多板型构建树已废弃。host 测试 build/Tests_*（boundary_tests 需传用例名 pid/kalman/commands/parser）。
+- 2026-09-27 起回归框架多板装配构建（合并 RoboMaster_H7 时用户确认"全面对齐框架架构"，取代 2026-09-23 的单一 Debug 构建决定）：
+  - 实机固件 = `cmake --preset GimbalBoard`（产物 build/GimbalBoard/GimbalBoard.elf）；
+  - Debug/Release 预设 = SingleBoard 安全模板（H7_APP_* 默认 OFF），build/Debug/H7_BSP.elf；
+  - 板型预设存 CMakeUserPresets.json；板级硬件（CAN 分配/imu/flash/adc/电源轨/indicators/usb_debug）在 User_Config/Board/*_board_config.cpp 的 BoardHardware 结构（含 power_24v_1/2 两路 24V 轨）；
+  - 任务装配在 board_tasks_*.c（Board_CreateTasks），freertos.c 只留 USER CODE 区调用，CubeMX 再生成安全；
+  - LEGACY_INFANTRY_GIMBAL=1 / LEGACY_INFANTRY_GIMBAL_YAW=0 仍全局硬编码，云台板专属源（Pitch.cpp、dvc_dm_imu.cpp、chassis_board.cpp、Com.cpp）挂在 GimbalBoard 装配段。
+  - host 测试已迁到 RoboMaster_Test 分支，本分支不再有 Tests/。
 - 双板分工（2026-09-23 用户确认）：Yaw 轴由底盘板主控控制，云台板固件固定不编译 Yaw（LEGACY_INFANTRY_GIMBAL_YAW=0 是架构决定，不是临时措施）；LEGACY_INFANTRY_GIMBAL_YAW 相关的 Yaw 代码块保留在源码里但永不启用。
+
+## 命令链与板间通信（2026-09-27 合并后）
+- 命令链回到框架 RobotCmd setter + 绑定 Output 模式：Communication → RobotCmd_SetGimbal/SetShoot → RobotCmd_Update 按变化发布；Output 未绑定直接拒绝启动。
+- 框架 Transport 协议（System/Transport，0x141/0x222）已编译进 GimbalBoard 但 legacy 板不启用：老步兵板间链路仍是 0x065 遥控转发（Com.cpp + chassis_board），云台板不控底盘、无 ChassisCmd 下发。切 Transport 需底盘板（老步兵测试分支）同步适配。
+- 框架 Gimbal 通用实现（配置驱动 DM 双轴）与 legacy 实现在 Gimbal.cpp/h 内 #if LEGACY_INFANTRY_GIMBAL 互斥共存；legacy 路径委托 Application/Pitch（DM MIT + DM-IMU），未上板复验。
 
 ## 框架约定
 - 控制律迁移纪律：替换手写算法前必须先做 host 数值等价对拍（参考 2026-09-22 的 slope/jam FSM 对拍模式，存 build/tmp/ 下可复用）。
