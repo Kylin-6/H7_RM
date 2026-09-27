@@ -12,6 +12,8 @@
 #include "RobotCmd.h"
 #include "Shoot.h"
 #include "Init.h"
+#include "message_center.h"
+#include "output.h"
 #include "sys_imu.h"
 #include "user_task.h"
 
@@ -28,22 +30,32 @@ extern "C" void Control_Task(void* argument)
         }
     }
 
+    static LocalPublisher<GimbalCmd> gimbal_output(MessageCenter::Gimbal_Command_Topic);
+    static LocalPublisher<ChassisCmd> chassis_output(MessageCenter::Chassis_Command_Topic);
+    static LocalPublisher<ShootCmd> shoot_output(MessageCenter::Shoot_Command_Topic);
+    if (!RobotCmd_Init(gimbal_output.Bind(), chassis_output.Bind(), shoot_output.Bind()))
+    {
+        for (;;) osDelay(1000U);
+    }
 #if GIMBAL || LEGACY_INFANTRY
     Gimbal_Init();
 #endif
     (void)Chassis_Init();
     (void)Shoot_Init();
+#if LEGACY_INFANTRY
     // 遥控接收依赖 UART BSP 与 init_finished，放在各 Device 初始化之后。
     (void)Communication_Init();
-    RobotCmd_Init();
+#endif
     // Balance_init();
 
     for (;;)
     {
         /* 由 1 ms 定时回调唤醒；阻塞等待期间不占用 CPU。 */
         osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
+#if LEGACY_INFANTRY
         /* 输入适配先把遥控整形为命令，再由命令所有者统一发布。 */
         Communication_Update();
+#endif
         /* 命令所有者先发布最新目标，再由各 Application 消费并执行。 */
         RobotCmd_Update();
         System_IMU_Publish_Wit_Fallback();

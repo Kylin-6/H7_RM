@@ -35,20 +35,29 @@ public:
     /** 发布一个新状态；旧状态直接被覆盖，不保存历史记录。 */
     void Publish(const T &data)
     {
-        const uint64_t timestamp = SYS_Timestamp_Get_Microsecond();
+        PublishAt(data, SYS_Timestamp_Get_Microsecond());
+    }
+
+    /** Keep a frame's receive time when a transport publishes it in task context. */
+    void PublishAt(const T &data, uint64_t timestamp_us)
+    {
         const uint32_t primask = __get_PRIMASK();
         __disable_irq();
 
         /* 数据和元信息必须在同一临界区内更新，避免读到半帧数据。 */
         data_ = data;
         sequence_++;
-        timestamp_ = timestamp;
+        timestamp_ = timestamp_us;
         valid_ = true;
         __DMB();
 
         __set_PRIMASK(primask);
     }
 
+    /**
+     * @brief 读取最近一次发布的数据，不消费该数据。
+     * @return 至少发布过一次时返回 true；否则返回 false 且不修改 data。
+     */
     bool Read(T &data) const
     {
         const uint32_t primask = __get_PRIMASK();
@@ -87,6 +96,11 @@ public:
         return snapshot;
     }
 
+    /**
+     * @brief 仅在最新数据年龄不超过 max_age_us 时读取。
+     * @return 数据存在、时间戳未倒退且足够新鲜时返回 true。
+     * @note 恰好等于 max_age_us 仍视为有效；失败时保持 data 不变。
+     */
     bool ReadFresh(T &data, uint64_t max_age_us) const
     {
         const TopicSnapshot<T> snapshot = ReadWithMeta();
@@ -104,6 +118,7 @@ public:
         return true;
     }
 
+    /** @brief 获取当前发布序号；允许自然回绕，不应作为长期绝对计数。 */
     uint32_t Sequence() const
     {
         const uint32_t primask = __get_PRIMASK();
@@ -114,6 +129,7 @@ public:
         return sequence;
     }
 
+    /** @brief 获取最近一次发布时间，首次发布前返回 0，单位 us。 */
     uint64_t Timestamp() const
     {
         const uint32_t primask = __get_PRIMASK();

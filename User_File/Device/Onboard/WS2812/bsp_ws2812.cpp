@@ -58,19 +58,28 @@ void Class_WS2812::Init(const uint8_t &__Red, const uint8_t &__Green, const uint
     Color.Red = __Red;
     Color.Green = __Green;
     Color.Blue = __Blue;
+    Has_Written_Color = false;
 }
 
 /**
  * @brief TIM定时器中断增加数据到发送缓冲区
  *
  */
-void Class_WS2812::TIM_10ms_Write_PeriodElapsedCallback() const
+void Class_WS2812::TIM_10ms_Write_PeriodElapsedCallback()
 {
     uint8_t tmp_buffer[25] = {};
     const uint32_t primask = __get_PRIMASK();
     __disable_irq();
     const Struct_WS2812_Color display_color = Override_Enabled ? Override_Color : Color;
     __set_PRIMASK(primask);
+
+    if (Has_Written_Color &&
+        display_color.Red == Last_Written_Color.Red &&
+        display_color.Green == Last_Written_Color.Green &&
+        display_color.Blue == Last_Written_Color.Blue)
+    {
+        return;
+    }
 
     for (uint8_t i = 0; i < 8; i++)
     {
@@ -79,8 +88,12 @@ void Class_WS2812::TIM_10ms_Write_PeriodElapsedCallback() const
         tmp_buffer[23 - i] = (display_color.Blue & (1 << i)) ? LEVEL_1 : LEVEL_0;
     }
 
-    SPI_Transmit_Data(SPI_Manage_Object->SPI_Handler, nullptr, 0, GPIO_PIN_SET,
-                      tmp_buffer, sizeof(tmp_buffer));
+    if (SPI_Transmit_Data(SPI_Manage_Object->SPI_Handler, nullptr, 0, GPIO_PIN_SET,
+                          tmp_buffer, sizeof(tmp_buffer)) == HAL_OK)
+    {
+        Last_Written_Color = display_color;
+        Has_Written_Color = true;
+    }
 }
 
 #ifdef __cplusplus

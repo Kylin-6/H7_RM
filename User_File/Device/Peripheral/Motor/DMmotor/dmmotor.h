@@ -23,13 +23,21 @@ enum class Enum_DMMotor_Mode : uint8_t
 
 struct Struct_DMMotor_Feedback
 {
-    uint8_t state = 0; // 协议状态码
-    float position = 0.0f; // 位置，rad，含方向配置
-    float total_position = 0.0f; // 累计位置，rad
-    float velocity = 0.0f; // 速度，rad/s
-    float torque = 0.0f; // 转矩，N*m
-    float mos_temperature = 0.0f; // MOS 温度，摄氏度
-    float rotor_temperature = 0.0f; // 转子温度，摄氏度
+    uint8_t state = 0;              ///< 协议状态码，高四位解码结果。
+    float position = 0.0f;          ///< 单圈位置，rad，已应用 reverse。
+    float total_position = 0.0f;    ///< 按协议位置量程展开的累计位置，rad。
+    float velocity = 0.0f;          ///< 速度，rad/s，已应用 reverse。
+    float torque = 0.0f;            ///< 转矩，N*m，已应用 reverse。
+    float mos_temperature = 0.0f;   ///< MOS 温度，摄氏度。
+    float rotor_temperature = 0.0f; ///< 转子温度，摄氏度。
+};
+
+/** 同一时刻取得的运动反馈与状态；online 按最近反馈时间判定，不等待 StatusTask。 */
+struct Struct_DMMotor_Snapshot
+{
+    Struct_DMMotor_Feedback feedback{};
+    bool online = false;
+    bool enabled = false;
 };
 
 class Class_DMMotor
@@ -49,14 +57,24 @@ public:
               float position_max = 12.5f,
               float velocity_max = 30.0f,
               float torque_max = 10.0f);
-    // true 仅表示命令入队成功，不代表电机已执行；false 时可由上层重试。
+    /** @name 离散命令
+     *  @brief true 仅表示命令已进入软件 FIFO，不代表电机执行或确认；false 时由上层决定重试。
+     */
+    ///@{
     bool Enable();
     bool Disable();
     bool ClearError();
     bool SetZeroPosition();
-    // 参数非法、其他模式待应答或入队失败均返回 false。
+    /** 参数非法、其他模式待应答或入队失败均返回 false。 */
     bool SetMode(Enum_DMMotor_Mode mode);
-    void SetMIT(float position_rad,
+    ///@}
+
+    /** @name 连续控制目标
+     *  @brief 更新对应 CAN 周期槽；同一总线和 ID 的旧目标会被最新值覆盖。
+     *         SetMIT/SetTorque 返回是否成功更新软件槽，不代表硬件执行。
+     */
+    ///@{
+    bool SetMIT(float position_rad,
                 float velocity_rad_s,
                 float kp,
                 float kd,
@@ -66,13 +84,24 @@ public:
     void SetForcePosition(float position_rad,
                           float velocity_limit_rad_s,
                           float current_limit_ratio);
-    void SetTorque(float torque_nm);
+    bool SetTorque(float torque_nm);
 
-    /** 最近 100 ms 内收到过合法反馈时返回 true。 */
+    ///@}
+
+    /** 获取一致快照；enabled 是协议状态，使用前还需检查 online。 */
+    Struct_DMMotor_Snapshot GetFeedbackSnapshot() const;
+    /** 初始化阶段设置；false 时由 Application 管理掉线恢复，默认保持原自动使能行为。 */
+    void SetAutoEnableOnOffline(bool enable);
+    /** 由现有 100 Hz StatusTask 调用，仅重试首次入队失败的离线使能帧。 */
+    static void ServiceAll();
+
+    /** 最近 100 ms 内收到过合法运动反馈时返回 true。 */
     bool IsOnline() const;
     /** 最近一帧合法反馈中的协议状态为“已使能”时返回 true。 */
     bool IsEnabled() const;
+    /** 当前数据是否可用于控制；达妙驱动中等价于 IsOnline()。 */
     bool IsDataValid() const;
+    /** 同时在线且协议已使能时返回 true。 */
     bool IsHealthy() const;
     /** 提供只读守护器状态，供诊断层读取离线时间和状态跃迁。 */
     const Daemon &GetDaemon() const;
@@ -85,8 +114,10 @@ private:
                                  uint8_t *data,
                                  uint32_t len,
                                  void *context);
+    /** Daemon 的 Online -> Offline 跃迁回调。 */
+    static void OfflineCallback(void *owner);
     bool SendModeCommand(uint8_t command);
-    void Publish(const Struct_CAN_Tx_Msg &message);
+    bool Publish(const Struct_CAN_Tx_Msg &message);
     uint32_t ControlId() const;
 
     FDCAN_HandleTypeDef *hfdcan = nullptr;
@@ -100,10 +131,17 @@ private:
     float position_max = 12.5f;
     float velocity_max = 30.0f;
     float torque_max = 10.0f;
+    bool auto_enable_on_offline = true;
+    bool recover_pending = false;
+    uint64_t last_recover_attempt_us = 0U;
+    bool service_registered = false;
+    Class_DMMotor *service_next = nullptr;
+    static Class_DMMotor *service_head;
+    uint64_t last_feedback_us = 0;
     bool feedback_initialized = false;
     float last_position = 0.0f;
     int32_t total_round = 0;
-    Daemon feedback_daemon{100U}; ///< 只检测反馈掉线；使能由 Application 决定
+    Daemon feedback_daemon{100U, OfflineCallback, this}; ///< 仅合法运动反馈喂狗；掉线跃迁是否补使能由 auto_enable_on_offline 决定。
 };
 
 #endif

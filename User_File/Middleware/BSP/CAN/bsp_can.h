@@ -5,7 +5,7 @@
  * @details
  * 接收方向使用 (FDCAN 句柄, CAN ID) 作为回调注册键。
  * 发送方向保留两条通道：
- * - CAN_Tx_Submit：插入队列，每次提交都按顺序发送。
+ * - CAN_Tx_Submit：每条总线各自的插入队列，保持同总线顺序。
  * - CAN_Tx_Perform：周期缓冲，同一 (FDCAN, CAN ID) 只保留最新数据。
  * @author  zzm
  * @date    2026-05-18
@@ -33,8 +33,9 @@ extern "C"
  * @param hfdcan 实际收到该帧的 FDCAN 句柄。
  * @param id 接收到的标准帧 ID。
  * @param data 接收数据，只在本次回调执行期间有效。
- * @param len 接收数据长度。
+ * @param len Classic CAN 数据字节数（0..8），DLC 9..15 按 8 字节处理。
  * @param context 注册时保存的设备实例或用户数据。
+ * @note 只分发标准 Classic 数据帧，远程帧不进入设备回调。
  * @note 回调运行在 FDCAN 接收中断中，不应阻塞。
  */
 typedef void (*CAN_RxCallback_t)(FDCAN_HandleTypeDef *hfdcan,
@@ -57,10 +58,10 @@ typedef struct
 
 typedef struct
 {
-    uint32_t submit_queue_full_count;
-    uint32_t periodic_slot_full_count;
-    uint32_t hardware_fifo_full_count;
-    uint32_t hal_send_error_count;
+    uint32_t submit_queue_full_count;  /*!< 命令 FIFO 无空位导致的提交失败次数。 */
+    uint32_t periodic_slot_full_count; /*!< 新周期键无可用槽位的次数。 */
+    uint32_t hardware_fifo_full_count; /*!< 发送时硬件 Tx FIFO 暂时无空位的次数。 */
+    uint32_t hal_send_error_count;     /*!< HAL 拒绝发送且原因不是 FIFO 满的次数。 */
 } Struct_CAN_Tx_Stats;
 
 /**
@@ -88,7 +89,7 @@ bool BSP_CAN_RegisterCallback(uint32_t can_id,
  * @brief 把一帧消息插入发送队列。
  * @param tx_msg 要插入队列的完整 CAN 消息。
  * @return true 已成功复制到队列；false 参数无效、队列未创建或队列已满。
- * @note 每次提交都会按队列顺序处理，适合使能、失能、复位、回零等命令。
+ * @note 每次提交都会按本总线队列顺序处理，适合使能、失能、复位、回零等命令。
  * @note 函数会复制消息内容，返回后调用者可以继续修改或释放原变量。
  */
 bool CAN_Tx_Submit(const Struct_CAN_Tx_Msg *tx_msg);
@@ -104,12 +105,10 @@ bool CAN_Tx_Submit(const Struct_CAN_Tx_Msg *tx_msg);
 bool CAN_Tx_Perform(const Struct_CAN_Tx_Msg *tx_msg);
 
 /**
- * @brief 按先进先出顺序处理插入发送队列。
- * @details FIFO 满或 HAL 写入失败时保留当前帧并立即返回，
- *          下次调用先重试该帧，成功后才继续处理后续消息。
+ * @brief 每条总线各处理至多一帧插入发送消息。
+ * @details FIFO 满或 HAL 写入失败时保留当前总线帧，下次调用先重试；
+ *          其他总线仍独立发送，同一总线保持入队顺序。
  * @note 只能由同一个 CAN 发送任务周期调用，不支持并发或重入。
- * @note 三条总线共享队列；队首失败会阻止所有后续插入消息越过，
- *       包括其他总线的消息。BSP_CAN_SendPer 可继续独立处理周期缓冲。
  */
 void BSP_CAN_SendAsync(void);
 
@@ -121,6 +120,11 @@ void BSP_CAN_SendAsync(void);
  */
 bool BSP_CAN_SendPer(void);
 
+/**
+ * @brief 原子复制当前 CAN 发送统计快照。
+ * @param stats 输出位置；传入 NULL 时不执行任何操作。
+ * @note 计数器采用饱和累加，不会在溢出后回绕；本接口不会清零统计。
+ */
 void BSP_CAN_GetTxStats(Struct_CAN_Tx_Stats *stats);
 
 #ifdef __cplusplus

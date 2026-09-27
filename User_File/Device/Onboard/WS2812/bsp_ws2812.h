@@ -54,7 +54,7 @@ public:
 
     inline void Clear_Override_Color();
 
-    void TIM_10ms_Write_PeriodElapsedCallback() const;
+    void TIM_10ms_Write_PeriodElapsedCallback();
 
 protected:
     // 初始化相关常量
@@ -77,6 +77,8 @@ protected:
     // RGB颜色值
     // WS2812的RGB顺序是GRB, 为方便使用, 仍采用RGB顺序
     Struct_WS2812_Color Color;
+    Struct_WS2812_Color Last_Written_Color;
+    bool Has_Written_Color = false;
 
     Struct_WS2812_Color Override_Color = {0, 0, 0};
     bool Override_Enabled = false;

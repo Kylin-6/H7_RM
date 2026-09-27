@@ -1,4 +1,5 @@
 #include "Init.h"
+#include "board_config.h"
 
 #include "Com.h"
 #include "SEGGER_SYSVIEW.h"
@@ -20,7 +21,7 @@
 #include "sys_timestamp.h"
 #include "usart.h"
 
-// 全局初始化完成标志位
+// 兼容既有任务的“初始化流程已结束”标志；不等同于 SYSTEM_INIT_READY。
 volatile bool init_finished = false;
 static volatile Enum_System_Init_State system_init_state = SYSTEM_INIT_READY;
 static volatile uint32_t system_init_failure_mask = SYSTEM_INIT_FAILURE_NONE;
@@ -28,6 +29,7 @@ static volatile uint32_t system_init_failure_mask = SYSTEM_INIT_FAILURE_NONE;
 static void System_Init_RecordFailure(uint32_t failure,
                                       Enum_System_Init_State severity)
 {
+    // 保留全部失败来源，同时只允许总体严重级别单向升级。
     system_init_failure_mask |= failure;
     if (severity > system_init_state)
     {
@@ -48,6 +50,8 @@ extern "C" uint32_t System_Init_GetFailureMask(void)
 
 extern "C" void System_Init(void)
 {
+    const BoardHardware &hardware = BoardConfig_Get();
+    // 支持调试阶段重复进入时重新生成一份完整的初始化结果。
     init_finished = false;
     system_init_state = SYSTEM_INIT_READY;
     system_init_failure_mask = SYSTEM_INIT_FAILURE_NONE;
@@ -68,14 +72,18 @@ extern "C" void System_Init(void)
     UART_Init(&huart9, nullptr);
     UART_Init(&huart10, nullptr);
 
-    // 陀螺仪的SPI
-    SPI_Init(&hspi2, SPI2_Callback);
-
-    // WS2812的SPI
-    SPI_Init(&hspi6, nullptr);
-
-    // Flash 的 OSPI
-    OSPI_Init(&hospi2, OSPI2_Polling_Callback, OSPI2_Rx_Callback, OSPI2_Tx_Callback);
+    if (hardware.imu)
+    {
+        SPI_Init(&hspi2, SPI2_Callback);
+    }
+    if (hardware.indicators)
+    {
+        SPI_Init(&hspi6, nullptr);
+    }
+    if (hardware.flash)
+    {
+        OSPI_Init(&hospi2, OSPI2_Polling_Callback, OSPI2_Rx_Callback, OSPI2_Tx_Callback);
+    }
 
     if (HAL_TIM_Base_Start_IT(&htim4) != HAL_OK)
     {
@@ -87,34 +95,49 @@ extern "C" void System_Init(void)
     }
     if (system_init_state == SYSTEM_INIT_FATAL)
     {
+        // TIM4/TIM5 是控制调度与统一时间戳的基础，失败时不继续启动设备链路。
         init_finished = true;
         return;
     }
-    System_IMU_Configure();
-    const bool bmi088_initialized = BSP_BMI088.Init();
-    if (!bmi088_initialized)
+    bool bmi088_initialized = false;
+    if (hardware.imu)
     {
-        System_Init_RecordFailure(SYSTEM_INIT_FAILURE_BMI088,
-                                  SYSTEM_INIT_DEGRADED);
-        System_IMU_Start_Wit_Fallback();
+        System_IMU_Configure();
+        bmi088_initialized = BSP_BMI088.Init();
+        if (!bmi088_initialized)
+        {
+            System_Init_RecordFailure(SYSTEM_INIT_FAILURE_BMI088,
+                                      SYSTEM_INIT_DEGRADED);
+            System_IMU_Start_Wit_Fallback();
+        }
     }
-    BSP_WS2812.Init();
-    BSP_Buzzer.Init();
-    BSP_Key.Init();
-    if (!BSP_W25Q64JV.Init())
+    if (hardware.indicators)
+    {
+        BSP_WS2812.Init();
+        BSP_Buzzer.Init();
+        BSP_Key.Init();
+    }
+    if (hardware.flash && !BSP_W25Q64JV.Init())
     {
         System_Init_RecordFailure(SYSTEM_INIT_FAILURE_W25Q64,
                                   SYSTEM_INIT_DEGRADED);
     }
-    if (!ADC_Init(&hadc1, 1))
+    if (hardware.adc && !ADC_Init(&hadc1, 1))
     {
         System_Init_RecordFailure(SYSTEM_INIT_FAILURE_ADC1,
                                   SYSTEM_INIT_DEGRADED);
     }
-    BSP_Power.Init(true, true, true);
-    EricTool_USB.Init();
+    if (hardware.power)
+    {
+        BSP_Power.Init(true, true, true);
+    }
+    if (hardware.usb_debug)
+    {
+        EricTool_USB.Init();
+    }
     if (bmi088_initialized)
     {
+        // 只有完整通过芯片 ID 与配置回读后才允许启动 FIFO/姿态数据链路。
         BSP_BMI088.BMI088_Gyro.Start_FIFO_Acquisition();
     }
     
