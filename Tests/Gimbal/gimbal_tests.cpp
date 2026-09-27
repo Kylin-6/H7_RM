@@ -1,6 +1,7 @@
 #include "Gimbal.h"
 #include "message_center.h"
 #include "sys_timestamp.h"
+#include "board_config.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -10,6 +11,12 @@
 
 #define CHECK(x) do { if (!(x)) { std::fprintf(stderr, "FAIL %d: %s\n", __LINE__, #x); std::exit(1); } } while (0)
 FDCAN_HandleTypeDef hfdcan1{1}, hfdcan2{2}, hfdcan3{3};
+const BoardHardware &BoardConfig_Get(void)
+{
+    static const BoardHardware hardware{&hfdcan1, &hfdcan1, nullptr, nullptr,
+                                         nullptr, false, false, false, false, false, false};
+    return hardware;
+}
 uint32_t test_irq_mask;
 uint64_t test_timestamp_us;
 Class_Timestamp SYS_Timestamp;
@@ -75,7 +82,7 @@ static void Init(bool tuned = true)
     CHECK(Gimbal_Init(cfg));
     CHECK(discrete.empty()); // No enable, zeroing or persistent writes during initialization.
     CHECK(receivers.size() == 2);
-    CHECK(receivers[0].bus == &hfdcan2 && receivers[0].id == 0x101);
+    CHECK(receivers[0].bus == &hfdcan1 && receivers[0].id == 0x101);
     CHECK(receivers[1].bus == &hfdcan1 && receivers[1].id == 0x102);
 }
 static void Activate()
@@ -326,6 +333,44 @@ static void TestDriver()
     perform_ok = true; CHECK(Gimbal.Yaw_Motor.SetTorque(100));
     CHECK(Near(Decode(cfg.yaw).torque, cfg.yaw.torque_max));
 }
+static void TestDmRetry()
+{
+    static Class_DMMotor motor;
+    CHECK(motor.Init(&hfdcan1, 3, 0x103, Enum_DMMotor_Mode::MIT));
+    Struct_Gimbal_Motor_Config config{};
+    config.bus = &hfdcan1; config.id = 3; config.feedback_id = 0x103;
+    Receive(config, 1, 0, 0);
+    test_timestamp_us += 101000;
+    submit_ok = false;
+    DaemonManager::CheckAll();
+    CHECK(submit_attempts == 1 && discrete.empty());
+    Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == 1);
+    test_timestamp_us += 49000;
+    Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == 1);
+    test_timestamp_us += 1000;
+    Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == 2 && discrete.empty());
+    submit_ok = true;
+    test_timestamp_us += 50000;
+    Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == 3 && discrete.size() == 1 && discrete.back().data[7] == 0xfc);
+    test_timestamp_us += 100000;
+    Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == 3);
+}
+static void TestDmGimbalException()
+{
+    Init();
+    Receive(cfg.yaw, 1, 0, 0);
+    Receive(cfg.pitch, 1, 0, 0);
+    discrete.clear();
+    test_timestamp_us += 101000;
+    DaemonManager::CheckAll();
+    Class_DMMotor::ServiceAll();
+    CHECK(discrete.empty());
+}
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -354,6 +399,8 @@ int main(int argc, char **argv)
     else if (!std::strcmp(argv[1], "failures")) TestFailures();
     else if (!std::strcmp(argv[1], "invalid")) TestInvalid();
     else if (!std::strcmp(argv[1], "driver")) TestDriver();
+    else if (!std::strcmp(argv[1], "dm_retry")) TestDmRetry();
+    else if (!std::strcmp(argv[1], "dm_gimbal_exception")) TestDmGimbalException();
     else if (!std::strcmp(argv[1], "defaults"))
     {
         Init(false); Activate(); command.yaw_angle_rad = 2; Publish(); Tick();
