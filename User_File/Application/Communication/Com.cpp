@@ -32,6 +32,7 @@ void Communication_Callback(uint8_t* Buffer, uint16_t Length)
 #if LEGACY_INFANTRY_GIMBAL
 
 #include "Pitch.h"
+#include "RobotCmd.h"
 #include "chassis_board.h"
 #include "fdcan.h"
 
@@ -92,11 +93,11 @@ float MapDialToLoaderSpeed(int16_t dial)
            static_cast<float>(kDialMax - kDialMin);
 }
 
-/** 发布一次云台与发射命令。 */
+/** 提交一次云台与发射命令（经 RobotCmd 统一发布）。 */
 void PublishCommands(const GimbalCmd &gimbal_command, const ShootCmd &shoot_command)
 {
-    Gimbal_Command_Publisher.Publish(gimbal_command);
-    Shoot_Command_Publisher.Publish(shoot_command);
+    RobotCmd_SetGimbal(gimbal_command);
+    RobotCmd_SetShoot(shoot_command);
 }
 } // namespace
 

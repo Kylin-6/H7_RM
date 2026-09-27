@@ -4,6 +4,85 @@
 
 格式遵循“日期 + 分类”的方式维护。当前项目尚未形成正式版本号，因此先使用日期条目。
 
+## 2026-09-27
+
+### 分离测试分支
+
+- 从完整版本 `7c83d40` 创建 `RoboMaster_Test`，保留固件源码和项目自有的 10 个测试工程、57 项主机测试。
+- 从 `RoboMaster_H7` 移除 `Tests/` 下的 69 个跟踪文件，更新 README 和云台文档的测试入口；历史验证结果继续保留。
+- `main`、生产代码、固件构建配置与第三方 CMSIS 测试内容不变。后续测试在 `RoboMaster_Test` 维护，不将本次删除提交同步到测试分支。
+
+### 云台改用双达妙电机
+
+- 云台移除 QD4310 依赖，复用 Class_DMMotor；独立 QD4310 驱动及测试保留。继续由 ControlTask 以 1 kHz 调度，反馈为 100 Hz。
+- Yaw 使用 INS 最短路径角误差与速度串级 PID，输出 MIT 纯转矩；Pitch 参考 Meta 将姿态误差转换为 MIT 电机位置/速度目标。配置集中到 Gimbal_Config.h，角度、速度和转矩统一为 rad、rad/s、N·m。
+- 默认关闭云台编译选项。Yaw 转矩环增益为零待整定；协议量程、Pitch MIT 增益和机械限位来自参考示例，不能当作本机标定值。原 QD 电流环增益和绝对角限位不再沿用。
+- 初始化改为非阻塞注册；使能每 20 ms 重试、两秒超时、一秒退避。故障或 DISABLED 覆盖零 MIT 输出并重试失能；反馈持续有效 100 ms 后自动恢复，重置 PID 并捕获当前姿态。IMU 模式恢复后仅接受新发布的目标，LOCK 保持捕获姿态。
+- 达妙新增反馈一致快照和按实例关闭离线自动使能的接口；SetMIT/SetTorque 返回软件周期槽提交结果。云台独占自身恢复决策，不自动清错、置零或修改电机持久化模式。
+- 保持 GimbalCmd/GimbalFeedback 字段布局，说明速度前馈及 enabled 的反馈语义；更新应用、达妙驱动及测试文档和参考许可。
+
+### 验证
+
+- 新增 Gimbal 14 组测试，连同原 43 项主机回归共 57 项全部通过，覆盖真实云台、达妙协议编解码、PID、Daemon 和消息中心。
+- 默认 Debug、仅云台 Debug、三应用全开 Debug/Release 均构建链接通过；全应用 Debug DTCMRAM 为 116504 B / 128 KiB（88.89%）。编译仍有既有 PID C-linkage 和 volatile 自增等警告。
+- 未烧录或上板。型号量程、安装方向、机械零位/限位、MIT 增益、Yaw 转矩环及真实 CAN 拥塞/断线恢复需实机验证。本次未增加整车命令来源心跳和输入仲裁。
+
+## 2026-09-26
+
+### 已修复
+
+仅将 main 的四项修复适配到 RoboMaster_H7，未合入 Health、SpinMode，也未将整个 main 标记为已合并：
+
+- `f40293d`：CAN 接收临时缓冲扩为 64 字节以容纳 HAL 的 DLC 复制；拒绝远程、扩展及 FD 帧，向设备交付的 Classic 数据长度最多 8 字节。保留目标分支的发送统计。
+- `2990b25`：USB 使用自有发送缓冲，忙时立即返回；CDC 桥接传递实际接收指针，修复重新枚举后的缓冲错配。
+- `8513892`：OSPI 返回 HAL 提交结果，失败时不继续 DMA；Flash 清理失败状态并停止后续步骤，Quad WIP 读取补齐数据阶段。
+- `92e6314`（选择性移植）：修正 BMI088 加速度计软复位地址，确保零值配置执行写入及回读；Flash 按三字节校验本次 JEDEC 响应，排除残留数据。保留目标分支的有限重试、PWM 失败保护、初始化期 SPI 回调，以及 READY/DEGRADED/FATAL 启动分级。
+
+### 验证
+
+- 新增 Communication 17 组、Initialization 7 组，连同既有 7 个工程共 43 项主机测试全部通过；启动回归覆盖 32 种失败组合。
+- 默认 Debug、Gimbal/Chassis/Shoot 全开的 Debug 与 Release 固件均构建链接通过；`git diff --check` 通过。
+- 默认 Debug 的 DTCMRAM 为 108080 B / 128 KiB（82.46%）；三应用全开 Debug 为 116584 B（88.95%）。USB 自有发送缓冲增加 512 B 静态存储。
+- 编译仍有 PID C-linkage、volatile 自增和聚合初始化等警告。未烧录或实机验证；真实通信、USB 关中断时长和 Flash DMA 接受后的硬件异常恢复仍需板测。
+
+## 2026-09-24
+
+### 已修复
+
+- BMI088 初始化期 SPI 读数被丢弃：`System_Init()` 调用 `BSP_BMI088.Init()` 时，`Is_Initialized()` 尚为 false；原 `SPI2_Callback()` 因此提前返回，未把 DMA 读回的芯片 ID 和配置寄存器值交给驱动，导致初始化校验失败。对照 `rm/demo`，SPI2 配置相同，而 demo 在初始化期会正常分发 SPI 完成回调。
+- 移除 `SPI2_Callback()` 的初始化完成检查，继续按 BMI088 加速度计、陀螺仪片选分发；驱动内部仍用 `Init_Finished_Flag` 区分初始化读数和运行期状态处理，EXTI 的初始化保护保持不变。
+- 验证：Debug 固件构建和 `git diff --check` 通过；尚未在实机验证初始化与数据输出。
+
+## 2026-09-23
+
+### 本次完成
+
+- 将 `.workbuddy/`、框架可靠性验证方案和框架修复清单调整为本地工作文件：从 Git 索引移除并加入 `.gitignore`，本地实体文件继续保留。
+- 在根 README 补充启动三态、设备四态、数据新鲜度、CAN 命令生命周期、发送统计和 Host/实机验证边界。
+- 为 System Init、Topic、CAN、各电机与接收设备、BMI088、W25Q64 和 ADC 的关键公共接口补充状态语义、失败条件及调用约束注释；未改变公共 API 或运行行为。
+- 运行 Fuzzy、Boundary、Trajectory、FilterPolynomial、CAN、Topic、S.BUS 共 7 个 Host 测试工程，19 项测试全部通过；`H7_BSP` Debug 固件完整构建链接通过。
+
+### 已知问题
+
+- 尚未启用独立 IWDG，也没有记录并上报 RCC 复位原因；任务或中断卡死时缺少独立硬件兜底和复位诊断证据。
+- Daemon 只负责超时、状态跃迁和可选离线回调。除达妙电机在掉线跃迁时单次尝试使能外，尚无统一的遥控器失联、关键设备掉线到安全输出的 Application 联动策略。
+- `System_Init_GetFailureMask()` 和 `BSP_CAN_GetTxStats()` 已提供诊断数据，但尚未接入独立遥测/诊断模块；`StatusTask` 当前只统一调度 Daemon 检查。
+- Tests 尚无根级一键入口和 CI。S.BUS 测试仍使用标准 `assert`，必须使用未定义 `NDEBUG` 的 Debug 配置，否则断言会被编译器移除。
+- 尚未建立 CAN 静态带宽预算和场景帧回放，也未完成 FDCAN 回环、关键设备拔线、跌压重启及至少 2 小时长跑验证。
+- Debug 构建仍报告 PID 初始化结构体的 C-linkage 警告，以及若干 `volatile` 对象自增弃用警告。当前 DTCMRAM 使用 107568 B / 128 KiB（82.07%），后续增加任务栈和静态对象前需复核水位。
+
+### 后续计划
+
+1. **安全兜底**：启用 IWDG，记录 RCC 复位原因，并在 Application 中为遥控器和关键设备建立有明确时限的安全联动。
+2. **遥测可观测**：将启动失败位图、CAN 发送统计、Daemon 跃迁、任务栈水位和 CPU 运行统计接入独立诊断通道。
+3. **自动回归**：增加 Tests 根级 CTest/脚本和 CI；把 S.BUS 的标准 `assert` 迁移到不会被 Release 禁用的 CHECK 机制，补齐 EventQueue、协议回放和总线负载测试。
+4. **实机验证**：依次完成 FDCAN 回环、设备拔线、上电仲裁、跌压重启和长跑测试，保存可复查的遥测记录。
+5. **工程治理**：清理现有编译警告，建立 DTCMRAM、任务栈和 CAN 带宽预算，避免资源增长失去约束。
+6. **板级配置层**：参考跃鹿 `robot_def.h` 的配置契约，采用机器人独立目录与构建期选择，逐步收敛 Init、FreeRTOS、Pulse 表和遥测代码中分散的板型 `#if`。
+7. **回调与 Pulse 表注册制**：让 EXTI、SPI、TIM 对齐 CAN 的实例/键注册模式，由模块在初始化阶段声明回调和周期服务，减少集中分发表的条件编译。
+8. **输入源抽象**：参考 `cmd/standard_cmd` 模式，为 S.BUS、板间帧和视觉输入建立统一 Provider/适配接口，使 `Control_Task` 只消费固定的标准输入槽。
+9. **板间协议共享**：参考 `can_comm` 通用模块，将 `0x065`、`0x070`、`0x075` 的 ID、字段布局、缩放和通道映射集中到通信两端共享的协议定义中。
+
 ## 2026-06-01
 
 ### 已修复
@@ -26,7 +105,7 @@
 ### 备注
 
 - 上述三项 CAN bug 与 UART 封装的 CubeMX 侧 RX DMA 改 NORMAL 由作者完成，本条目记录最终结论与设计要点。
-- 待确认：FDCAN2 `AutoRetransmission = DISABLE` 与 FDCAN1/FDCAN3 的 `ENABLE` 不一致，需确认是否有意为之。
+- **已于 2026-09-23 核对**：FDCAN1/2/3 的 `AutoRetransmission` 当前均为 `DISABLE`，不存在三路配置不一致；是否调整重传策略应在完成总线负载与故障注入验证后另行评估。
 - 尚未接入：各路 UART 的用户级回调与 `Init.cpp` 中的 `UART_Init` 绑定（取决于实际外接设备：DBUS 遥控器 / 裁判系统等）。
 
 ## 2026-05-16

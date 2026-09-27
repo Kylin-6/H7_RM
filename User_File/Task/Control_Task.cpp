@@ -13,6 +13,8 @@
 #include "RobotCmd.h"
 #include "Shoot.h"
 #include "Init.h"
+#include "message_center.h"
+#include "output.h"
 #include "user_task.h"
 
 extern "C" void Control_Task(void* argument)
@@ -28,26 +30,24 @@ extern "C" void Control_Task(void* argument)
         }
     }
 
-#if LEGACY_INFANTRY_GIMBAL
-    /* 云台板的输入来自底盘板，先建立板间链路接收。 */
-    Communication_Init();
-#endif
+    static LocalPublisher<GimbalCmd> gimbal_output(MessageCenter::Gimbal_Command_Topic);
+    static LocalPublisher<ChassisCmd> chassis_output(MessageCenter::Chassis_Command_Topic);
+    static LocalPublisher<ShootCmd> shoot_output(MessageCenter::Shoot_Command_Topic);
+    if (!RobotCmd_Init(gimbal_output.Bind(), chassis_output.Bind(), shoot_output.Bind()))
+    {
+        for (;;) osDelay(1000U);
+    }
 #if GIMBAL
     Gimbal_Init();
 #endif
     (void)Chassis_Init();
     (void)Shoot_Init();
-    RobotCmd_Init();
     // Balance_init();
 
     for (;;)
     {
         /* 由 1 ms 定时回调唤醒；阻塞等待期间不占用 CPU。 */
         osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
-#if LEGACY_INFANTRY_GIMBAL
-        /* 输入适配先于 RobotCmd，保证本周期发布的命令来自本周期通道。 */
-        Communication_Update();
-#endif
         /* 命令所有者先发布最新目标，再由各 Application 消费并执行。 */
         RobotCmd_Update();
         Gimbal_Update();

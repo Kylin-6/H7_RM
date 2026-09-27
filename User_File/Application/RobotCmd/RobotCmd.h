@@ -2,14 +2,19 @@
 #define ROBOT_CMD_H
 
 #include "message_types.h"
+#include "output.h"
 
-/** 装载机器人安全启动默认命令并发布一次；云台/发射命令后续由输入适配模块直发 Topic。 */
-void RobotCmd_Init(void);
-/** 周期读取模块反馈，并发布发生变化的底盘控制命令。 */
+/** 三个输出均绑定后装载安全启动默认命令；失败时不修改原绑定。 */
+bool RobotCmd_Init(Output<GimbalCmd> gimbal_output,
+                   Output<ChassisCmd> chassis_output,
+                   Output<ShootCmd> shoot_output);
+/** 周期读取模块反馈；底盘命令每 10 ms 刷新。 */
 void RobotCmd_Update(void);
 
-/** 底盘命令仍经此中转；云台/发射命令请直接发布对应 Topic。 */
+/** 以下接口由遥控器、视觉或上层状态机更新对应应用目标。 */
+void RobotCmd_SetGimbal(const GimbalCmd &command);
 void RobotCmd_SetChassis(const ChassisCmd &command);
+void RobotCmd_SetShoot(const ShootCmd &command);
 /** 将一次性射击动作压入固定容量 FIFO；队列已满时返回 false。 */
 bool RobotCmd_PushShootEvent(const ShootEvent &event);
 

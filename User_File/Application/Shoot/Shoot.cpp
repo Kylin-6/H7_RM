@@ -13,6 +13,7 @@
  */
 
 #include "Shoot.h"
+#include "board_config.h"
 
 #include "message_center.h"
 
@@ -702,7 +703,7 @@ bool Shoot_Init(void)
     return Shoot_Legacy_Init();
 #elif SHOOT
     Struct_DJIMotor_Init_Config friction_config{};
-    friction_config.hfdcan = &hfdcan3;
+    friction_config.hfdcan = BoardConfig_Get().shoot_bus;
     friction_config.motor_type = Enum_DJIMotor_Type::M3508;
     friction_config.close_loop = DJI_MOTOR_SPEED_LOOP;
     friction_config.outer_loop = DJI_MOTOR_SPEED_LOOP;
@@ -715,7 +716,7 @@ bool Shoot_Init(void)
     const bool right_initialized = Shoot_Friction_Right.Init(friction_config);
 
     Struct_DJIMotor_Init_Config loader_config{};
-    loader_config.hfdcan = &hfdcan3;
+    loader_config.hfdcan = BoardConfig_Get().shoot_bus;
     loader_config.can_id = 8U;
     loader_config.motor_type = Enum_DJIMotor_Type::M3508;
     loader_config.close_loop = DJI_MOTOR_CURRENT_LOOP |

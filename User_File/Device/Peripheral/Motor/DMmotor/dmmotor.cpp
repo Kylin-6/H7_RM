@@ -25,6 +25,7 @@ static constexpr uint32_t DM_POSITION_SPEED_MODE_ID_OFFSET = 0x100U;
 static constexpr uint32_t DM_FORCE_POSITION_MODE_ID_OFFSET = 0x300U;
 static constexpr uint32_t DM_PARAMETER_ID = 0x7FFU;
 static constexpr uint64_t DM_MODE_TIMEOUT_US = 250000; ///< 模式切换应答等待上限，单位 us。
+static constexpr uint64_t DM_RECOVER_RETRY_US = 50000;
 static constexpr uint8_t DM_CMD_ENABLE = 0xFCU;
 static constexpr uint8_t DM_CMD_DISABLE = 0xFDU;
 static constexpr uint8_t DM_CMD_ZERO_POSITION = 0xFEU;
@@ -33,6 +34,8 @@ static constexpr float DM_KP_MIN = 0.0f;
 static constexpr float DM_KP_MAX = 500.0f;
 static constexpr float DM_KD_MIN = 0.0f;
 static constexpr float DM_KD_MAX = 5.0f;
+
+Class_DMMotor *Class_DMMotor::service_head = nullptr;
 
 /* Private function declarations ---------------------------------------------*/
 
@@ -122,16 +125,54 @@ void Class_DMMotor::FeedbackCallback(FDCAN_HandleTypeDef *callback_hfdcan,
     motor->feedback.mos_temperature = data[6];
     motor->feedback.rotor_temperature = data[7];
     /* 只有完整通过 ID、长度和节点校验的反馈帧才能刷新在线状态。 */
+    motor->last_feedback_us = SYS_Timestamp.Get_Now_Microsecond();
     motor->feedback_daemon.Feed();
 }
 
-/** @brief Daemon 首次判定掉线时快速提交一帧使能命令。 */
+/**
+ * @brief Daemon 首次判定掉线时快速提交一帧使能命令。
+ * @note 首次入队成功则不再重试；仅在队列已满时留给 StatusTask 限频重试。
+ */
 void Class_DMMotor::OfflineCallback(void *owner)
 {
     Class_DMMotor *motor = static_cast<Class_DMMotor *>(owner);
-    if (motor != nullptr)
+    if (motor != nullptr && motor->auto_enable_on_offline)
     {
-        (void)motor->Enable();
+        motor->recover_pending = !motor->Enable();
+        motor->last_recover_attempt_us = SYS_Timestamp.Get_Now_Microsecond();
+    }
+}
+
+void Class_DMMotor::SetAutoEnableOnOffline(bool enable)
+{
+    auto_enable_on_offline = enable;
+    if (!enable)
+    {
+        recover_pending = false;
+    }
+}
+
+void Class_DMMotor::ServiceAll()
+{
+    const uint64_t now_us = SYS_Timestamp.Get_Now_Microsecond();
+    for (Class_DMMotor *motor = service_head; motor != nullptr;
+         motor = motor->service_next)
+    {
+        if (!motor->recover_pending)
+        {
+            continue;
+        }
+        if (!motor->auto_enable_on_offline || motor->IsOnline())
+        {
+            motor->recover_pending = false;
+            continue;
+        }
+        if (now_us >= motor->last_recover_attempt_us &&
+            now_us - motor->last_recover_attempt_us >= DM_RECOVER_RETRY_US)
+        {
+            motor->last_recover_attempt_us = now_us;
+            motor->recover_pending = !motor->Enable();
+        }
     }
 }
 
@@ -190,7 +231,33 @@ bool Class_DMMotor::Init(FDCAN_HandleTypeDef *motor_hfdcan,
         return false;
     }
     /* 对象为静态生命周期，可安全交由固定容量管理器长期保存地址。 */
-    return DaemonManager::Register(feedback_daemon);
+    if (!DaemonManager::Register(feedback_daemon))
+    {
+        return false;
+    }
+    if (!service_registered)
+    {
+        service_next = service_head;
+        service_head = this;
+        service_registered = true;
+    }
+    return true;
+}
+
+Struct_DMMotor_Snapshot Class_DMMotor::GetFeedbackSnapshot() const
+{
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    __DMB();
+    Struct_DMMotor_Snapshot snapshot;
+    snapshot.feedback = feedback;
+    const uint64_t now = SYS_Timestamp.Get_Now_Microsecond();
+    snapshot.online = feedback_initialized && now >= last_feedback_us &&
+                      now - last_feedback_us < 100000U;
+    snapshot.enabled = snapshot.feedback.state == 1U;
+    __DMB();
+    if (primask == 0U) { __enable_irq(); }
+    return snapshot;
 }
 
 bool Class_DMMotor::IsOnline() const
@@ -316,11 +383,11 @@ bool Class_DMMotor::SetMode(Enum_DMMotor_Mode new_mode)
 
 /**
  * @brief 更新 CAN 周期发送槽，同一 (总线, ID) 只保留最新控制帧。
- * @note 此处仅发布缓冲，不等待硬件发送，也未向上层返回发布结果。
+ * @note 此处仅发布缓冲，不等待硬件发送，返回软件槽发布结果。
  */
-void Class_DMMotor::Publish(const Struct_CAN_Tx_Msg &message)
+bool Class_DMMotor::Publish(const Struct_CAN_Tx_Msg &message)
 {
-    CAN_Tx_Perform(&message);
+    return CAN_Tx_Perform(&message);
 }
 
 /**
@@ -328,7 +395,7 @@ void Class_DMMotor::Publish(const Struct_CAN_Tx_Msg &message)
  * @note 反向配置只改变位置、速度、转矩符号，kp/kd 保持非负；量程需与电机端一致。
  *       本函数直接发布 MIT 格式报文，调用者需保证电机已处于对应模式。
  */
-void Class_DMMotor::SetMIT(float position_rad,
+bool Class_DMMotor::SetMIT(float position_rad,
                            float velocity_rad_s,
                            float kp,
                            float kd,
@@ -363,7 +430,7 @@ void Class_DMMotor::SetMIT(float position_rad,
     message.data[5] = (uint8_t)(derivative >> 4);
     message.data[6] = (uint8_t)(((derivative & 0x0FU) << 4) | (torque >> 8));
     message.data[7] = (uint8_t)torque;
-    Publish(message);
+    return Publish(message);
 }
 
 /**
@@ -432,7 +499,7 @@ void Class_DMMotor::SetForcePosition(float position_rad,
 }
 
 /** @brief 复用 MIT 帧实现纯转矩目标：kp/kd 置零，仅保留转矩项，电机需处于 MIT 模式。 */
-void Class_DMMotor::SetTorque(float torque_nm)
+bool Class_DMMotor::SetTorque(float torque_nm)
 {
-    SetMIT(0.0f, 0.0f, 0.0f, 0.0f, torque_nm);
+    return SetMIT(0.0f, 0.0f, 0.0f, 0.0f, torque_nm);
 }
