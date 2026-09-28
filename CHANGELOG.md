@@ -6,6 +6,18 @@
 旧日期条目记录当时的构建和测试快照，其中的数量及“尚未完成”不表示当前状态；
 当前能力以根 README 和对应模块文档为准。
 
+## 2026-09-29
+
+### 老步兵测试分支同步主线
+
+- 将 `RoboMaster_H7`（至 `3f22ac8`）合入 `老步兵测试`：InputState / SourceArbitration / RobotCmd 输入安全、SI 单位统一、直驱摩擦轮 25 rad/s、Referee 流式 parser、设备防护、文档与接口注释均以主线为准。
+- 老步兵遥控整形（通道映射 / 指数曲线 / 云台跟随 / SBUS 健康互锁）保留实车行为，提交点从 `RobotCmd_SetChassis / SetGimbal` 改为 `InputState_SubmitRemote`，失联时提交空输入由仲裁输出 safe state；持续健康 200 ms 重新 Arm 的行为保留。
+- 老步兵抽象速度量纲（三轴上限 30/30/50）在 Communication 与 Chassis 边界按固定比例归一化 / 还原，不再以 m/s 字段名承载非 SI 数值。
+- 0x070 yaw 编码修正 rad 与度混用：线上单位契约为度（0.01°/LSB），rad → degree 只在 Encode 边界发生。
+- 底盘使能补发改为 `IsOnline() && !IsEnabled()` 的有界周期确认，离线恢复仍由 `recover_pending / ServiceAll` 兜底。
+- 2 ms 控制与板间帧下发周期、0x065/0x070/0x075 转发顺序保持不变；CAN 1 kHz 全量下发不恢复。
+- 主机测试位于 `RoboMaster_Test` 分支，本次改动未同步测试用例；构建验证为 `Debug`（老步兵完整代码）目标。
+
 ## 2026-09-28
 
 ### 当前代码已实现
