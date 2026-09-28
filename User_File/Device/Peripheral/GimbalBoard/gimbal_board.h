@@ -65,9 +65,10 @@ public:
 
     /**
      * @brief 发送 0x070：底盘 Yaw 角度。
-     * @param dm_yaw_rad     DM 云台电机角度，单位 rad。
-     * @param ground_yaw_rad 地面系 Yaw 角度，单位 rad。
-     * @details 两者均按 (角度 - 180) * 100 编码为 int16，与云台板既有解析一致。
+     * @param dm_yaw_rad     DM 云台电机角度，输入单位 rad。
+     * @param ground_yaw_rad 地面系 Yaw 角度，输入单位 rad。
+     * @details 线上单位是度：int16 = (yaw_deg - 180) * 100，即 0.01°/LSB，
+     *          rad → degree 只在本 Encode 边界发生。
      */
     bool SendChassisYaw(float dm_yaw_rad, float ground_yaw_rad);
 

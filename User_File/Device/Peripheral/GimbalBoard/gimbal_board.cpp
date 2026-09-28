@@ -64,10 +64,20 @@ bool Class_GimbalBoard::SendRemoteChannels(
 bool Class_GimbalBoard::SendChassisYaw(float dm_yaw_rad, float ground_yaw_rad)
 {
     uint8_t data[8] = {0};
+
+    /*
+     * 0x070 的线上单位契约是“度”（int16 = (yaw_deg - 180) * 100，YAW_SCALE
+     * 的单位是 0.01°）。rad → degree 只允许在协议 Encode 边界发生一次；
+     * 不再把弧度值直接减角度偏移。DM 云台机械安装角为 180°，正常工作范围
+     * [90°, 270°]，(yaw_deg - 180) * 100 在 int16 范围内。
+     */
+    constexpr float GIMBAL_BOARD_RAD_TO_DEG = 57.29577951F;
     const int16_t yaw_int =
-        (int16_t)((dm_yaw_rad - GIMBAL_BOARD_YAW_OFFSET_DEG) * GIMBAL_BOARD_YAW_SCALE);
+        (int16_t)((dm_yaw_rad * GIMBAL_BOARD_RAD_TO_DEG - GIMBAL_BOARD_YAW_OFFSET_DEG) *
+                  GIMBAL_BOARD_YAW_SCALE);
     const int16_t ground_yaw_int =
-        (int16_t)((ground_yaw_rad - GIMBAL_BOARD_YAW_OFFSET_DEG) * GIMBAL_BOARD_YAW_SCALE);
+        (int16_t)((ground_yaw_rad * GIMBAL_BOARD_RAD_TO_DEG - GIMBAL_BOARD_YAW_OFFSET_DEG) *
+                  GIMBAL_BOARD_YAW_SCALE);
 
     data[0] = (uint8_t)((uint16_t)yaw_int >> 8);
     data[1] = (uint8_t)((uint16_t)yaw_int);
