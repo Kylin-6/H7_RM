@@ -6,6 +6,17 @@
 旧日期条目记录当时的构建和测试快照，其中的数量及“尚未完成”不表示当前状态；
 当前能力以根 README 和对应模块文档为准。
 
+## 2026-09-29
+
+### 老步兵云台分支同步主线
+
+- 将 `RoboMaster_H7`（至 `3f22ac8`）合入 `老步兵云台`：InputState / SourceArbitration / RobotCmd 输入仲裁、SI 单位、Referee 流式 parser、UART/CAN BSP、DM 驱动防护、文档均以主线为准；恢复主线版 RobotCmd（该分支曾移除仲裁接入）。
+- 0x065 输入链改为 Remote 源：Decode → 通道整形（Pitch 两级低通 / 火控滞回 / 波轮映射）→ `InputState_SubmitRemote()` → SourceArbitration → RobotCmd；链路失效提交空输入，由仲裁输出云台 DISABLED、Shoot OFF。
+- DM-IMU、Pitch（目标规划 / 摩擦补偿 / MIT torque / 机械限位）、Shoot（单发连发 / 卡弹回退 / 热量估计 / Post-shot friction）状态机与参数全部保留。
+- 统一弧度单位：`loader_speed_deg_s` → `loader_speed_rad_s`，`friction_*_speed_deg_s` → `friction_*_speed_rad_s`，`loader_angle_deg` → `loader_angle_rad`（数值本就是 rad，仅字段名失真）；框架段摩擦轮默认 25 rad/s，不再使用 40000 deg/s。
+- DM-IMU 1 kHz `RequestEuler` 经 `CAN_Tx_Submit` 提交：位于独立 FDCAN3，请求帧丢弃由下一周期请求自然覆盖，暂不改变协议行为（见分支记录 Remaining Issues）。
+- 构建目标为 `H7_BOARD=GimbalBoard`（老步兵云台板专属源挂在该角色下）；构建验证通过。
+
 ## 2026-09-28
 
 ### 当前代码已实现
