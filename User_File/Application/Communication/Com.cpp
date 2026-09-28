@@ -1,7 +1,12 @@
 /**
  * @file Com.cpp
- * @brief 老步兵上层输入适配实现：SBUS 遥控 → RobotCmd 目标，并转发云台板链路。
+ * @brief 老步兵上层输入适配实现：SBUS 遥控 → InputState 输入仲裁，并转发云台板链路。
  * @details
+ * 输入链为 SBUS Device → 本层整形（通道映射 / 指数曲线 / 云台跟随 / 健康互锁）
+ * → ControlInput → InputState_SubmitRemote() → SourceArbitration → RobotCmd。
+ * UART ISR 只更新 SBUS 帧，不在中断上下文写 RobotCmd；InputState 只在
+ * ControlTask 上下文提交。
+ *
  * 移植自 rm/demo 的 APP/TransmitTask.c、APP/SafetyTask.c 与 APP/GimbalTask.c 中的
  * 遥控部分。所有整形常量保持与 demo 的 User/bsp/bsp_def.h 一致。
  */
@@ -14,6 +19,7 @@
 #include "bsp_ws2812.h"
 #include "fdcan.h"
 #include "gimbal_board.h"
+#include "input_state.h"
 #include "sbus.h"
 #include "usart.h"
 
@@ -290,6 +296,10 @@ bool Communication_Init(void)
     /* 上电默认失能，与 demo 一致先点亮红色指示灯。 */
     Communication_IndicateArmed(false);
 
+    /* 输入仲裁状态一并复位：上电即处于 Remote 失联安全态。 */
+    InputState_Reset();
+    InputState_SetTime(HAL_GetTick());
+
     /* SBUS 驱动为框架版，显式绑定 UART5（SBUS 参数已在 CubeMX 里配好）。 */
     const bool sbus_ready = SBUS_Init(&huart5);
     /* 老步兵的底盘板固定在 FDCAN2 上向云台板发送状态。 */
@@ -304,6 +314,9 @@ void Communication_Update(void)
     Struct_SBUS_Frame sbus_frame{};
     const bool available = SBUS_ReadLatest(&sbus_frame);
     const int16_t *channels = sbus_frame.channels;
+
+    /* 仲裁时钟只在 ControlTask 上下文推进。 */
+    InputState_SetTime(HAL_GetTick());
 
     Communication_UpdateArmState();
 
@@ -351,11 +364,11 @@ void Communication_Update(void)
 
     if (!Communication_Armed)
     {
-        /* 未解锁：显式下发安全默认，避免上一帧命令残留造成意外动作。 */
-        ChassisCmd safe_chassis{};
-        GimbalCmd safe_gimbal{};
-        RobotCmd_SetChassis(safe_chassis);
-        RobotCmd_SetGimbal(safe_gimbal);
+        /*
+         * 未解锁：提交空输入，由 SourceArbitration 输出 safe state、RobotCmd
+         * 保持零命令，等价于旧的 RobotCmd_SetChassis(safe) 路径。
+         */
+        InputState_SubmitRemote({});
         return;
     }
 
@@ -415,10 +428,20 @@ void Communication_Update(void)
         chassis_command.mode = ChassisMode::NO_FOLLOW;
     }
 
-    chassis_command.velocity_x_m_s = velocity_x;
-    chassis_command.velocity_y_m_s = velocity_y;
-    chassis_command.angular_velocity_rad_s = velocity_w;
+    /*
+     * 边界量纲转换：老步兵输入沿用实车验证的抽象速度量纲（三轴上限 30/30/50，
+     * 与麦轮预混后的 DM 轮速 rad/s 同量纲，实车未标定真实 m/s）。输入仲裁按
+     * SI 边界校验，这里按固定比例归一化到 INPUT_MAX_*；Chassis 侧用同一比例
+     * 还原。这是明确的单位边界约定，不把抽象量伪装成 m/s。
+     */
+    chassis_command.velocity_x_m_s =
+        velocity_x * (INPUT_MAX_TRANSLATION_M_S / CHASSIS_TARGET_SPEED_X_MAX);
+    chassis_command.velocity_y_m_s =
+        velocity_y * (INPUT_MAX_TRANSLATION_M_S / CHASSIS_TARGET_SPEED_Y_MAX);
+    chassis_command.angular_velocity_rad_s =
+        velocity_w * (INPUT_MAX_ROTATION_RAD_S / CHASSIS_TARGET_ROTATION_MAX);
 
+    /* 云台偏航为 DM 真实 rad/s 语义，可直接提交。 */
     GimbalCmd gimbal_command{};
     const float yaw_stick = SpeedPlanning_ApplyDeadbandExpo(
         (float)channels[RC_INDEX_GIMBAL_YAW], SBUS_CHANNEL_MAX,
@@ -427,8 +450,12 @@ void Communication_Update(void)
     gimbal_command.yaw_speed_rad_s = -yaw_stick * GIMBAL_TARGET_YAW_SPEED_MAX;
     gimbal_command.mode = GimbalMode::IMU;
 
-    RobotCmd_SetChassis(chassis_command);
-    RobotCmd_SetGimbal(gimbal_command);
+    ControlInput remote_input{};
+    remote_input.chassis = chassis_command;
+    remote_input.gimbal = gimbal_command;
+    remote_input.received_ms = sbus_frame.timestamp_ms;
+    remote_input.valid = true;
+    InputState_SubmitRemote(remote_input);
 }
 
 #else

@@ -27,8 +27,9 @@ bool Communication_Init(void);
 
 /**
  * @brief 遥控输入周期入口，由 Control_Task 在 RobotCmd_Update() 之前调用。
- * @details 读取最近一帧 SBUS、维护健康互锁、转发板间状态帧，并把摇杆输入整形为
- *          ChassisCmd 与 GimbalCmd 交给 RobotCmd。
+ * @details 读取最近一帧 SBUS、维护健康互锁（持续健康 200 ms 才重新 Arm）、
+ *          转发板间状态帧，并把摇杆输入整形为 ControlInput 提交到 InputState；
+ *          失联时提交空输入，由 SourceArbitration 输出 safe state。
  */
 void Communication_Update(void);
 

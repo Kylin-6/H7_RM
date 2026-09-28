@@ -22,6 +22,7 @@ static constexpr uint64_t CHASSIS_COMMAND_MAX_AGE_US = 100000U;
 #include "SpeedPlanning.h"
 #include "dmmotor.h"
 #include "fdcan.h"
+#include "input_state.h"
 #include <cmath>
 #endif
 
@@ -43,6 +44,22 @@ static uint8_t Chassis_Feedback_Divider;
 
 /** 单轮速度限幅，沿用老步兵原始速度量纲。 */
 static constexpr float CHASSIS_WHEEL_SPEED_MAX = 30.0f;
+
+/*
+ * 输入边界量纲还原比例：Communication 层把老步兵抽象速度（三轴上限 30/30/50，
+ * 与麦轮预混后的 DM 轮速 rad/s 同量纲）按固定比例归一化到仲裁 SI 上限
+ * INPUT_MAX_*；本层按同一比例还原后再做速度规划与麦轮分解。老底盘尚未标定
+ * 真实 m/s，这里不伪造换算，只做明确的边界约定。
+ */
+static constexpr float CHASSIS_LEGACY_SPEED_X_MAX = 30.0f;
+static constexpr float CHASSIS_LEGACY_SPEED_Y_MAX = 30.0f;
+static constexpr float CHASSIS_LEGACY_ROTATION_MAX = 50.0f;
+static constexpr float CHASSIS_INPUT_SCALE_X =
+    CHASSIS_LEGACY_SPEED_X_MAX / INPUT_MAX_TRANSLATION_M_S;
+static constexpr float CHASSIS_INPUT_SCALE_Y =
+    CHASSIS_LEGACY_SPEED_Y_MAX / INPUT_MAX_TRANSLATION_M_S;
+static constexpr float CHASSIS_INPUT_SCALE_W =
+    CHASSIS_LEGACY_ROTATION_MAX / INPUT_MAX_ROTATION_RAD_S;
 /**
  * 速度规划控制周期。老工程的控制路径是 2 ms，这里保持一致：Control_Task 虽然是
  * 1 kHz，但下发按 2 分频执行。若按 1 ms 全速下发，四路 DM 速度帧加上云台与板间帧
@@ -428,19 +445,27 @@ void Chassis_Update(void)
 
             if (enabled)
             {
+                /* 先按边界约定把归一化输入还原为老步兵实车量纲。 */
+                const float target_velocity_x =
+                    Chassis_Command.velocity_x_m_s * CHASSIS_INPUT_SCALE_X;
+                const float target_velocity_y =
+                    Chassis_Command.velocity_y_m_s * CHASSIS_INPUT_SCALE_Y;
+                const float target_velocity_w =
+                    Chassis_Command.angular_velocity_rad_s * CHASSIS_INPUT_SCALE_W;
+
                 /* 速度规划：三轴各自按非对称速率限制平滑，反向时先刹停再反向加速。 */
                 Chassis_Planned_Velocity_X = SpeedPlanning_UpdateRateLimited(
-                    Chassis_Command.velocity_x_m_s, &Chassis_X_Planning, CHASSIS_CONTROL_DT,
+                    target_velocity_x, &Chassis_X_Planning, CHASSIS_CONTROL_DT,
                     CHASSIS_X_ACCEL_LIMIT, CHASSIS_X_DECEL_LIMIT,
                     CHASSIS_X_RELEASE_LIMIT, CHASSIS_X_REVERSE_LIMIT,
                     CHASSIS_PLANNING_THRESHOLD);
                 Chassis_Planned_Velocity_Y = SpeedPlanning_UpdateRateLimited(
-                    Chassis_Command.velocity_y_m_s, &Chassis_Y_Planning, CHASSIS_CONTROL_DT,
+                    target_velocity_y, &Chassis_Y_Planning, CHASSIS_CONTROL_DT,
                     CHASSIS_Y_ACCEL_LIMIT, CHASSIS_Y_DECEL_LIMIT,
                     CHASSIS_Y_RELEASE_LIMIT, CHASSIS_Y_REVERSE_LIMIT,
                     CHASSIS_PLANNING_THRESHOLD);
                 Chassis_Planned_Velocity_W = SpeedPlanning_UpdateRateLimited(
-                    Chassis_Command.angular_velocity_rad_s, &Chassis_W_Planning, CHASSIS_CONTROL_DT,
+                    target_velocity_w, &Chassis_W_Planning, CHASSIS_CONTROL_DT,
                     CHASSIS_W_ACCEL_LIMIT, CHASSIS_W_DECEL_LIMIT,
                     CHASSIS_W_RELEASE_LIMIT, CHASSIS_W_REVERSE_LIMIT,
                     CHASSIS_PLANNING_THRESHOLD);
@@ -484,15 +509,19 @@ void Chassis_Update(void)
             }
         }
 
-        /* 底盘不测量实际速度，反馈字段表示本周期下发的规划目标与设备在线状态。 */
+        /* 底盘不测量实际速度：反馈字段按输入边界约定回写为归一化值
+         * （与 Communication 层提交的量纲一致），并携带设备在线状态。 */
         bool online = true;
         for (uint32_t index = 0U; index < 4U; ++index)
         {
             online = online && Chassis_Motor[index].IsOnline();
         }
-        Chassis_Feedback.velocity_x_m_s = Chassis_Planned_Velocity_X;
-        Chassis_Feedback.velocity_y_m_s = Chassis_Planned_Velocity_Y;
-        Chassis_Feedback.angular_velocity_rad_s = Chassis_Planned_Velocity_W;
+        Chassis_Feedback.velocity_x_m_s =
+            Chassis_Planned_Velocity_X / CHASSIS_INPUT_SCALE_X;
+        Chassis_Feedback.velocity_y_m_s =
+            Chassis_Planned_Velocity_Y / CHASSIS_INPUT_SCALE_Y;
+        Chassis_Feedback.angular_velocity_rad_s =
+            Chassis_Planned_Velocity_W / CHASSIS_INPUT_SCALE_W;
         Chassis_Feedback.enabled = Chassis_Output_Enabled;
         Chassis_Feedback.online = online;
     }
