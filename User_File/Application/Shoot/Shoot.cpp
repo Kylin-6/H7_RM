@@ -3,16 +3,20 @@
  * @brief 摩擦轮与拨弹盘应用。
  *
  * 两种硬件实现由编译开关区分：
- * - 默认（`SHOOT`）：DJI 摩擦轮 + DJI 拨弹盘，参考 Meta-Embedded-NG 移植；
- * - `LEGACY_INFANTRY_GIMBAL`：老步兵云台板，DM3519 摩擦轮 + M2006 拨弹盘，
- *   移植自老步兵云台板工程（H7_RM），含扳机状态机、卡弹处理与热量估计。
+ * - `SHOOT && !LEGACY_INFANTRY_GIMBAL`：DJI 摩擦轮 + DJI 拨弹盘，参考
+ *   Meta-Embedded-NG 移植；摩擦轮为 M3508/C620 直驱（gear_ratio=1），默认目标
+ *   25 rad/s。当前无就绪、卡弹回退、热量/裁判互锁或完整 FEEDING 状态机；
+ *   热量限制与堵转阈值依赖实车机构与裁判系统数据，暂未移植。
+ * - `SHOOT && LEGACY_INFANTRY_GIMBAL`：老步兵云台板，DM3519 摩擦轮 + M2006
+ *   拨弹盘，移植自老步兵云台板工程（H7_RM），含扳机状态机、卡弹处理与热量估计。
  *
- * 两种实现共用 `ShootCmd` / `ShootFeedback` / `ShootEvent` 消息端点：老步兵云台板
- * 配置下 `shoot_mode` 表示扳机按下与否，`loader_speed_deg_s` 表示波轮映射后的拨弹盘
- * 输出速度（rad/s，与框架既有实现一致，详见 Application/README.md）。
+ * 两种实现共用 `ShootCmd` / `ShootFeedback` / `ShootEvent` 消息端点，速度字段
+ * 统一为 rad/s：老步兵云台板配置下 `shoot_mode` 表示扳机按下与否，
+ * `loader_speed_rad_s` 表示波轮映射后的拨弹盘输出速度（rad/s）。
  */
 
 #include "Shoot.h"
+#include "../physical_units.h"
 #include "board_config.h"
 
 #include "message_center.h"
@@ -339,7 +343,7 @@ bool Shoot_Legacy_Init(void)
 /**
  * @brief 老步兵云台板的 1 kHz 发射控制。
  *
- * 输入来自 ShootCmd：`shoot_mode == ON` 表示扳机按下，`loader_speed_deg_s` 表示
+ * 输入来自 ShootCmd：`shoot_mode == ON` 表示扳机按下，`loader_speed_rad_s` 表示
  * 波轮映射后的连发拨弹盘速度（rad/s）。通道失效由 Communication 解除 shoot_mode，
  * 本函数随即停火并复位状态机。
  */
@@ -444,7 +448,7 @@ void Shoot_Legacy_Loop(void)
             Loader.speed_pid.Set_K_P(LOADER_SPEED_KP);
             Loader.speed_pid.Set_K_I(LOADER_SPEED_KI);
             Loader.Set_Outer_Loop(DJI_MOTOR_SPEED_LOOP);
-            Loader_Group.Control(Shoot_Command.loader_speed_deg_s);
+            Loader_Group.Control(Shoot_Command.loader_speed_rad_s);
         }
         else
         {
@@ -462,13 +466,13 @@ void Shoot_Legacy_Loop(void)
     Last_Loop_Tick = now;
 }
 
-/** 把云台板发射状态写入框架的统一反馈结构。 */
+/** 把云台板发射状态写入框架的统一反馈结构（速度 rad/s、角度 rad）。 */
 void Shoot_Legacy_UpdateFeedback(void)
 {
-    Shoot_Feedback.friction_left_speed_deg_s = Friction_Left.feedback.velocity;
-    Shoot_Feedback.friction_right_speed_deg_s = Friction_Right.feedback.velocity;
-    Shoot_Feedback.loader_angle_deg = Loader.feedback.output_total_angle;
-    Shoot_Feedback.loader_speed_deg_s = Loader.feedback.output_speed;
+    Shoot_Feedback.friction_left_speed_rad_s = Friction_Left.feedback.velocity;
+    Shoot_Feedback.friction_right_speed_rad_s = Friction_Right.feedback.velocity;
+    Shoot_Feedback.loader_angle_rad = Loader.feedback.output_total_angle;
+    Shoot_Feedback.loader_speed_rad_s = Loader.feedback.output_speed;
     Shoot_Feedback.enabled = Shoot_Initialized;
     Shoot_Feedback.online = Friction_Left.IsOnline() &&
                             Friction_Right.IsOnline() &&
@@ -553,20 +557,24 @@ extern "C" void Shoot_GetLoaderDebug(Struct_Legacy_Loader_Debug *debug)
 #include "fdcan.h"
 #include <cmath>
 
-static constexpr float SHOOT_DEFAULT_FRICTION_SPEED_DEG_S = 40000.0f;
+/* 直驱 M3508 摩擦轮按主线 SI 语义取 25 rad/s；不再使用 40000 deg/s 旧量纲。 */
+static constexpr float SHOOT_DEFAULT_FRICTION_SPEED_RAD_S = 25.0f;
 static constexpr float SHOOT_DEFAULT_RATE_HZ = 10.0f;
-static constexpr float SHOOT_ONE_BULLET_ANGLE_DEG = 36.0f;
-static constexpr float SHOOT_REVERSE_SPEED_DEG_S = -360.0f;
+static constexpr float SHOOT_ONE_BULLET_ANGLE_RAD = DegToRad(36.0f);
+static constexpr float SHOOT_REVERSE_SPEED_RAD_S = DegToRad(-360.0f);
 
 static Class_DJIMotor Shoot_Friction_Left;
 static Class_DJIMotor Shoot_Friction_Right;
 static Class_DJIMotor Shoot_Loader;
+static Struct_DJIMotor_Motion_Snapshot Shoot_Friction_Left_Snapshot;
+static Struct_DJIMotor_Motion_Snapshot Shoot_Friction_Right_Snapshot;
+static Struct_DJIMotor_Motion_Snapshot Shoot_Loader_Snapshot;
 static Class_DJIMotor_Group Shoot_Friction_Group;
 static Class_DJIMotor_Group Shoot_Loader_Group;
 static bool Shoot_Initialized;
 static bool Shoot_Output_Enabled;
 static bool Shoot_Event_Angle_Active;
-static float Shoot_Loader_Angle_Target;
+static float Shoot_Loader_Angle_Target_Rad;
 
 static PID_InitTypeDef Shoot_MakePID(float kp, float ki, float kd,
                                     float integral_limit, float output_limit)
@@ -611,16 +619,16 @@ static void Shoot_ApplyCommand(void)
         return;
     }
 
-    float friction_reference = 0.0f;
+    float friction_reference_rad_s = 0.0f;
     if (Shoot_Command.friction_mode == FrictionMode::ON)
     {
-        friction_reference = Shoot_Command.friction_speed_deg_s > 0.0f
-            ? Shoot_Command.friction_speed_deg_s
-            : SHOOT_DEFAULT_FRICTION_SPEED_DEG_S;
+        friction_reference_rad_s = Shoot_Command.friction_speed_rad_s > 0.0f
+            ? Shoot_Command.friction_speed_rad_s
+            : SHOOT_DEFAULT_FRICTION_SPEED_RAD_S;
     }
-    Shoot_Friction_Group.Control(friction_reference, friction_reference);
+    Shoot_Friction_Group.Control(friction_reference_rad_s, friction_reference_rad_s);
 
-    float loader_reference = 0.0f;
+    float loader_speed_target_rad_s = 0.0f;
     switch (Shoot_Command.loader_mode)
     {
     case LoaderMode::BURST:
@@ -629,66 +637,72 @@ static void Shoot_ApplyCommand(void)
         Shoot_Loader.Set_Outer_Loop(DJI_MOTOR_SPEED_LOOP);
         const float rate = Shoot_Command.shoot_rate_hz > 0.0f
             ? Shoot_Command.shoot_rate_hz : SHOOT_DEFAULT_RATE_HZ;
-        loader_reference = Shoot_Command.loader_speed_deg_s != 0.0f
-            ? Shoot_Command.loader_speed_deg_s
-            : rate * SHOOT_ONE_BULLET_ANGLE_DEG;
+        loader_speed_target_rad_s = Shoot_Command.loader_speed_rad_s != 0.0f
+            ? Shoot_Command.loader_speed_rad_s
+            : rate * SHOOT_ONE_BULLET_ANGLE_RAD;
         break;
     }
 
     case LoaderMode::REVERSE:
         Shoot_Event_Angle_Active = false;
         Shoot_Loader.Set_Outer_Loop(DJI_MOTOR_SPEED_LOOP);
-        loader_reference = Shoot_Command.loader_speed_deg_s != 0.0f
-            ? -std::fabs(Shoot_Command.loader_speed_deg_s)
-            : SHOOT_REVERSE_SPEED_DEG_S;
+        loader_speed_target_rad_s = Shoot_Command.loader_speed_rad_s != 0.0f
+            ? -std::fabs(Shoot_Command.loader_speed_rad_s)
+            : SHOOT_REVERSE_SPEED_RAD_S;
         break;
 
     case LoaderMode::STOP:
     default:
     {
         ShootEvent event;
+        /* 每个 1 ms 周期最多取一个逻辑请求并累加目标角，不等待前一发物理完成。 */
         if (MessageCenter::Shoot_Event_Queue.Pop(event))
         {
             if (!Shoot_Event_Angle_Active)
             {
-                Shoot_Loader_Angle_Target =
-                    Shoot_Loader.feedback.output_total_angle;
+                Shoot_Loader_Angle_Target_Rad =
+                    Shoot_Loader_Snapshot.output_total_angle;
             }
             const float bullet_count =
                 event.type == ShootEventType::ShootTriple ? 3.0f : 1.0f;
-            Shoot_Loader_Angle_Target +=
-                bullet_count * SHOOT_ONE_BULLET_ANGLE_DEG;
+            Shoot_Loader_Angle_Target_Rad +=
+                bullet_count * SHOOT_ONE_BULLET_ANGLE_RAD;
             Shoot_Event_Angle_Active = true;
         }
         if (Shoot_Event_Angle_Active)
         {
             Shoot_Loader.Set_Outer_Loop(DJI_MOTOR_ANGLE_LOOP);
-            loader_reference = Shoot_Loader_Angle_Target;
         }
         else
         {
             Shoot_Loader.Set_Outer_Loop(DJI_MOTOR_SPEED_LOOP);
-            loader_reference = 0.0f;
         }
         break;
     }
     }
 
-    Shoot_Loader_Group.Control(loader_reference);
+    if (Shoot_Event_Angle_Active)
+    {
+        Shoot_Loader_Group.Control(Shoot_Loader_Angle_Target_Rad);
+    }
+    else
+    {
+        Shoot_Loader_Group.Control(loader_speed_target_rad_s);
+    }
 }
 
 static void Shoot_UpdateFeedback(void)
 {
-    Shoot_Feedback.friction_left_speed_deg_s =
-        Shoot_Friction_Left.feedback.output_speed;
-    Shoot_Feedback.friction_right_speed_deg_s =
-        Shoot_Friction_Right.feedback.output_speed;
-    Shoot_Feedback.loader_angle_deg = Shoot_Loader.feedback.output_total_angle;
-    Shoot_Feedback.loader_speed_deg_s = Shoot_Loader.feedback.output_speed;
+    Shoot_Feedback.friction_left_speed_rad_s =
+        Shoot_Friction_Left_Snapshot.output_speed;
+    Shoot_Feedback.friction_right_speed_rad_s =
+        Shoot_Friction_Right_Snapshot.output_speed;
+    Shoot_Feedback.loader_angle_rad = Shoot_Loader_Snapshot.output_total_angle;
+    Shoot_Feedback.loader_speed_rad_s = Shoot_Loader_Snapshot.output_speed;
     Shoot_Feedback.enabled = Shoot_Output_Enabled;
-    Shoot_Feedback.online = Shoot_Friction_Left.online &&
-                            Shoot_Friction_Right.online &&
-                            Shoot_Loader.online;
+    Shoot_Feedback.online = Shoot_Friction_Left_Snapshot.online &&
+                            Shoot_Friction_Right_Snapshot.online &&
+                            Shoot_Loader_Snapshot.online;
 }
 
 #endif /* SHOOT && !LEGACY_INFANTRY_GIMBAL */
@@ -705,8 +719,10 @@ bool Shoot_Init(void)
     Struct_DJIMotor_Init_Config friction_config{};
     friction_config.hfdcan = BoardConfig_Get().shoot_bus;
     friction_config.motor_type = Enum_DJIMotor_Type::M3508;
+    friction_config.gear_ratio = 1.0f; // 摩擦轮直驱，不使用 M3508 默认减速比 19。
     friction_config.close_loop = DJI_MOTOR_SPEED_LOOP;
     friction_config.outer_loop = DJI_MOTOR_SPEED_LOOP;
+    // 速度环输入为 rad/s；增益无可信实车标定依据，启用前需重新整定。
     friction_config.speed_pid = Shoot_MakePID(7.5f, 5.0f, 0.0f, 16000.0f, 16000.0f);
 
     friction_config.can_id = 3U;
@@ -725,7 +741,9 @@ bool Shoot_Init(void)
     loader_config.outer_loop = DJI_MOTOR_SPEED_LOOP;
     loader_config.current_pid = Shoot_MakePID(1.0f, 50.0f, 0.0f, 12000.0f, 12000.0f);
     loader_config.speed_pid = Shoot_MakePID(7.5f, 20.0f, 0.0f, 12000.0f, 12000.0f);
-    loader_config.angle_pid = Shoot_MakePID(10.0f, 0.0f, 0.0f, 0.0f, 360.0f);
+    // 角度环输出是 rad/s；原 360 deg/s 限幅转换为 2π rad/s。
+    loader_config.angle_pid = Shoot_MakePID(10.0f, 0.0f, 0.0f,
+                                            0.0f, DegToRad(360.0f));
     const bool loader_initialized = Shoot_Loader.Init(loader_config);
 
     Shoot_Initialized = left_initialized && right_initialized && loader_initialized &&
@@ -737,7 +755,7 @@ bool Shoot_Init(void)
         Shoot_SetEnabled(false);
     }
     Shoot_Event_Angle_Active = false;
-    Shoot_Loader_Angle_Target = 0.0f;
+    Shoot_Loader_Angle_Target_Rad = 0.0f;
     return Shoot_Initialized;
 #else
     return true;
@@ -773,6 +791,9 @@ void Shoot_Update(void)
 #elif SHOOT
     if (Shoot_Initialized)
     {
+        Shoot_Friction_Left_Snapshot = Shoot_Friction_Left.GetMotionSnapshot();
+        Shoot_Friction_Right_Snapshot = Shoot_Friction_Right.GetMotionSnapshot();
+        Shoot_Loader_Snapshot = Shoot_Loader.GetMotionSnapshot();
         Shoot_ApplyCommand();
         Shoot_UpdateFeedback();
     }

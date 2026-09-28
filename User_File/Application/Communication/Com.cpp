@@ -2,6 +2,12 @@
  * @file Com.cpp
  * @brief 通信应用实现：板间输入适配与健康互锁（老步兵云台板配置）。
  * @details
+ * 底盘板代收遥控后经 0x065 转发关键通道，因此本模块属于 Remote 输入源：
+ * 输入链为 0x065 Decode → 本层整形（Pitch 低通 / 火控滞回 / 波轮档位映射）
+ * → ControlInput → InputState_SubmitRemote() → SourceArbitration → RobotCmd。
+ * CAN RX 回调只缓存通道值，不在中断上下文写 RobotCmd；InputState 只在
+ * ControlTask 上下文提交。
+ *
  * 输入适配的数值与云台板原工程逐项一致，只是把「通道 -> 目标」的换算从轴侧
  * （原 Pitch / Shoot 模块）集中到输入侧：
  *
@@ -10,8 +16,8 @@
  * - 火控开关：使用 [-500, +500] 双阈值滞回，避免必须拨到通道端点；
  * - 波轮档位：[-780, 740] 线性映射到 [0, 拨弹盘输出最大速度]。
  *
- * 云台与发射的目标都经 `RobotCmd` 发布，多个上层输入同时存在时仍由 RobotCmd
- * 统一仲裁；链路失效时这里只负责下发安全命令。
+ * 链路失效时提交空输入，由 SourceArbitration 输出 safe state：云台 DISABLED、
+ * 发射 OFF，与原整车安全行为一致。
  */
 
 #include "Com.h"
@@ -23,18 +29,12 @@
 #include <cstdint>
 #include <string.h>
 
-void Communication_Callback(uint8_t* Buffer, uint16_t Length)
-{
-    (void)Buffer;
-    (void)Length;
-}
-
 #if LEGACY_INFANTRY_GIMBAL
 
 #include "Pitch.h"
-#include "RobotCmd.h"
 #include "chassis_board.h"
 #include "fdcan.h"
+#include "input_state.h"
 
 namespace
 {
@@ -66,10 +66,6 @@ bool fire_trigger_pressed;
  * 每级时间常数 25 ms，总延迟约 50 ms，与原手写实现一致。 */
 Class_Filter_IIR_First_Order pitch_filter_stage1;
 Class_Filter_IIR_First_Order pitch_filter_stage2;
-/* 云台 / 发射命令直发 Topic：Topic 为 Latest-Value 语义，重复值发布幂等，
- * 不再经 RobotCmd 全局 setter 中转，也无须逐字段 change-detection。 */
-Publisher<GimbalCmd> Gimbal_Command_Publisher(MessageCenter::Gimbal_Command_Topic);
-Publisher<ShootCmd> Shoot_Command_Publisher(MessageCenter::Shoot_Command_Topic);
 
 /** 通道值线性映射到 DM-IMU Pitch 限位。 */
 float MapPitchChannel(float channel)
@@ -78,7 +74,7 @@ float MapPitchChannel(float channel)
     return PITCH_TARGET_MIN_RAD + ratio * (PITCH_TARGET_MAX_RAD - PITCH_TARGET_MIN_RAD);
 }
 
-/** 波轮档位线性映射到拨弹盘输出速度，负档位为 0。 */
+/** 波轮档位线性映射到拨弹盘输出速度（输出轴 rad/s），负档位为 0。 */
 float MapDialToLoaderSpeed(int16_t dial)
 {
     if (dial < kDialMin)
@@ -91,13 +87,6 @@ float MapDialToLoaderSpeed(int16_t dial)
     }
     return static_cast<float>(dial - kDialMin) * kLoaderMaxOutputRadS /
            static_cast<float>(kDialMax - kDialMin);
-}
-
-/** 提交一次云台与发射命令（经 RobotCmd 统一发布）。 */
-void PublishCommands(const GimbalCmd &gimbal_command, const ShootCmd &shoot_command)
-{
-    RobotCmd_SetGimbal(gimbal_command);
-    RobotCmd_SetShoot(shoot_command);
 }
 } // namespace
 
@@ -114,15 +103,19 @@ void Communication_Init(void)
     /* 两级低通：每级 tau = 25 ms（原工程数值），1 kHz 采样。 */
     pitch_filter_stage1.Init(kPitchChannelFilterCutoffHz, 1000.0f);
     pitch_filter_stage2.Init(kPitchChannelFilterCutoffHz, 1000.0f);
+    /* 输入仲裁状态一并复位：上电即处于 Remote 失联安全态。 */
+    InputState_Reset();
+    InputState_SetTime(HAL_GetTick());
     communication_initialized = true;
 }
 
 /**
- * @brief 读取板间通道并发布云台 / 发射命令。
+ * @brief 读取板间通道并把遥控输入提交到 InputState。
  *
- * 链路健康：Pitch 通道经滤波映射后发布 `GimbalMode::IMU` 目标，火控开关与波轮
- * 档位发布到 `ShootCmd` 的扳机使能与连发速度。链路失效（100 ms 无新帧）：
- * 发布 `GimbalMode::DISABLED` 与关闭的 `ShootCmd`，两个 Application 同周期停手。
+ * 链路健康：Pitch 通道经滤波映射后作为 GimbalMode::IMU 目标提交，火控开关与
+ * 波轮档位作为 ShootCmd 意图提交；SourceArbitration 统一仲裁后由 RobotCmd
+ * 发布。链路失效（100 ms 无新帧）：提交空输入 → 仲裁 disarm → 云台 DISABLED、
+ * Shoot OFF，两个 Application 同周期停手。
  */
 void Communication_Update(void)
 {
@@ -130,6 +123,10 @@ void Communication_Update(void)
     {
         return;
     }
+
+    /* 仲裁时钟只在 ControlTask 上下文推进。 */
+    const uint32_t now_ms = HAL_GetTick();
+    InputState_SetTime(now_ms);
 
     int16_t fire = 0;
     int16_t dial = 0;
@@ -140,12 +137,9 @@ void Communication_Update(void)
 
     if (!channels_valid)
     {
-        /* 安全互锁：不再清除滤波历史，链路恢复后目标由限速率路径平滑过渡。 */
-        fire_trigger_pressed = false;
-        GimbalCmd gimbal_command{};
-        gimbal_command.mode = GimbalMode::DISABLED;
-        ShootCmd shoot_command{};
-        PublishCommands(gimbal_command, shoot_command);
+        /* 安全互锁：提交空输入由仲裁输出 safe state；不再清除滤波历史，
+         * 链路恢复后目标由限速率路径平滑过渡。 */
+        InputState_SubmitRemote({});
         return;
     }
 
@@ -158,6 +152,8 @@ void Communication_Update(void)
         fire_trigger_pressed = false;
     }
     const bool trigger_pressed = fire_trigger_pressed;
+
+    ControlInput remote_input{};
 
     GimbalCmd gimbal_command{};
     gimbal_command.mode = GimbalMode::IMU;
@@ -173,6 +169,7 @@ void Communication_Update(void)
     gimbal_command.pitch_angle_rad =
         MapPitchChannel(pitch_filter_stage2.Get_Out());
     gimbal_command.pitch_speed_rad_s = 0.0f;
+    remote_input.gimbal = gimbal_command;
 
     ShootCmd shoot_command{};
     shoot_command.shoot_mode = trigger_pressed ? ShootMode::ON : ShootMode::OFF;
@@ -180,9 +177,13 @@ void Communication_Update(void)
     shoot_command.friction_mode =
         trigger_pressed ? FrictionMode::ON : FrictionMode::OFF;
     shoot_command.loader_mode = trigger_pressed ? LoaderMode::BURST : LoaderMode::STOP;
-    shoot_command.loader_speed_deg_s = MapDialToLoaderSpeed(dial);
+    /* 拨弹盘输出轴速度，rad/s；旧字段名 *_deg_s 实装 rad/s 的问题已清理。 */
+    shoot_command.loader_speed_rad_s = MapDialToLoaderSpeed(dial);
+    remote_input.shoot = shoot_command;
 
-    PublishCommands(gimbal_command, shoot_command);
+    remote_input.received_ms = now_ms;
+    remote_input.valid = true;
+    InputState_SubmitRemote(remote_input);
 }
 
 bool Communication_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch)

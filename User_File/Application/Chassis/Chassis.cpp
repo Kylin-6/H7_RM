@@ -5,9 +5,13 @@
  * 运动学与舵向最短路径规则来自 MIT 许可证下的 Meta-Embedded-NG
  * application/chassis，实现已适配本工程 Class_DJIMotor 接口。机械参数仍是
  * 待实车标定值；双板构建将此模块放在底盘板。
+ * @todo vx/vy/wz 的实车物理正方向须按电机安装和坐标系标定，不能仅由数组顺序推断。
+ * @todo 舵向依赖 output_total_angle；增量编码器上电不提供绝对输出轴零位，
+ *       需绝对编码器、寻零流程或已知上电姿态。
  */
 
 #include "Chassis.h"
+#include "../physical_units.h"
 
 #include "message_center.h"
 #include "board_config.h"
@@ -30,15 +34,16 @@ static uint8_t Chassis_Feedback_Divider;
 static constexpr float CHASSIS_HALF_LENGTH_M = 0.163f;
 static constexpr float CHASSIS_HALF_WIDTH_M = 0.163f;
 static constexpr float CHASSIS_WHEEL_RADIUS_M = 0.058f;
-static constexpr float CHASSIS_WHEEL_PERIMETER_M =
-    2.0f * 3.14159265358979323846f * CHASSIS_WHEEL_RADIUS_M;
 static constexpr float CHASSIS_FEEDBACK_ALPHA = 0.032258f;
 static constexpr float CHASSIS_STOP_SPEED_M_S = 0.001f;
-static constexpr float Chassis_Steer_Offset_Deg[4] = {
-    102.5f, 12.5f, 137.5f, 145.0f};
+static constexpr float Chassis_Steer_Offset_Rad[4] = {
+    DegToRad(102.5f), DegToRad(12.5f),
+    DegToRad(137.5f), DegToRad(145.0f)};
 
 static Class_DJIMotor Chassis_Wheel_Motor[4];
 static Class_DJIMotor Chassis_Steer_Motor[4];
+static Struct_DJIMotor_Motion_Snapshot Chassis_Wheel_Snapshot[4];
+static Struct_DJIMotor_Motion_Snapshot Chassis_Steer_Snapshot[4];
 static Class_DJIMotor_Group Chassis_Wheel_Group;
 static Class_DJIMotor_Group Chassis_Steer_Group;
 static bool Chassis_Initialized;
@@ -56,19 +61,6 @@ static PID_InitTypeDef Chassis_MakePID(float kp, float ki, float kd,
     pid.Out_Max = output_limit;
     pid.D_T = 0.001f;
     return pid;
-}
-
-static float Chassis_NormalizeAngle(float angle_deg)
-{
-    while (angle_deg > 180.0f)
-    {
-        angle_deg -= 360.0f;
-    }
-    while (angle_deg < -180.0f)
-    {
-        angle_deg += 360.0f;
-    }
-    return angle_deg;
 }
 
 static void Chassis_SetEnabled(bool enabled)
@@ -90,51 +82,53 @@ static void Chassis_SetEnabled(bool enabled)
     }
 }
 
-static void Chassis_CalculateTargets(float wheel_target[4], float steer_target[4])
+static void Chassis_CalculateTargets(float wheel_target_rad_s[4],
+                                     float steer_target_rad[4])
 {
-    /* 将底盘坐标系速度分解为四个舵轮各自的平移速度向量。 */
-    const float vx = Chassis_Command.velocity_x_m_s;
-    const float vy = Chassis_Command.velocity_y_m_s;
-    const float wz = Chassis_Command.angular_velocity_rad_s;
+    /* 四轮位置的旋转项为 ±wz·半宽/半长；符号按下方轮索引数组固定。
+       物理前/左和正转方向必须由实车接线及坐标标定确认。 */
+    const float vx_m_s = Chassis_Command.velocity_x_m_s;
+    const float vy_m_s = Chassis_Command.velocity_y_m_s;
+    const float wz_rad_s = Chassis_Command.angular_velocity_rad_s;
     const float wheel_vx[4] = {
-        vx + wz * CHASSIS_HALF_WIDTH_M,
-        vx + wz * CHASSIS_HALF_WIDTH_M,
-        vx - wz * CHASSIS_HALF_WIDTH_M,
-        vx - wz * CHASSIS_HALF_WIDTH_M,
+        vx_m_s + wz_rad_s * CHASSIS_HALF_WIDTH_M,
+        vx_m_s + wz_rad_s * CHASSIS_HALF_WIDTH_M,
+        vx_m_s - wz_rad_s * CHASSIS_HALF_WIDTH_M,
+        vx_m_s - wz_rad_s * CHASSIS_HALF_WIDTH_M,
     };
     const float wheel_vy[4] = {
-        vy + wz * CHASSIS_HALF_LENGTH_M,
-        vy - wz * CHASSIS_HALF_LENGTH_M,
-        vy - wz * CHASSIS_HALF_LENGTH_M,
-        vy + wz * CHASSIS_HALF_LENGTH_M,
+        vy_m_s + wz_rad_s * CHASSIS_HALF_LENGTH_M,
+        vy_m_s - wz_rad_s * CHASSIS_HALF_LENGTH_M,
+        vy_m_s - wz_rad_s * CHASSIS_HALF_LENGTH_M,
+        vy_m_s + wz_rad_s * CHASSIS_HALF_LENGTH_M,
     };
 
     for (uint8_t index = 0; index < 4; ++index)
     {
-        const float velocity = std::sqrt(wheel_vx[index] * wheel_vx[index] +
-                                         wheel_vy[index] * wheel_vy[index]);
-        const float current_angle =
-            Chassis_Steer_Motor[index].feedback.output_total_angle;
-        if (velocity < CHASSIS_STOP_SPEED_M_S)
+        const float velocity_m_s = std::sqrt(wheel_vx[index] * wheel_vx[index] +
+                                            wheel_vy[index] * wheel_vy[index]);
+        const float current_angle_rad =
+            Chassis_Steer_Snapshot[index].output_total_angle;
+        if (velocity_m_s < CHASSIS_STOP_SPEED_M_S)
         {
-            wheel_target[index] = 0.0f;
-            steer_target[index] = current_angle;
+            wheel_target_rad_s[index] = 0.0f;
+            steer_target_rad[index] = current_angle_rad;
             continue;
         }
 
-        float target_angle = std::atan2(wheel_vy[index], wheel_vx[index]) *
-                             (180.0f / 3.14159265358979323846f) +
-                             Chassis_Steer_Offset_Deg[index];
-        float difference = Chassis_NormalizeAngle(target_angle - current_angle);
-        /* 舵向误差超过 90° 时反转轮速，缩短舵电机需要旋转的路径。 */
-        if (difference > 90.0f)
+        const float target_angle_rad = std::atan2(wheel_vy[index], wheel_vx[index]) +
+                                       Chassis_Steer_Offset_Rad[index];
+        float difference_rad = std::remainder(target_angle_rad - current_angle_rad,
+                                              2.0f * kPiRad);
+        /* remainder 将误差压到 [-π, π]；超过 ±π/2 时舵角少转 π、轮速取反。 */
+        if (difference_rad > kPiRad / 2.0f)
         {
-            difference -= 180.0f;
+            difference_rad -= kPiRad;
             Chassis_Wheel_Direction[index] = -1;
         }
-        else if (difference < -90.0f)
+        else if (difference_rad < -kPiRad / 2.0f)
         {
-            difference += 180.0f;
+            difference_rad += kPiRad;
             Chassis_Wheel_Direction[index] = -1;
         }
         else
@@ -142,9 +136,9 @@ static void Chassis_CalculateTargets(float wheel_target[4], float steer_target[4
             Chassis_Wheel_Direction[index] = 1;
         }
 
-        steer_target[index] = current_angle + difference;
-        wheel_target[index] = velocity * (360.0f / CHASSIS_WHEEL_PERIMETER_M) *
-                              Chassis_Wheel_Direction[index];
+        steer_target_rad[index] = current_angle_rad + difference_rad;
+        wheel_target_rad_s[index] = (velocity_m_s / CHASSIS_WHEEL_RADIUS_M) *
+                                    Chassis_Wheel_Direction[index];
     }
 }
 
@@ -155,17 +149,16 @@ static void Chassis_UpdateFeedback(void)
     bool online = true;
     for (uint8_t index = 0; index < 4; ++index)
     {
-        const float heading =
-            (Chassis_Steer_Motor[index].feedback.output_total_angle -
-             Chassis_Steer_Offset_Deg[index]) *
-            (3.14159265358979323846f / 180.0f);
-        const float linear_speed =
-            Chassis_Wheel_Motor[index].feedback.output_speed *
-            (CHASSIS_WHEEL_PERIMETER_M / 360.0f);
-        wheel_vx[index] = linear_speed * std::cos(heading);
-        wheel_vy[index] = linear_speed * std::sin(heading);
-        online = online && Chassis_Wheel_Motor[index].online &&
-                 Chassis_Steer_Motor[index].online;
+        const float heading_rad =
+            Chassis_Steer_Snapshot[index].output_total_angle -
+            Chassis_Steer_Offset_Rad[index];
+        const float linear_speed_m_s =
+            Chassis_Wheel_Snapshot[index].output_speed *
+            CHASSIS_WHEEL_RADIUS_M;
+        wheel_vx[index] = linear_speed_m_s * std::cos(heading_rad);
+        wheel_vy[index] = linear_speed_m_s * std::sin(heading_rad);
+        online = online && Chassis_Wheel_Snapshot[index].online &&
+                 Chassis_Steer_Snapshot[index].online;
     }
 
     const float vx = (wheel_vx[0] + wheel_vx[1] + wheel_vx[2] + wheel_vx[3]) * 0.25f;
@@ -200,6 +193,7 @@ bool Chassis_Init(void)
     wheel_config.motor_type = Enum_DJIMotor_Type::M3508;
     wheel_config.close_loop = DJI_MOTOR_SPEED_LOOP;
     wheel_config.outer_loop = DJI_MOTOR_SPEED_LOOP;
+    // 速度环输入现为 rad/s；以下增益来源未标定，需实车重新整定。
     wheel_config.speed_pid = Chassis_MakePID(4.5f, 0.05f, 0.0f, 3000.0f, 16000.0f);
 
     Struct_DJIMotor_Init_Config steer_config{};
@@ -207,7 +201,10 @@ bool Chassis_Init(void)
     steer_config.motor_type = Enum_DJIMotor_Type::M3508;
     steer_config.close_loop = DJI_MOTOR_ANGLE_LOOP | DJI_MOTOR_SPEED_LOOP;
     steer_config.outer_loop = DJI_MOTOR_ANGLE_LOOP;
-    steer_config.angle_pid = Chassis_MakePID(30.0f, 0.2f, 0.0f, 200.0f, 1000.0f);
+    // 角度环输出为 rad/s：原 200/1000 deg/s 限幅作物理等效转换。
+    // Kp/Ki 和舵轮速度环增益没有可信实车来源，启用前均需重新整定。
+    steer_config.angle_pid = Chassis_MakePID(30.0f, 0.2f, 0.0f,
+                                             DegToRad(200.0f), DegToRad(1000.0f));
     steer_config.speed_pid = Chassis_MakePID(4.0f, 4.0f, 0.0f, 3000.0f, 15000.0f);
 
     bool initialized = true;
@@ -253,17 +250,22 @@ void Chassis_Update(void)
 #if CHASSIS
     if (Chassis_Initialized)
     {
+        for (uint8_t index = 0U; index < 4U; ++index)
+        {
+            Chassis_Wheel_Snapshot[index] = Chassis_Wheel_Motor[index].GetMotionSnapshot();
+            Chassis_Steer_Snapshot[index] = Chassis_Steer_Motor[index].GetMotionSnapshot();
+        }
         const bool enabled = Chassis_Command.mode != ChassisMode::ZERO_FORCE;
         Chassis_SetEnabled(enabled);
         if (enabled)
         {
-            float wheel_target[4];
-            float steer_target[4];
-            Chassis_CalculateTargets(wheel_target, steer_target);
-            Chassis_Wheel_Group.Control(wheel_target[0], wheel_target[1],
-                                        wheel_target[2], wheel_target[3]);
-            Chassis_Steer_Group.Control(steer_target[0], steer_target[1],
-                                        steer_target[2], steer_target[3]);
+            float wheel_target_rad_s[4];
+            float steer_target_rad[4];
+            Chassis_CalculateTargets(wheel_target_rad_s, steer_target_rad);
+            Chassis_Wheel_Group.Control(wheel_target_rad_s[0], wheel_target_rad_s[1],
+                                        wheel_target_rad_s[2], wheel_target_rad_s[3]);
+            Chassis_Steer_Group.Control(steer_target_rad[0], steer_target_rad[1],
+                                        steer_target_rad[2], steer_target_rad[3]);
         }
         Chassis_UpdateFeedback();
     }

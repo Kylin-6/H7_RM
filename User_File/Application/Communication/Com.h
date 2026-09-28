@@ -2,40 +2,27 @@
  * @file Com.h
  * @brief 通信应用：外部输入适配与健康互锁。
  * @details
- * 默认配置下本模块只是一个空的 UART 帧入口骨架。
+ * 默认配置下本模块是空实现。
  *
  * 老步兵云台板配置（`LEGACY_INFANTRY_GIMBAL`）下，本模块承担底盘板到云台板的
- * 板间输入适配：
+ * 板间输入适配。0x065 是底盘板代收遥控后转发的关键通道，属于 Remote 输入源：
  *
  * ```text
  * 底盘板 0x065 (FDCAN2) -> Class_ChassisBoard -> Communication_Update()
- *        |- Pitch 通道 --两级低通 + 线性映射--> GimbalCmd.pitch_angle_rad
- *        |- 火控开关 -----> ShootCmd.shoot_mode（按下的电平）
- *        |- 波轮档位 --线性映射--> ShootCmd.loader_speed_deg_s
+ *        |- Pitch 通道 --两级低通 + 线性映射--> ControlInput.gimbal
+ *        |- 火控开关 -----> ControlInput.shoot（ShootMode）
+ *        |- 波轮档位 --线性映射--> ControlInput.shoot.loader_speed_rad_s
+ *        └────────────── InputState_SubmitRemote() -> SourceArbitration -> RobotCmd
  * ```
  *
- * 链路超过 `CHASSIS_BOARD_CHANNEL_TIMEOUT_MS` 没有新帧时，本模块会显式发布
- * `GimbalMode::DISABLED` 与关闭的 `ShootCmd`，让云台与发射机构同时进入安全状态。
+ * 链路超过 `CHASSIS_BOARD_CHANNEL_TIMEOUT_MS` 没有新帧时，本模块提交空输入，
+ * 由 SourceArbitration 输出 safe state：云台 DISABLED、发射 OFF。
  */
 
 #ifndef COM_H
 #define COM_H
 
-#include <stdbool.h>
-
-#include "cmsis_os2.h"
-#include "bsp_uart.h"
-
-typedef struct
-{
-    uint8_t Header;
-    uint16_t Length;
-    uint8_t* Data;
-    uint16_t Checksum;
-} Frame_t;
-
-
-void Communication_Callback(uint8_t* Buffer, uint16_t Length);
+#include <stdint.h>
 
 /**
  * @brief 初始化通信应用：老步兵云台板配置下注册板间链路接收。

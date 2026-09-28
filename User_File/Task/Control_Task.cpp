@@ -2,15 +2,18 @@
  * @file Control_Task.cpp
  * @brief 应用层统一控制任务。
  * @details
- * Task 只提供 1 kHz 调度，不承载具体控制算法。RobotCmd 先更新命令，随后依次
- * 调度云台、底盘和发射 Application，各模块直接控制自己拥有的 Device。
- * 老步兵云台板配置下通信应用先于 RobotCmd 更新，把板间通道转换为本周期命令。
+ * SingleBoard：High1，阻塞等待 1 ms 线程标志；输入为本地 Topic/应用命令，
+ * 输出为各应用所属设备目标和反馈。RobotCmd 先发布，再运行 Gimbal/Chassis/Shoot。
+ * 周期内不得等待 I/O；本任务不解析协议、不承担板间 CAN 传输。
+ * 老步兵云台板配置下通信应用先于 RobotCmd 更新，把板间通道整形为
+ * InputState 输入，再由 SourceArbitration 仲裁发布。
  */
 
 #include "Chassis.h"
 #include "Com.h"
 #include "Gimbal.h"
 #include "RobotCmd.h"
+#include "Com.h"
 #include "Shoot.h"
 #include "Init.h"
 #include "message_center.h"
@@ -37,6 +40,7 @@ extern "C" void Control_Task(void* argument)
     {
         for (;;) osDelay(1000U);
     }
+    (void)Communication_Init();
 #if GIMBAL
     Gimbal_Init();
 #endif
@@ -48,6 +52,7 @@ extern "C" void Control_Task(void* argument)
     {
         /* 由 1 ms 定时回调唤醒；阻塞等待期间不占用 CPU。 */
         osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
+        Communication_Update();
         /* 命令所有者先发布最新目标，再由各 Application 消费并执行。 */
         RobotCmd_Update();
         Gimbal_Update();

@@ -10,8 +10,7 @@ bool RobotCmd_Init(Output<GimbalCmd> gimbal_output,
                    Output<ShootCmd> shoot_output);
 /** 周期读取模块反馈；底盘命令每 10 ms 刷新。 */
 void RobotCmd_Update(void);
-
-/** 以下接口由遥控器、视觉或上层状态机更新对应应用目标。 */
+/** 设置接口应由 ControlTask 上下文调用；缓存/dirty 标志无同步保护，不可从 ISR/UART 回调并发调用。 */
 void RobotCmd_SetGimbal(const GimbalCmd &command);
 void RobotCmd_SetChassis(const ChassisCmd &command);
 void RobotCmd_SetShoot(const ShootCmd &command);

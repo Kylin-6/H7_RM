@@ -64,7 +64,7 @@ struct Struct_DJIMotor_Init_Config
     PID_InitTypeDef speed_pid; // 速度闭环，内置反馈为输出侧 rad/s
     PID_InitTypeDef angle_pid; // 角度闭环，内置反馈为输出侧累计 rad
     Enum_DJIMotor_Control_Mode control_mode = Enum_DJIMotor_Control_Mode::CURRENT;
-    float gear_ratio = 0.0f; // 转子/输出轴传动比；非正数或无效值使用型号默认值
+    float gear_ratio = 0.0f; // 转子/输出轴传动比；非正数使用型号默认值。motor_type 不决定实际机械减速比，直驱 M3508 显式设 1。
     uint32_t feedback_timeout_ms = 20; // 反馈超时阈值，须大于 0；Control/Send 检查时清零超时指令
     bool reverse = false; // 同时反转内置运动反馈和输出指令，current_raw 保留报文符号
     Enum_DJIMotor_Feedback angle_feedback = Enum_DJIMotor_Feedback::MOTOR;
@@ -119,6 +119,16 @@ struct Struct_DJIMotor_Feedback
     Struct_DJIMotor_PID_Feedback pid;
 };
 
+/** CAN 中断写入的运动反馈与在线标志在一次短临界区内读取。 */
+struct Struct_DJIMotor_Motion_Snapshot
+{
+    float output_total_angle = 0.0f;
+    float output_speed = 0.0f;
+    uint64_t timestamp_us = 0U;
+    bool online = false;
+    bool enabled = false;
+};
+
 class Class_DJIMotor
 {
 public:
@@ -138,6 +148,7 @@ public:
     bool IsDataValid();   ///< 驱动已初始化且反馈在线。
     bool IsHealthy();     ///< Enabled 与 DataValid 同时成立。
     uint64_t Get_Last_Feedback_Timestamp_Us() const;
+    Struct_DJIMotor_Motion_Snapshot GetMotionSnapshot() const;
 
     // 接收中断更新运动反馈，Control 更新 PID 状态；整个结构不是原子快照。
     Struct_DJIMotor_Feedback feedback;
