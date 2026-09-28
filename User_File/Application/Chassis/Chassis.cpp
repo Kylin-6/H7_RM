@@ -484,13 +484,20 @@ void Chassis_Update(void)
                 {
                     Chassis_Enable_Retry_Divider = 0U;
                     /*
-                     * 无条件周期重发使能。这里不能用在线状态判断是否需要补齐：
-                     * DM 电机在未使能时仍会周期上报状态帧，会落在"在线但未使能"
-                     * 的情况被漏掉。使能命令是幂等的，100 ms 一次、四帧的开销可忽略。
+                     * desired state = ENABLED 的有界周期确认：IsOnline() 只代表
+                     * 收到过反馈，DM 电机未使能时也会上报状态帧，因此必须用
+                     * IsEnabled() 判断是否需要补发。仅对"在线但未使能"的电机
+                     * 重发幂等的使能命令，100 ms 一次、最多四帧，正常时不产生
+                     * 额外总线流量；配合 StatusTask 的 recover_pending/ServiceAll
+                     * 覆盖离线恢复场景。
                      */
                     for (uint32_t index = 0U; index < 4U; ++index)
                     {
-                        (void)Chassis_Motor[index].Enable();
+                        if (Chassis_Motor[index].IsOnline() &&
+                            !Chassis_Motor[index].IsEnabled())
+                        {
+                            (void)Chassis_Motor[index].Enable();
+                        }
                     }
                 }
             }
