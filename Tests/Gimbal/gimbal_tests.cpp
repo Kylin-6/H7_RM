@@ -211,7 +211,9 @@ static void TestPitch(bool reverse)
 static void TestModes()
 {
     Init(); Tick();
-    CHECK(discrete.empty() && periodic.empty());
+    CHECK(discrete.size() == 2 && periodic.size() == 2);
+    for (const auto &f : discrete) CHECK(f.data[7] == 0xfd);
+    Zero();
     discrete.clear(); Activate();
     ins.yaw_rad = 0.2f; ins.pitch_rad = 0.1f;
     command.mode = GimbalMode::LOCK; command.yaw_angle_rad = 2;
@@ -416,24 +418,25 @@ static void TestDmEdges()
                     cfg.yaw.velocity_max, cfg.yaw.torque_max));
     CHECK(motor.RequestEnabled(false));
     CHECK(!motor.GetFeedbackSnapshot().requested_enabled);
-    Receive(cfg.yaw, 1, 0, 0); Class_DMMotor::ServiceAll();
-    CHECK(submit_attempts == 0 && perform_attempts == 0); // No lifecycle activation.
+    Receive(cfg.yaw, 0, 0, 0); Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == 1 && perform_attempts == 1 && discrete.back().data[7] == 0xfd);
     CHECK(motor.RequestEnabled(true));
     CHECK(motor.GetFeedbackSnapshot().requested_enabled);
-    CHECK(submit_attempts == 1 && perform_attempts == 0 && discrete.back().data[7] == 0xfc);
+    CHECK(submit_attempts == 2 && perform_attempts == 1 && discrete.back().data[7] == 0xfc);
+    Receive(cfg.yaw, 1, 0, 0);
     CHECK(motor.SetTorque(2));
     const auto normal = Last(cfg.yaw);
     for (int i = 0; i < 1000; ++i) CHECK(motor.RequestEnabled(true));
-    CHECK(submit_attempts == 1 && perform_attempts == 1);
+    CHECK(submit_attempts == 2 && perform_attempts == 2);
     CHECK(std::memcmp(Last(cfg.yaw).data, normal.data, 8) == 0);
     CHECK(Near(Decode(cfg.yaw).torque, 2));
     CHECK(motor.RequestEnabled(false));
     CHECK(!motor.GetFeedbackSnapshot().ready && !motor.GetFeedbackSnapshot().requested_enabled);
-    CHECK(submit_attempts == 2 && perform_attempts == 2 && discrete.back().data[7] == 0xfd);
+    CHECK(submit_attempts == 3 && perform_attempts == 3 && discrete.back().data[7] == 0xfd);
     CHECK(operations[operations.size() - 2] == 'P' && operations.back() == 'D');
     CHECK(Near(Decode(cfg.yaw).torque, 0) && Decode(cfg.yaw).kp == 0 && Decode(cfg.yaw).kd == 0);
     for (int i = 0; i < 1000; ++i) CHECK(motor.RequestEnabled(false));
-    CHECK(submit_attempts == 2 && perform_attempts == 2);
+    CHECK(submit_attempts == 3 && perform_attempts == 3);
 }
 static void TestDmRequestFailures()
 {
@@ -449,24 +452,25 @@ static void TestDmRequestFailures()
             CHECK(motor.RequestEnabled(true) == submit_ok);
             CHECK(motor.GetFeedbackSnapshot().requested_enabled);
             CHECK(submit_attempts == commands + 1 && perform_attempts == targets);
-            CHECK(motor.RequestEnabled(true)); // Even after a failed edge submission.
+            CHECK(motor.RequestEnabled(true) == submit_ok); // 重复请求保留未提交结果，不执行收发。
             CHECK(submit_attempts == commands + 1 && perform_attempts == targets);
             CHECK(motor.RequestEnabled(false) == (submit_ok && perform_ok));
             CHECK(!motor.GetFeedbackSnapshot().requested_enabled);
             CHECK(submit_attempts == commands + 2 && perform_attempts == targets + 1);
             CHECK(operations[operations.size() - 2] == 'P' && operations.back() == 'D');
-            CHECK(motor.RequestEnabled(false));
+            CHECK(motor.RequestEnabled(false) == (submit_ok && perform_ok));
             CHECK(submit_attempts == commands + 2 && perform_attempts == targets + 1);
         }
     }
     submit_ok = false; perform_ok = true;
     CHECK(!motor.RequestEnabled(true));
-    CHECK(motor.RequestEnabled(true));
+    CHECK(!motor.RequestEnabled(true));
     Receive(cfg.yaw, 0, 0, 0);
     submit_ok = true;
     const auto before = submit_attempts;
     Class_DMMotor::ServiceAll();
     CHECK(submit_attempts == before + 1 && discrete.back().data[7] == 0xfc);
+    CHECK(motor.RequestEnabled(true));
 }
 static void TestDmSafeSetters()
 {
@@ -534,6 +538,111 @@ static void TestDmSafeSetters()
     }
 }
 
+static void TestDmFirstFalse()
+{
+    static Class_DMMotor motor;
+    cfg = Gimbal_Default_Config();
+    CHECK(motor.Init(cfg.yaw.bus, cfg.yaw.id, cfg.yaw.feedback_id, Enum_DMMotor_Mode::MIT, false,
+                    cfg.yaw.position_max, cfg.yaw.velocity_max, cfg.yaw.torque_max));
+    test_irq_mask = 1;
+    CHECK(motor.RequestEnabled(false));
+    CHECK(test_irq_mask == 1);
+    test_irq_mask = 0;
+    CHECK(submit_attempts == 1 && perform_attempts == 1 && discrete.back().data[7] == 0xfd);
+    CHECK(operations[0] == 'P' && operations[1] == 'D');
+    for (int i = 0; i < 1000; ++i) CHECK(motor.RequestEnabled(false));
+    CHECK(submit_attempts == 1 && perform_attempts == 1);
+    Receive(cfg.yaw, 1, 0, 0);
+    Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == 2 && perform_attempts == 1 && discrete.back().data[7] == 0xfd);
+    Receive(cfg.yaw, 0, 0, 0);
+    Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == 2 && perform_attempts == 1);
+}
+static void TestDmSafeRetry()
+{
+    static Class_DMMotor motor;
+    cfg = Gimbal_Default_Config();
+    CHECK(motor.Init(cfg.yaw.bus, cfg.yaw.id, cfg.yaw.feedback_id, Enum_DMMotor_Mode::MIT, false,
+                    cfg.yaw.position_max, cfg.yaw.velocity_max, cfg.yaw.torque_max));
+    // 成功写入过正常目标后，再模拟安全目标发布失败。
+    CHECK(motor.RequestEnabled(true)); Receive(cfg.yaw, 1, 0, 0);
+    CHECK(motor.SetTorque(2)); CHECK(Near(Decode(cfg.yaw).torque, 2));
+    perform_ok = false;
+    CHECK(!motor.RequestEnabled(false));
+    const auto commands = submit_attempts, targets = perform_attempts;
+    for (int i = 0; i < 1000; ++i) CHECK(!motor.RequestEnabled(false));
+    CHECK(submit_attempts == commands && perform_attempts == targets);
+    CHECK(Near(Decode(cfg.yaw).torque, 2));
+    test_timestamp_us += 100000; // 离线期间也必须补交安全周期目标，但不追加离散命令。
+    Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == commands && perform_attempts == targets + 1);
+    CHECK(!motor.RequestEnabled(false));
+    perform_ok = true;
+    test_irq_mask = 1;
+    Class_DMMotor::ServiceAll(); CHECK(test_irq_mask == 1);
+    test_irq_mask = 0;
+    CHECK(submit_attempts == commands && perform_attempts == targets + 2);
+    CHECK(Near(Decode(cfg.yaw).torque, 0) && Decode(cfg.yaw).kp == 0 && Decode(cfg.yaw).kd == 0);
+    CHECK(motor.RequestEnabled(false));
+    Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == commands && perform_attempts == targets + 2);
+    // 故障状态下仍补交安全目标，保持不发离散命令、不自动清错。
+    CHECK(motor.RequestEnabled(true)); Receive(cfg.yaw, 1, 0, 0);
+    CHECK(motor.SetTorque(2)); perform_ok = false;
+    CHECK(!motor.RequestEnabled(false)); Receive(cfg.yaw, 8, 0, 0);
+    const auto fault_commands = submit_attempts, fault_targets = perform_attempts;
+    perform_ok = true; Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == fault_commands && perform_attempts == fault_targets + 1);
+    CHECK(Near(Decode(cfg.yaw).torque, 0));
+}
+static void TestDmCommandRetry()
+{
+    static Class_DMMotor motor;
+    cfg = Gimbal_Default_Config();
+    CHECK(motor.Init(cfg.yaw.bus, cfg.yaw.id, cfg.yaw.feedback_id, Enum_DMMotor_Mode::MIT, false,
+                    cfg.yaw.position_max, cfg.yaw.velocity_max, cfg.yaw.torque_max));
+    submit_ok = false;
+    CHECK(!motor.RequestEnabled(false));
+    CHECK(submit_attempts == 1 && perform_attempts == 1);
+    for (int i = 0; i < 1000; ++i) CHECK(!motor.RequestEnabled(false));
+    CHECK(submit_attempts == 1 && perform_attempts == 1);
+    submit_ok = true;
+    Class_DMMotor::ServiceAll(); CHECK(submit_attempts == 1); // 从未收到反馈。
+    Receive(cfg.yaw, 8, 0, 0);
+    Class_DMMotor::ServiceAll(); CHECK(submit_attempts == 1); // fault 不追加命令。
+    Receive(cfg.yaw, 0, 0, 0);
+    Class_DMMotor::ServiceAll(); // 即使反馈已失能，也补交尚未被软件 FIFO 接受的请求。
+    CHECK(submit_attempts == 2 && perform_attempts == 1 && discrete.back().data[7] == 0xfd);
+    CHECK(motor.RequestEnabled(false));
+    Class_DMMotor::ServiceAll(); CHECK(submit_attempts == 2);
+    // Enable 失败也独立记录，不因反馈一致而遗失提交结果。
+    submit_ok = false;
+    CHECK(!motor.RequestEnabled(true)); Receive(cfg.yaw, 1, 0, 0);
+    const auto before = submit_attempts;
+    CHECK(!motor.RequestEnabled(true));
+    submit_ok = true; Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == before + 1 && discrete.back().data[7] == 0xfc);
+    CHECK(motor.RequestEnabled(true));
+    // 新请求替换旧的待提交状态，不能在重新使能后补发过时 Disable 或安全目标。
+    perform_ok = false; submit_ok = false;
+    CHECK(!motor.RequestEnabled(false));
+    perform_ok = true; submit_ok = true;
+    CHECK(motor.RequestEnabled(true)); CHECK(motor.SetTorque(2));
+    const auto switched_commands = submit_attempts, switched_targets = perform_attempts;
+    Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == switched_commands && perform_attempts == switched_targets);
+    CHECK(Near(Decode(cfg.yaw).torque, 2));
+    // 未就绪时安全目标发布失败，恢复 ready 后不覆盖新正常目标。
+    Receive(cfg.yaw, 0, 0, 0); perform_ok = false;
+    Class_DMMotor::ServiceAll(); CHECK(!motor.RequestEnabled(true));
+    Receive(cfg.yaw, 1, 0, 0); perform_ok = true; CHECK(motor.SetTorque(2));
+    const auto ready_commands = submit_attempts, ready_targets = perform_attempts;
+    Class_DMMotor::ServiceAll();
+    CHECK(submit_attempts == ready_commands && perform_attempts == ready_targets);
+    CHECK(motor.RequestEnabled(true) && Near(Decode(cfg.yaw).torque, 2));
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -549,7 +658,9 @@ int main(int argc, char **argv)
         cfg = Gimbal_Default_Config(); registration_limit = 1;
         CHECK(!Gimbal_Init(cfg)); Tick();
         CHECK(Gimbal_GetStatus() == Gimbal_Status_CONFIG_ERROR);
-        CHECK(discrete.empty() && periodic.empty());
+        CHECK(discrete.size() == 1 && periodic.size() == 1);
+        CHECK(discrete.back().id == cfg.yaw.id && discrete.back().data[7] == 0xfd);
+        CHECK(Near(Decode(cfg.yaw).torque, 0));
     }
     else if (!std::strcmp(argv[1], "stable_requests")) TestStableRequests();
     else if (!std::strcmp(argv[1], "control")) TestControl();
@@ -567,6 +678,9 @@ int main(int argc, char **argv)
     else if (!std::strcmp(argv[1], "dm_edges")) TestDmEdges();
     else if (!std::strcmp(argv[1], "dm_request_failures")) TestDmRequestFailures();
     else if (!std::strcmp(argv[1], "dm_safe_setters")) TestDmSafeSetters();
+    else if (!std::strcmp(argv[1], "dm_first_false")) TestDmFirstFalse();
+    else if (!std::strcmp(argv[1], "dm_safe_retry")) TestDmSafeRetry();
+    else if (!std::strcmp(argv[1], "dm_command_retry")) TestDmCommandRetry();
     else if (!std::strcmp(argv[1], "defaults"))
     {
         Init(false); Activate(); command.yaw_angle_rad = 2; Publish(); Tick();
