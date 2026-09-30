@@ -13,6 +13,7 @@
 
 #include "alg_pid.h"
 #include "bsp_can.h"
+#include "daemon.h"
 
 #include <stdint.h>
 
@@ -51,7 +52,7 @@ enum class Enum_DJIMotor_Feedback : uint8_t
 
 /**
  * @brief 电机配置；外部反馈和前馈仅保存指针，所指变量须在使用期间有效。
- * @note Init 成功后默认使能，收到有效反馈后才允许计算非零指令。
+ * @note Init 成功后默认禁止输出；请求使能并收到新鲜反馈后才计算非零指令。
  */
 struct Struct_DJIMotor_Init_Config
 {
@@ -64,7 +65,7 @@ struct Struct_DJIMotor_Init_Config
     PID_InitTypeDef speed_pid; // 速度闭环，内置反馈为输出侧 rad/s
     PID_InitTypeDef angle_pid; // 角度闭环，内置反馈为输出侧累计 rad
     Enum_DJIMotor_Control_Mode control_mode = Enum_DJIMotor_Control_Mode::CURRENT;
-    float gear_ratio = 0.0f; // 转子/输出轴传动比；非正数或无效值使用型号默认值
+    float gear_ratio = 0.0f; // 转子/输出轴传动比；非正数使用型号默认值。motor_type 不决定实际机械减速比，直驱 M3508 显式设 1。
     uint32_t feedback_timeout_ms = 20; // 反馈超时阈值，须大于 0；Control/Send 检查时清零超时指令
     bool reverse = false; // 同时反转内置运动反馈和输出指令，current_raw 保留报文符号
     Enum_DJIMotor_Feedback angle_feedback = Enum_DJIMotor_Feedback::MOTOR;
@@ -119,6 +120,17 @@ struct Struct_DJIMotor_Feedback
     Struct_DJIMotor_PID_Feedback pid;
 };
 
+/** CAN 中断写入的运动反馈与在线标志在一次短临界区内读取。 */
+struct Struct_DJIMotor_Motion_Snapshot
+{
+    float output_total_angle = 0.0f;
+    float output_speed = 0.0f;
+    uint64_t timestamp_us = 0U;
+    bool online = false;
+    bool requested_enabled = false;
+    bool ready = false;
+};
+
 class Class_DJIMotor
 {
 public:
@@ -128,22 +140,24 @@ public:
     // 仅用于角度/速度目标：deg 或 deg/s；函数无条件转换为弧度制。
     void SetRef_Degree(float ref);
     void Control();
+    bool RequestEnabled(bool enabled);
     void Enable();
     bool Disable();
     void Set_Outer_Loop(Enum_DJIMotor_Loop loop);
     bool Set_Feedback_Source(Enum_DJIMotor_Loop loop, Enum_DJIMotor_Feedback source,
                              const float *feedback = nullptr);
-    bool IsOnline();      ///< 反馈未超过超时门限。
+    bool IsOnline();      ///< 微秒级即时反馈新鲜度，不依赖 StatusTask。
     bool IsEnabled() const; ///< 驱动已初始化且本地输出开关已使能。
     bool IsDataValid();   ///< 驱动已初始化且反馈在线。
     bool IsHealthy();     ///< Enabled 与 DataValid 同时成立。
     uint64_t Get_Last_Feedback_Timestamp_Us() const;
+    Struct_DJIMotor_Motion_Snapshot GetMotionSnapshot() const;
+    const Daemon &GetDaemon() const; ///< 只读链路诊断，不替代控制快照。
 
     // 接收中断更新运动反馈，Control 更新 PID 状态；整个结构不是原子快照。
     Struct_DJIMotor_Feedback feedback;
     // 32 位 MCU 跨上下文读取时使用 Get_Last_Feedback_Timestamp_Us()。
     volatile uint64_t last_feedback_timestamp_us = 0;
-    volatile bool online = false; // 有效反馈置位，Control/Send 检查超时后清除
 
     Class_PID current_pid;
     Class_PID speed_pid;
@@ -178,9 +192,10 @@ protected:
     uint64_t feedback_timeout_us = 20000;
     bool has_temperature = false;
     bool reverse = false;
-    bool enabled = false;
+    bool requested_enabled = false;
     bool initialized = false;
     bool feedback_initialized = false;
+    Daemon feedback_daemon{20U}; ///< Init 按 feedback_timeout_ms 配置，合法反馈才 Feed。
     uint16_t last_encoder = 0;
     int32_t total_round = 0;
 };
@@ -218,6 +233,7 @@ public:
                         float ref4 = 0.0f);
     void Control();
     bool Send();
+    bool RequestEnabled(bool enabled);
     void Enable();
     bool Disable();
 

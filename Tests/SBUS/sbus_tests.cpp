@@ -101,9 +101,9 @@ void TestDecodeAndLinkState()
     assert(result.channel_17 == 1U && result.channel_18 == 1U);
     assert(result.sequence == 1U && result.timestamp_ms == 10U);
     assert(SBUS_IsOnline() && SBUS_IsDataValid() && SBUS_IsHealthy());
-    tick_ms = 110U;
+    tick_ms = 109U;
     assert(SBUS_IsOnline());
-    tick_ms = 111U;
+    tick_ms = 110U;
     assert(!SBUS_IsOnline() && !SBUS_IsHealthy());
 }
 
@@ -187,6 +187,7 @@ void TestFlagsAndDroppedByteRecovery()
 }
 
 extern "C" uint32_t HAL_GetTick(void) { return tick_ms; }
+extern "C" uint64_t SYS_Timestamp_Get_Microsecond(void) { return static_cast<uint64_t>(tick_ms) * 1000; }
 extern "C" uint32_t __get_PRIMASK(void) { return 0U; }
 extern "C" void __disable_irq(void) {}
 extern "C" void __set_PRIMASK(uint32_t) {}

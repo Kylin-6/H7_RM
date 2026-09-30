@@ -7,9 +7,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(sbus_tests
     sbus_tests.cpp
     ../../User_File/Device/Peripheral/Remote/sbus.cpp
+    ../../User_File/System/Daemon/daemon.cpp
 )
 
 target_include_directories(sbus_tests PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../../User_File/System/Daemon
     ${CMAKE_CURRENT_LIST_DIR}
     ${CMAKE_CURRENT_LIST_DIR}/../../User_File/Device/Peripheral/Remote
 )

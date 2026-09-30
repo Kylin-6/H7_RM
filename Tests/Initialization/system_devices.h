@@ -1,5 +1,6 @@
 #pragma once
 extern bool test_imu_ready, test_flash_ready, test_adc_ready;
+extern bool test_ins_registration;
 enum { HAL_OK, HAL_ERROR };
 extern int test_tim4_status, test_tim5_status;
 extern unsigned test_fifo_starts, test_other_inits;
@@ -27,7 +28,7 @@ inline void UART_Init(void *, void *) {}
 inline void SPI_Init(void *, void (*)()) {}
 inline void OSPI_Init(void *, void (*)(), void (*)(), void (*)()) {}
 inline bool ADC_Init(void *, int) { return test_adc_ready; }
-inline void System_IMU_Configure() {}
+inline bool System_IMU_Configure() { return test_ins_registration; }
 inline void SPI2_Callback() {}
 inline void OSPI2_Polling_Callback() {}
 inline void OSPI2_Rx_Callback() {}

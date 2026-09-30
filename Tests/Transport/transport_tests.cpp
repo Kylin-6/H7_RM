@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <cstring>
+#include "../Daemon/registry_full.h"
 
 #define CHECK(c) do { if (!(c)) { std::fprintf(stderr, "FAIL %d: %s\n", __LINE__, #c); std::exit(1); } } while (0)
 FDCAN_HandleTypeDef hfdcan3{3};
@@ -13,6 +15,7 @@ uint32_t test_primask;
 static uint64_t now_us;
 static CAN_RxCallback_t callback;
 static void *callback_context;
+static bool callback_ok=true;
 namespace MessageCenter { TestTopic<ChassisCmd> Chassis_Command_Topic; }
 namespace MessageCenter { TestTopic<ChassisFeedback> Chassis_Feedback_Topic; }
 static Struct_CAN_Tx_Msg sent{};
@@ -20,7 +23,7 @@ static unsigned sent_count;
 bool CAN_Tx_Perform(const Struct_CAN_Tx_Msg *message) { sent = *message; ++sent_count; return true; }
 extern "C" uint64_t SYS_Timestamp_Get_Microsecond(void) { return now_us; }
 bool BSP_CAN_RegisterCallback(uint32_t id, FDCAN_HandleTypeDef *bus, CAN_RxCallback_t cb, void *context)
-{ CHECK(id == 0x141 && bus == &hfdcan3); callback = cb; callback_context = context; return true; }
+{ CHECK(id == 0x141 && bus == &hfdcan3); if (!callback_ok) return false; callback = cb; callback_context = context; return true; }
 static void Receive(uint8_t seq, uint64_t rx_us, bool valid = true)
 {
     ChassisCmd cmd{};
@@ -32,12 +35,20 @@ static void Receive(uint8_t seq, uint64_t rx_us, bool valid = true)
     callback(&hfdcan3, 0x141, bytes, 8, callback_context);
 }
 static void PollAt(uint64_t time_us) { now_us = time_us; BoardTransport_Poll(); }
-int main()
+int main(int argc,char **argv)
 {
-    BoardTransport_Init();
+    if (argc>1) {
+        if (!std::strcmp(argv[1],"registry")) CHECK(FillTestDaemonRegistry());
+        else callback_ok=false;
+        CHECK(!BoardTransport_Init() && !BoardTransport_IsOnline());
+        if (callback) { Receive(1,1000); PollAt(1000); CHECK(MessageCenter::Chassis_Command_Topic.count==0); }
+        CHECK(sent_count==0); return 0;
+    }
+    CHECK(BoardTransport_Init()); CHECK(!BoardTransport_IsOnline());
     CHECK(callback);
     Receive(250, 1000); PollAt(1000);
     CHECK(MessageCenter::Chassis_Command_Topic.count == 1);
+    CHECK(BoardTransport_IsOnline());
     Receive(250, 2000); PollAt(2000);
     CHECK(MessageCenter::Chassis_Command_Topic.count == 1); // duplicate
     Receive(0, 3000); PollAt(3000);
@@ -91,5 +102,16 @@ int main()
     CHECK(sent_count == 1 && sent.id == 0x222 && sent.len == 8);
     CHECK(TransportProtocol::DecodeChassisFeedback(sent.data, sent.len, decoded, fb_seq));
     CHECK(decoded.velocity_x_m_s == 1.25f);
+    const auto count=MessageCenter::Chassis_Command_Topic.count;
+    const auto at=MessageCenter::Chassis_Command_Topic.at;
+    for (uint64_t ms=230; ms<=430; ms+=20) {
+        Receive(1,ms*1000); PollAt(ms*1000);
+        CHECK(BoardTransport_IsOnline() && MessageCenter::Chassis_Command_Topic.count==count);
+    }
+    CHECK(MessageCenter::Chassis_Command_Topic.at==at);
+    ChassisCmd stale{}; CHECK(!MessageCenter::Chassis_Command_Topic.ReadFresh(stale,100000));
+    Receive(1,500000,false); PollAt(500000);
+    PollAt(531000); CHECK(!BoardTransport_IsOnline());
+    CHECK(BoardTransport_OfflineDurationMs()==1);
     std::puts("PASS transport command sequence and age");
 }

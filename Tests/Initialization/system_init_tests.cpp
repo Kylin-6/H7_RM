@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 bool test_imu_ready, test_flash_ready, test_adc_ready;
+bool test_ins_registration=true;
 int test_tim4_status, test_tim5_status;
 unsigned test_fifo_starts, test_other_inits;
 TestIMU BSP_BMI088;
@@ -41,5 +42,9 @@ int main()
         printf("PASS startup with injected mask %u\n", failures);
         if (failures == 0) break;
     }
+    test_ins_registration=false; test_fifo_starts=0; System_Init();
+    if (System_Init_GetState()!=SYSTEM_INIT_DEGRADED ||
+        System_Init_GetFailureMask()!=SYSTEM_INIT_FAILURE_BMI088 || test_fifo_starts!=0) return 1;
+    puts("PASS INS monitor registration failure keeps acquisition disabled");
     return 0;
 }

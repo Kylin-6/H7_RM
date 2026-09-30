@@ -1,7 +1,6 @@
 #include "Init.h"
 #include "board_config.h"
 
-#include "Com.h"
 #include "SEGGER_SYSVIEW.h"
 #include "bsp_adc.h"
 #include "bsp_bmi088.h"
@@ -102,8 +101,7 @@ extern "C" void System_Init(void)
     bool bmi088_initialized = false;
     if (hardware.imu)
     {
-        System_IMU_Configure();
-        bmi088_initialized = BSP_BMI088.Init();
+        bmi088_initialized = System_IMU_Configure() && BSP_BMI088.Init();
         if (!bmi088_initialized)
         {
             System_Init_RecordFailure(SYSTEM_INIT_FAILURE_BMI088,

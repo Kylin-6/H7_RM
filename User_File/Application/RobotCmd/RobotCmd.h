@@ -8,17 +8,16 @@
 bool RobotCmd_Init(Output<GimbalCmd> gimbal_output,
                    Output<ChassisCmd> chassis_output,
                    Output<ShootCmd> shoot_output);
-/** 周期读取模块反馈；底盘命令每 10 ms 刷新。 */
+/** 解析输入并发布命令；底盘命令每 10 ms 刷新。 */
 void RobotCmd_Update(void);
-
-/** 以下接口由遥控器、视觉或上层状态机更新对应应用目标。 */
+/** 设置接口应由 ControlTask 上下文调用；缓存/dirty 标志无同步保护，不可从 ISR/UART 回调并发调用。 */
 void RobotCmd_SetGimbal(const GimbalCmd &command);
 void RobotCmd_SetChassis(const ChassisCmd &command);
 void RobotCmd_SetShoot(const ShootCmd &command);
 /** 将一次性射击动作压入固定容量 FIFO；队列已满时返回 false。 */
 bool RobotCmd_PushShootEvent(const ShootEvent &event);
 
-/** 返回 false 表示对应应用尚未发布过有效反馈，输出对象保持不变。 */
+/** 最近 100 ms 内无对应应用反馈时返回 false，输出对象保持不变；可从任务读取。 */
 bool RobotCmd_GetGimbalFeedback(GimbalFeedback &feedback);
 bool RobotCmd_GetChassisFeedback(ChassisFeedback &feedback);
 bool RobotCmd_GetShootFeedback(ShootFeedback &feedback);
