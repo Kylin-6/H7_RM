@@ -1,4 +1,3 @@
-#include "Gimbal.h"
 #include "bsp_bmi088.h"
 #include "user_task.h"
 
