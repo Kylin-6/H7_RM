@@ -239,53 +239,56 @@ template<uint32_t State_Dimension, uint32_t Input_Dimension, uint32_t Measuremen
 bool Class_Filter_EKF<State_Dimension, Input_Dimension, Measurement_Dimension>::TIM_Update_PeriodElapsedCallback()
 {
     // 计算Jacobi矩阵
-    Class_Matrix_f32 < Measurement_Dimension, State_Dimension > matrix_h_x = Function_Jacobian_H_X(Vector_X_Prior, D_T);
-    Class_Matrix_f32 < Measurement_Dimension, Measurement_Dimension > matrix_h_v = Function_Jacobian_H_V(Vector_X_Prior, D_T);
+    Class_Matrix_f32<Measurement_Dimension, State_Dimension> matrix_h_x = Function_Jacobian_H_X(Vector_X_Prior, D_T);
+    Class_Matrix_f32<Measurement_Dimension, Measurement_Dimension> matrix_h_v = Function_Jacobian_H_V(Vector_X_Prior, D_T);
+    Class_Matrix_f32<State_Dimension, Measurement_Dimension> matrix_h_x_t = matrix_h_x.Get_Transpose();
+    Class_Matrix_f32<Measurement_Dimension, Measurement_Dimension> matrix_r =
+        matrix_h_v * Matrix_R * matrix_h_v.Get_Transpose();
 
     // 计算Kalman增益矩阵
     bool success = false;
-    Class_Matrix_f32<State_Dimension, Measurement_Dimension> matrix_k =
-        Matrix_P_Prior * matrix_h_x.Get_Transpose() * (matrix_h_x * Matrix_P_Prior * matrix_h_x.Get_Transpose() + matrix_h_v * Matrix_R * matrix_h_v.Get_Transpose()).Get_Inverse(&success);
+    Class_Matrix_f32<Measurement_Dimension, Measurement_Dimension> matrix_s_inverse =
+        (matrix_h_x * Matrix_P_Prior * matrix_h_x_t + matrix_r).Get_Inverse(&success);
     if (!success)
     {
         Matrix_K = Namespace_ALG_Matrix::Zero<State_Dimension, Measurement_Dimension>();
         return false;
+    }
+
+    Class_Matrix_f32<State_Dimension, Measurement_Dimension> matrix_k =
+        Matrix_P_Prior * matrix_h_x_t * matrix_s_inverse;
+    for (uint32_t i = 0; i < State_Dimension * Measurement_Dimension; i++)
+    {
+        if (!isfinite(matrix_k.Data[i]))
+        {
+            Matrix_K = Namespace_ALG_Matrix::Zero<State_Dimension, Measurement_Dimension>();
+            return false;
+        }
     }
 
     // 更新状态向量
     Class_Matrix_f32<State_Dimension, 1> vector_x =
         Vector_X_Prior + matrix_k * (Vector_Z - Function_H(Vector_X_Prior, D_T));
-
-    // 更新误差协方差矩阵, 为获得更好的数值稳定性, 采用约瑟夫形式
-    Class_Matrix_f32 < State_Dimension, State_Dimension > matrix_tmp = MATRIX_I_STATE - matrix_k * matrix_h_x;
-    Class_Matrix_f32<State_Dimension, State_Dimension> matrix_p =
-        matrix_tmp * Matrix_P_Prior * matrix_tmp.Get_Transpose() + matrix_k * matrix_h_v * Matrix_R * matrix_h_v.Get_Transpose() * matrix_k.Get_Transpose();
-
-    for (uint32_t i = 0; i < State_Dimension * Measurement_Dimension; i++)
-    {
-        if (!isfinite(matrix_k.Data[i]))
-        {
-            success = false;
-        }
-    }
     for (uint32_t i = 0; i < State_Dimension; i++)
     {
         if (!isfinite(vector_x.Data[i]))
         {
-            success = false;
+            Matrix_K = Namespace_ALG_Matrix::Zero<State_Dimension, Measurement_Dimension>();
+            return false;
         }
     }
+
+    // 更新误差协方差矩阵, 为获得更好的数值稳定性, 采用约瑟夫形式
+    Class_Matrix_f32<State_Dimension, State_Dimension> matrix_tmp = MATRIX_I_STATE - matrix_k * matrix_h_x;
+    Class_Matrix_f32<State_Dimension, State_Dimension> matrix_p =
+        matrix_tmp * Matrix_P_Prior * matrix_tmp.Get_Transpose() + matrix_k * matrix_r * matrix_k.Get_Transpose();
     for (uint32_t i = 0; i < State_Dimension * State_Dimension; i++)
     {
         if (!isfinite(matrix_p.Data[i]))
         {
-            success = false;
+            Matrix_K = Namespace_ALG_Matrix::Zero<State_Dimension, Measurement_Dimension>();
+            return false;
         }
-    }
-    if (!success)
-    {
-        Matrix_K = Namespace_ALG_Matrix::Zero<State_Dimension, Measurement_Dimension>();
-        return false;
     }
 
     Matrix_K = matrix_k;
