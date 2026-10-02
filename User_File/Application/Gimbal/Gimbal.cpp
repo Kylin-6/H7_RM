@@ -34,6 +34,7 @@ struct GimbalContext
     bool initialized = false;
     bool motor_registered = false;
     bool arming = false;
+    bool control_started = false;
     bool path_initialized = false;
     uint32_t arming_start_ms = 0U;
     float disturbance_torque_nm = 0.0f;
@@ -87,6 +88,7 @@ void Stop()
         (void) ctx.pitch_motor.RequestEnabled(false);
     }
     ctx.arming = false;
+    ctx.control_started = false;
     ctx.path_initialized = false;
     ctx.disturbance_torque_nm = 0.0f;
 }
@@ -97,7 +99,7 @@ bool ControlPermitted()
     return ctx.initialized && ctx.command.mode == GimbalMode::IMU &&
            std::isfinite(ctx.command.pitch_angle_rad) && ctx.ins_valid &&
            std::isfinite(ctx.ins.pitch_rad) && std::isfinite(ctx.ins.gyro_y_rad_s) &&
-           ctx.motor_snapshot.online && !ctx.motor_snapshot.fault;
+           !ctx.motor_snapshot.fault;
 }
 
 void Control()
@@ -237,7 +239,9 @@ void Gimbal_Update(void)
     const auto message = MessageCenter::Gimbal_Command_Topic.ReadWithMeta();
     ctx.command = message.valid ? message.data : GimbalCmd{};
     ctx.motor_snapshot = ctx.pitch_motor.GetFeedbackSnapshot();
-    if (!ControlPermitted())
+    // 启动时不能以电机在线作为发送 Enable 的前提：失能电机可能不主动反馈。
+    // 已进入闭环后丢失反馈仍立即停机，随后按同样的延迟重新请求使能。
+    if (!ControlPermitted() || (ctx.control_started && !ctx.motor_snapshot.online))
     {
         Stop();
     }
@@ -255,6 +259,7 @@ void Gimbal_Update(void)
             ctx.motor_snapshot = ctx.pitch_motor.GetFeedbackSnapshot();
             if (ctx.motor_snapshot.ready)
             {
+                ctx.control_started = true;
                 Control();
             }
             else
