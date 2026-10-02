@@ -376,20 +376,35 @@ float Clamp(float value, float minimum, float maximum)
 
 bool ConfigValid(const Struct_Gimbal_Config &c)
 {
-    const float nonnegative[] = {c.yaw_angle_kp, c.yaw_speed_kp, c.yaw_speed_ki,
-        c.yaw_speed_kd, c.yaw_integral_limit, c.pitch_kp, c.pitch_kd};
-    for (float value : nonnegative)
+    // PitchOnly 模式下 Yaw 配置不参与控制，只校验 Pitch 相关字段。
+    const bool dual = c.axis_mode == GimbalAxisMode::DualAxis;
+    if (dual)
+    {
+        const float yaw_nonnegative[] = {c.yaw_angle_kp, c.yaw_speed_kp, c.yaw_speed_ki,
+            c.yaw_speed_kd, c.yaw_integral_limit};
+        for (float value : yaw_nonnegative)
+        {
+            if (!std::isfinite(value) || value < 0) { return false; }
+        }
+        const float yaw_positive[] = {c.yaw_speed_limit, c.yaw_torque_limit};
+        for (float value : yaw_positive)
+        {
+            if (!std::isfinite(value) || value <= 0) { return false; }
+        }
+    }
+    const float pitch_nonnegative[] = {c.pitch_kp, c.pitch_kd};
+    for (float value : pitch_nonnegative)
     {
         if (!std::isfinite(value) || value < 0) { return false; }
     }
-    const float positive[] = {c.yaw_speed_limit, c.yaw_torque_limit,
-                              c.pitch_speed_limit, c.pitch_motor_per_imu};
-    for (float value : positive)
+    const float pitch_positive[] = {c.pitch_speed_limit, c.pitch_motor_per_imu};
+    for (float value : pitch_positive)
     {
         if (!std::isfinite(value) || value <= 0) { return false; }
     }
-    return !(c.yaw.bus == c.pitch.bus &&
-             (c.yaw.id == c.pitch.id || c.yaw.feedback_id == c.pitch.feedback_id)) &&
+    return (!dual ||
+            !(c.yaw.bus == c.pitch.bus &&
+              (c.yaw.id == c.pitch.id || c.yaw.feedback_id == c.pitch.feedback_id))) &&
            c.yaw_gyro_axis <= GimbalGyroAxis::Z && c.pitch_gyro_axis <= GimbalGyroAxis::Z &&
            (c.yaw_gyro_sign == 1 || c.yaw_gyro_sign == -1) &&
            (c.pitch_gyro_sign == 1 || c.pitch_gyro_sign == -1) &&
@@ -434,6 +449,17 @@ void Stop()
 
 void Control(const Struct_DMMotor_Snapshot &pitch)
 {
+    if (ctx.config.axis_mode == GimbalAxisMode::PitchOnly)
+    {
+        // 单轴模式：Yaw 由底盘板控制，本板只输出 Pitch MIT 目标。
+        const float position = pitch.feedback.position + ctx.config.pitch_motor_per_imu *
+                              (ctx.target_pitch_angle_rad - ctx.ins.pitch_rad);
+        const float velocity = pitch.feedback.velocity + ctx.config.pitch_motor_per_imu *
+                              (ctx.target_pitch_speed_rad_s - Gyro(ctx.config.pitch_gyro_axis, ctx.config.pitch_gyro_sign));
+        (void)ctx.pitch_motor.SetMIT(Clamp(position, ctx.config.pitch_min, ctx.config.pitch_max),
+            Clamp(velocity, -ctx.config.pitch_speed_limit, ctx.config.pitch_speed_limit), ctx.config.pitch_kp, ctx.config.pitch_kd, 0);
+        return;
+    }
     // Yaw 复用现有 PID：最短角误差生成角速度，再由速度环生成转矩。
     const float error = std::remainder(ctx.target_yaw_angle_rad - ctx.ins.yaw_rad, 2 * GIMBAL_PI);
     ctx.yaw_angle_pid.Set_Target(error);
@@ -481,9 +507,12 @@ bool Gimbal_Init(const Struct_Gimbal_Config &requested)
         return false;
     }
     ctx.config = requested;
-    ctx.yaw_registered = ctx.yaw_motor.Init(ctx.config.yaw.bus, ctx.config.yaw.id, ctx.config.yaw.feedback_id,
-        Enum_DMMotor_Mode::MIT, ctx.config.yaw.reverse, ctx.config.yaw.position_max,
-        ctx.config.yaw.velocity_max, ctx.config.yaw.torque_max);
+    // PitchOnly（单轴）模式不初始化 Yaw：老步兵双板分工下 Yaw 由底盘板主控。
+    ctx.yaw_registered =
+        ctx.config.axis_mode == GimbalAxisMode::DualAxis &&
+        ctx.yaw_motor.Init(ctx.config.yaw.bus, ctx.config.yaw.id, ctx.config.yaw.feedback_id,
+            Enum_DMMotor_Mode::MIT, ctx.config.yaw.reverse, ctx.config.yaw.position_max,
+            ctx.config.yaw.velocity_max, ctx.config.yaw.torque_max);
     ctx.pitch_registered = ctx.pitch_motor.Init(ctx.config.pitch.bus, ctx.config.pitch.id, ctx.config.pitch.feedback_id,
         Enum_DMMotor_Mode::MIT, ctx.config.pitch.reverse, ctx.config.pitch.position_max,
         ctx.config.pitch.velocity_max, ctx.config.pitch.torque_max);
@@ -499,12 +528,13 @@ Enum_Gimbal_Status Gimbal_GetStatus(void)
     // 状态由当前输入与电机快照推导，仅用于观察，不安排重试或驱动状态迁移。
     if (!ctx.initialized) { return Gimbal_Status_CONFIG_ERROR; }
     if (ctx.command.mode == GimbalMode::DISABLED) { return Gimbal_Status_DISABLE; }
-    if (!ctx.ins_valid || ctx.yaw_snapshot.fault || ctx.pitch_snapshot.fault)
+    const bool dual = ctx.config.axis_mode == GimbalAxisMode::DualAxis;
+    if (!ctx.ins_valid || ctx.pitch_snapshot.fault || (dual && ctx.yaw_snapshot.fault))
     {
         return Gimbal_Status_FAULT;
     }
-    return ctx.yaw_snapshot.ready && ctx.pitch_snapshot.ready
-        ? Gimbal_Status_READY : Gimbal_Status_ENABLING;
+    const bool ready = ctx.pitch_snapshot.ready && (!dual || ctx.yaw_snapshot.ready);
+    return ready ? Gimbal_Status_READY : Gimbal_Status_ENABLING;
 }
 #endif
 
@@ -528,7 +558,8 @@ static void PublishFeedback(void)
         }
         feedback.ins_valid = ctx.ins_valid;
 #if GIMBAL
-        feedback.enabled = ctx.yaw_snapshot.ready && ctx.pitch_snapshot.ready;
+        feedback.enabled = ctx.pitch_snapshot.ready &&
+            (ctx.config.axis_mode != GimbalAxisMode::DualAxis || ctx.yaw_snapshot.ready);
 #endif
         MessageCenter::Gimbal_Feedback_Topic.Publish(feedback);
     }
@@ -557,13 +588,14 @@ void Gimbal_Update(void)
     }
 
     // 每周期表达输出许可；驱动只处理请求边沿，重复使能不会覆盖正常周期目标。
-    (void)ctx.yaw_motor.RequestEnabled(true);
+    const bool dual = ctx.config.axis_mode == GimbalAxisMode::DualAxis;
+    if (dual) { (void)ctx.yaw_motor.RequestEnabled(true); }
     (void)ctx.pitch_motor.RequestEnabled(true);
     ctx.yaw_snapshot = ctx.yaw_motor.GetFeedbackSnapshot();
     ctx.pitch_snapshot = ctx.pitch_motor.GetFeedbackSnapshot();
-    if (!ctx.yaw_snapshot.ready || !ctx.pitch_snapshot.ready)
+    if (!ctx.pitch_snapshot.ready || (dual && !ctx.yaw_snapshot.ready))
     {
-        // 等待两轴反馈就绪；安全输出和低频协议纠正由 DMMotor 维护。
+        // 等待受控轴反馈就绪；安全输出和低频协议纠正由 DMMotor 维护。
         ctx.was_ready = false;
         PublishFeedback();
         return;

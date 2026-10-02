@@ -216,6 +216,7 @@ elseif(H7_BOARD STREQUAL "GimbalBoard")
         # 底盘板 0x065 转发接收接口。
         User_File/Application/Pitch/Pitch.cpp
         User_File/Device/Peripheral/IMU/DM_IMU/dvc_dm_imu.cpp
+        User_File/Device/Peripheral/IMU/DM_IMU/dm_imu_ins.cpp
         User_File/Device/Peripheral/ChassisBoard/chassis_board.cpp)
 else()
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE

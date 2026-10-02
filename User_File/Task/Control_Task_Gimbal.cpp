@@ -16,7 +16,9 @@
 #include "message_center.h"
 #include "output.h"
 #include "cmsis_os2.h"
-#if !LEGACY_INFANTRY_GIMBAL
+#if LEGACY_INFANTRY_GIMBAL
+#include "dm_imu_ins.h"
+#else
 #include "board_transport.h"
 #include "remote_publisher.h"
 #endif
@@ -48,6 +50,12 @@ extern "C" void Control_Task(void *)
         for (;;) osDelay(1000U);
     }
     (void)RemoteInput_Init();
+#if LEGACY_INFANTRY_GIMBAL
+    /* DM-IMU → INS_State_Topic 桥：云台板 BMI088 缺席，由 DM-IMU 提供统一姿态
+     * Topic。legacy 控制路径不消费该 Topic（Pitch 直读设备），此发布只改善
+     * 反馈/遥测并为框架 Gimbal 单轴模式提供 INS 来源。 */
+    (void)DM_IMU_InsBridge_Init();
+#endif
     Gimbal_Init();
     (void)Shoot_Init();
 
@@ -57,6 +65,7 @@ extern "C" void Control_Task(void *)
 #if LEGACY_INFANTRY_GIMBAL
         /* 输入适配先于 RobotCmd，保证本周期发布的命令来自本周期通道。 */
         RemoteInput_Update();
+        DM_IMU_InsBridge_Update();
 #else
         BoardTransport_Poll();
         RemoteInput_Update();

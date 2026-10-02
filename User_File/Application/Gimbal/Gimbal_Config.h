@@ -6,6 +6,10 @@
 
 enum class GimbalGyroAxis : uint8_t { X, Y, Z };
 
+/** 轴配置：DualAxis = 双轴都由本板控制；PitchOnly = 只有 Pitch 由本板控制
+ * （老步兵双板分工下 Yaw 由底盘板主控），Yaw 目标被忽略、Yaw 电机不初始化。 */
+enum class GimbalAxisMode : uint8_t { DualAxis, PitchOnly };
+
 struct Struct_Gimbal_Motor_Config
 {
     FDCAN_HandleTypeDef *bus = nullptr;
@@ -20,6 +24,7 @@ struct Struct_Gimbal_Motor_Config
 
 struct Struct_Gimbal_Config
 {
+    GimbalAxisMode axis_mode = GimbalAxisMode::DualAxis;
     Struct_Gimbal_Motor_Config yaw;
     Struct_Gimbal_Motor_Config pitch;
     GimbalGyroAxis yaw_gyro_axis = GimbalGyroAxis::Z;
