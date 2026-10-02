@@ -10,6 +10,51 @@ enum class GimbalGyroAxis : uint8_t { X, Y, Z };
  * （老步兵双板分工下 Yaw 由底盘板主控），Yaw 目标被忽略、Yaw 电机不初始化。 */
 enum class GimbalAxisMode : uint8_t { DualAxis, PitchOnly };
 
+/** Pitch 控制结构：MotorMit = 目标换算后由电机端 MIT kp/kd 闭环（框架默认）；
+ * ImuTorque = IMU 角度外环 PID + 前馈/阻尼/摩擦补偿，纯力矩 t_ff 下发
+ * （老步兵云台板低摩擦机构的实测控制结构）。 */
+enum class GimbalPitchControl : uint8_t { MotorMit, ImuTorque };
+
+/**
+ * ImuTorque 模式参数。默认值取老步兵云台板 `Application/Pitch` 的实测标定，
+ * 摩擦/扰动参数依赖具体机构，换机构必须重新标定。
+ */
+struct Struct_Gimbal_PitchTorque_Config
+{
+    /** IMU 外环位置刚度，N·m/rad。 */
+    float position_kp = 0.42f;
+    /** 目标斜坡限速，rad/s（Class_Slope）。 */
+    float target_rate_rad_s = 3.0f;
+    /** 目标速度前馈：正 / 负方向增益不对称，N·m·s/rad。 */
+    float ff_velocity_positive = 0.012f;
+    float ff_velocity_negative = 0.018f;
+    /** IMU 角速度阻尼系数，N·m·s/rad。 */
+    float imu_velocity_damping = 0.043f;
+    /** IMU 角速度低通时间常数，s（Class_Filter_IIR_First_Order）。 */
+    float imu_velocity_filter_tau_s = 0.010f;
+    /** Stribeck 摩擦：静摩擦 / 库仑摩擦力矩（正负方向不对称），N·m。 */
+    float static_friction_positive_nm = 0.038f;
+    float static_friction_negative_nm = 0.040f;
+    float coulomb_friction_positive_nm = 0.015f;
+    float coulomb_friction_negative_nm = 0.020f;
+    /** 静摩擦→库仑过渡特征速度，rad/s；误差→补偿方向增益，1/s；tanh 平滑速度，rad/s。 */
+    float stribeck_velocity_rad_s = 0.100f;
+    float stribeck_error_gain = 3.0f;
+    float stribeck_smooth_rad_s = 0.080f;
+    /** 低带宽扰动估计（静止时学习重力/负载）：积分增益、限幅、学习窗口、衰减。 */
+    float disturbance_integral_gain = 0.40f;
+    float disturbance_max_nm = 0.030f;
+    float disturbance_target_speed_rad_s = 0.10f;
+    float disturbance_actual_speed_rad_s = 0.10f;
+    float disturbance_decay_tau_s = 0.20f;
+    /** 输出力矩总限幅，N·m。 */
+    float torque_limit_nm = 0.5f;
+    /** 力矩符号：电机正方向与 IMU Pitch 正方向相反时为 -1。 */
+    float torque_sign = 1.0f;
+    /** 每次使能前（含恢复）延迟下发使能的时间，ms；期间不发 MIT 指令。 */
+    uint32_t enable_delay_ms = 2000U;
+};
+
 struct Struct_Gimbal_Motor_Config
 {
     FDCAN_HandleTypeDef *bus = nullptr;
@@ -25,6 +70,9 @@ struct Struct_Gimbal_Motor_Config
 struct Struct_Gimbal_Config
 {
     GimbalAxisMode axis_mode = GimbalAxisMode::DualAxis;
+    GimbalPitchControl pitch_control = GimbalPitchControl::MotorMit;
+    /** ImuTorque 模式专用参数；MotorMit 模式忽略。 */
+    Struct_Gimbal_PitchTorque_Config pitch_torque;
     Struct_Gimbal_Motor_Config yaw;
     Struct_Gimbal_Motor_Config pitch;
     GimbalGyroAxis yaw_gyro_axis = GimbalGyroAxis::Z;

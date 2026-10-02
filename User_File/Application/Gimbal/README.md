@@ -36,6 +36,23 @@ QD4310 驱动仍作为独立设备保留，云台不再依赖它。SingleBoard �
 
 `GimbalCmd` 的角度是 INS 姿态 rad，速度是姿态角速度前馈 rad/s。
 
+### Pitch 控制结构（`GimbalPitchControl`）
+
+- `MotorMit`（默认）：目标按 `pitch_motor_per_imu` 换算到电机坐标，由电机端
+  MIT kp/kd 闭环。IMU 只参与目标换算。
+- `ImuTorque`：IMU 角度外环 PID + 目标速度前馈 + IMU 角速度阻尼 + 连续
+  Stribeck 摩擦补偿 + 低带宽扰动估计，纯力矩经 MIT `t_ff` 下发（电机侧
+  kp/kd 为 0）。控制律迁移自老步兵云台板 `Application/Pitch`，公式与
+  计算顺序一致（host 对拍：`build/tmp/host_duibi/`，200k 随机输入逐位一致）。
+  组件复用：目标斜坡 `Class_Slope`、位置环 `Class_PID`、角速度低通
+  `Class_Filter_IIR_First_Order`、轴向映射复用 `pitch_gyro_axis/sign`。
+  与 legacy 的两点分层差异：角速度改用传感器原生陀螺仪帧（INS gyro）替代
+  差分估计，摩擦/阻尼参数换源后须实机复验；使能延迟只延迟 MIT 力矩输出，
+  使能帧由 `RequestEnabled` 边沿先行下发。手写 S 曲线路径（调试用
+  `Pitch_SetTargetAngle`）没有框架输入映射，不迁移。
+- 单轴（`GimbalAxisMode::PitchOnly`）与两种 Pitch 控制结构正交组合：
+  老步兵双板分工 = PitchOnly + ImuTorque + DM-IMU（经 INS 桥发布）。
+
 - Yaw：最短路径角误差 → 角度比例环 → 叠加速度前馈并限幅 → 速度 PID → 转矩限幅 → `SetTorque()`。
 - Pitch：`p_ref = p_motor + ratio * (pitch_ref - pitch_imu)`；
   `v_ref = v_motor + ratio * (pitch_speed_ref - gyro_pitch)`。
