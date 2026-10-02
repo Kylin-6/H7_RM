@@ -37,7 +37,7 @@ Application 不应：
 | 模块 | 职责 | 拥有/调用的主要对象 |
 | --- | --- | --- |
 | `RobotCmd` | 命令唯一所有者和发布者；输入互锁失效时立即发布安全目标 | Output、ShootEvent FIFO、反馈 Topic getter |
-| `Gimbal` | 云台模式、目标角/速度、达妙控制和反馈 | 两轴 Class_DMMotor、Yaw PID、INS Topic |
+| `Gimbal` | 云台模式、目标角/速度、达妙控制和反馈 | 单 Pitch Class_DMMotor、IMU 力矩外环、INS Topic |
 | `Chassis` | 四舵轮运动学、最短转向和电机目标 | 8 个 DJI 电机及电机组 |
 | `Shoot` | 摩擦轮、拨弹连续模式和离散射击动作 | 3 个 DJI 电机、ShootEvent FIFO |
 | `Input` | UART5 S.BUS 适配、固定来源输入状态与仲裁 | RemoteInput、InputState |
@@ -62,8 +62,8 @@ Message Center，云台板的底盘命令通过 `RemotePublisher` 进入固定 C
 ```text
 SingleBoard: RobotCmd_Init → RemoteInput_Init → Gimbal_Init(启用时) → Chassis_Init → Shoot_Init
              RemoteInput_Update → RobotCmd_Update → Gimbal_Update → Chassis_Update → Shoot_Update
-GimbalBoard: BoardTransport_Init → RobotCmd_Init → RemoteInput_Init → Gimbal_Init → Shoot_Init
-             BoardTransport_Poll → RemoteInput_Update → RobotCmd_Update → Gimbal_Update → Shoot_Update
+GimbalBoard（老步兵）: RobotCmd_Init → RemoteInput_Init → DM_IMU_InsBridge_Init → Gimbal_Init → Shoot_Init
+                     RemoteInput_Update → DM_IMU_InsBridge_Update → RobotCmd_Update → Gimbal_Update → Shoot_Update
 ChassisBoard: BoardTransport_Init → Chassis_Init
               BoardTransport_Poll → Chassis_Update
 ```
@@ -125,35 +125,13 @@ false，并保持调用者输出不变。RobotCmd 不再维护应用反馈的二
 
 ## 5. Gimbal
 
-### 5.1 数据输入
+本分支云台按老步兵单 Pitch 机构收敛，Yaw 属于底盘板。独立 Pitch 模块与双轴例程已移除。
+Gimbal 接收统一命令与 INS Topic，在私有 Context 内执行 IMU 外环并下发 MIT 纯力矩。
+`IMU` 允许输出，`LOCK` / `DISABLED` 均保持失能；健康恢复在协议使能前重新等待 2 s。
+INS 桥仅发布新欧拉角帧，避免失联后重复刷新 Topic 的时效。
 
-- `INS_State_Topic`：Yaw/Pitch/Roll 和机体系角速度。
-- `Gimbal_Command_Topic`：目标角、前馈角速度和模式。
-
-### 5.2 模式
-
-| 模式 | 行为 |
-| --- | --- |
-| `DISABLED` | 关闭 Yaw/Pitch 输出 |
-| `IMU` | 使用命令目标与 INS 状态执行闭环 |
-| `LOCK` | 捕获并保持当前姿态，忽略命令目标字段 |
-
-Yaw 使用 INS 角度/速度串级闭环，通过达妙 MIT 纯转矩指令输出 N·m；Pitch 将 INS
-姿态误差转换为 MIT 电机位置/速度目标，并限制机械范围。两轴预先配置为 MIT 模式。
-
-初始化只校验云台机构关系和控制参数并注册驱动；设备参数由 DMMotor 初始化校验。Gimbal 不维护
-就绪超时、退避、稳定窗口或 CAN 软件槽失败状态；电机协议在请求边沿立即提交，并由 DMMotor 的 100 Hz 服务依据在线反馈纠正。离线期间不追加离散命令，已进入 FDCAN 硬件 FIFO 的帧由硬件自动重发。恢复后重置控制器
-并捕获当前姿态，IMU 模式等待新目标，避免旧目标重放；DISABLED 或故障时调用
-`RequestEnabled(false)`，由电机立即覆盖安全输出并维护失能命令。
-
-配置集中在 [Gimbal_Config.h](Gimbal/Gimbal_Config.h)。默认关闭云台编译选项；Yaw 转矩环
-增益全零，Pitch 增益和限位来自参考机构示例，均须实机标定。完整公式、参数来源、
-状态语义和测试见 [双达妙云台说明](Gimbal/README.md)。
-
-### 5.3 反馈
-
-控制每 1 ms 更新，`GimbalFeedback` 每 10 个周期发布一次，包含姿态、角速度、INS
-有效性和两轴电机的 `ready` 汇总；`Gimbal_GetStatus()` 根据当前事实提供诊断状态。
+参数、差分角速度来源、模式及恢复契约统一维护于 [单 Pitch 云台说明](Gimbal/README.md)。
+反馈按 100 Hz 发布，`enabled` 仅反映本板 Pitch 电机的当前许可与 ready 状态。
 
 ## 6. Chassis
 
@@ -186,6 +164,11 @@ Yaw 使用 INS 角度/速度串级闭环，通过达妙 MIT 纯转矩指令输�
 
 ## 7. Shoot
 
+老步兵板型使用 DM3519 摩擦轮和 M2006 拨弹盘，共用框架命令/事件/反馈入口；
+机构状态机、卡弹与热量参数见 [老步兵发射说明](Shoot/README.md)。下文 DJI 摩擦轮参数
+仅适用于其他板型，不能套用到老步兵。
+
+
 发射控制分为连续状态和离散事件。
 
 ### 7.1 ShootCmd
@@ -211,7 +194,7 @@ STOP 模式每周期最多消费一个事件：首次事件从当前反馈角建
 目标上累加 1 或 3 个弹位。BURST/REVERSE 取消事件角度保持；OFF 禁用输出并排空当前
 队列，避免重新使能后补射。`ShootFeedback.enabled` 表示三个电机均 ready 且总开关为 ON。
 每次成功 Push 只代表一个逻辑动作请求；事件按目标角累加，不等待前一发物理完成。
-当前没有摩擦轮就绪、卡弹检测/回退、热量限制、裁判系统互锁或完整 FEEDING 状态机。
+上述 DJI 例程没有摩擦轮就绪、卡弹回退或热量限制；老步兵路径保留这些机构逻辑，见发射说明。
 
 调用者必须检查 `RobotCmd_PushShootEvent()` 返回值。返回 false 表示队列已满，本次动作
 没有被接受。
@@ -264,7 +247,7 @@ void Example_Update(void);
 ### Gimbal
 
 - FDCAN 总线、节点 ID、机械范围和方向。
-- 两轴达妙 MIT 模式与协议量程、Yaw 转矩 PID、Pitch MIT 增益及限位。
+- 单 Pitch 达妙 MIT 模式、协议量程、力矩方向、目标限位与 2 s 使能延迟。
 - INS 坐标系、角度符号和零位。
 
 ### Chassis

@@ -23,6 +23,9 @@ struct ControlInput
     ChassisCmd chassis{};
     GimbalCmd gimbal{};
     ShootCmd shoot{};
+    // 单发/三连发为离散动作；序号在来源内递增，重复读取不重复射击。
+    ShootEvent shoot_event{};
+    uint32_t shoot_event_sequence = 0U;
     uint32_t received_ms = 0U;
     bool valid = false;
 };

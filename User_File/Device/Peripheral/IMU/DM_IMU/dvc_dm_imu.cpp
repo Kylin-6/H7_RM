@@ -177,6 +177,18 @@ extern "C" bool DM_IMU_GetPitch(float *pitch_deg)
            (HAL_GetTick() - dm_imu_last_rx_ms) <= kPitchTimeoutMs;
 }
 
+extern "C" Struct_DM_IMU_Euler_Snapshot DM_IMU_GetEulerSnapshot(void)
+{
+    const uint32_t interrupt_state = __get_PRIMASK();
+    __disable_irq();
+    __DMB();
+    const Struct_DM_IMU_Euler_Snapshot snapshot{dm_imu_pitch_deg, dm_imu_yaw_deg,
+                                                dm_imu_roll_deg, dm_imu_pitch_sequence, dm_imu_last_rx_ms, dm_imu_pitch_valid};
+    __DMB();
+    __set_PRIMASK(interrupt_state);
+    return snapshot;
+}
+
 extern "C" bool DM_IMU_GetPitchSample(float *pitch_deg, uint32_t *sequence)
 {
     if (pitch_deg == nullptr || sequence == nullptr)

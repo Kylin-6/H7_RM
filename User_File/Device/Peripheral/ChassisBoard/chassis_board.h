@@ -31,6 +31,15 @@
 /** 通道数据有效期，单位 ms；超过后视为链路失效。 */
 #define CHASSIS_BOARD_CHANNEL_TIMEOUT_MS (100U)
 
+/** 同一 0x065 帧的完整通道快照；时间戳为接收时间，单位 ms。 */
+struct Struct_ChassisBoard_Channels
+{
+    int16_t fire = 0;
+    int16_t dial = 0;
+    int16_t pitch = 0;
+    uint32_t timestamp_ms = 0U;
+};
+
 class Class_ChassisBoard
 {
 public:
@@ -48,6 +57,8 @@ public:
      * @return true 表示存在 100 ms 内的有效数据。
      */
     bool GetFire(int16_t *value);
+    /** 原子读取同一帧的三个通道；过期时不修改输出，恢复原中断屏蔽状态。 */
+    bool ReadChannels(Struct_ChassisBoard_Channels &channels) const;
     /** @brief 读取拨弹盘（波轮）速度通道，语义同 GetFire。 */
     bool GetDial(int16_t *value);
     /** @brief 读取 Pitch 轴通道，语义同 GetFire。 */

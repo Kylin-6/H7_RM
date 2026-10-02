@@ -30,7 +30,15 @@ static bool Chassis_Command_Dirty;
 static bool Input_Armed;
 static uint8_t RobotCmd_Chassis_Publish_Divider;
 static InputSource Last_Input_Source;
+static uint32_t Last_Shoot_Event_Sequence;
 static void RobotCmd_SetInputArmed(bool armed);
+
+static void RobotCmd_DiscardShootEvents()
+{
+    ShootEvent discarded{};
+    size_t pending = MessageCenter::Shoot_Event_Queue.Size();
+    while (pending-- > 0U && MessageCenter::Shoot_Event_Queue.Pop(discarded)) {}
+}
 
 static bool GimbalChanged(const GimbalCmd &next)
 {
@@ -77,12 +85,14 @@ bool RobotCmd_Init(Output<GimbalCmd> gimbal_output,
     Input_Armed = true;
     RobotCmd_Chassis_Publish_Divider = 0U;
     Last_Input_Source = InputSource::Remote;
+    Last_Shoot_Event_Sequence = 0U;
     return true;
 }
 
 void RobotCmd_Update(void)
 {
-    const InputDecision decision = SourceArbitration_Resolve(InputState_Read());
+    const InputState input = InputState_Read();
+    const InputDecision decision = SourceArbitration_Resolve(input);
     const bool source_changed = decision.source != Last_Input_Source;
     RobotCmd_SetInputArmed(decision.armed);
     if (decision.armed)
@@ -90,18 +100,30 @@ void RobotCmd_Update(void)
         if (source_changed)
         {
             Chassis_Command_Dirty = true;
-            ShootEvent discarded{};
-            while (MessageCenter::Shoot_Event_Queue.Pop(discarded)) {}
+            RobotCmd_DiscardShootEvents();
         }
         if (GimbalChanged(decision.gimbal))
         {
             RobotCmd_SetGimbal(decision.gimbal);
         }
         RobotCmd_SetChassis(decision.chassis);
+        if (!source_changed && decision.shoot.shoot_mode == ShootMode::ON &&
+            decision.shoot_event_sequence != Last_Shoot_Event_Sequence)
+        {
+            // 队列满时拒绝该动作并由 OverflowCount 记录；不延迟补射。
+            (void) RobotCmd_PushShootEvent(decision.shoot_event);
+        }
+        Last_Shoot_Event_Sequence = decision.shoot_event_sequence;
         if (ShootChanged(decision.shoot))
         {
             RobotCmd_SetShoot(decision.shoot);
         }
+    }
+    if (!decision.armed)
+    {
+        // 撤销期间产生的动作不能在恢复后补射，记录来源当前事件序号作为基线。
+        const ControlInput& selected = input.selected == InputSource::Vtm ? input.vtm : (input.selected == InputSource::Keyboard ? input.keyboard : input.remote);
+        Last_Shoot_Event_Sequence = selected.shoot_event_sequence;
     }
     Last_Input_Source = decision.source;
 
@@ -142,8 +164,7 @@ static void RobotCmd_SetInputArmed(bool armed)
         Gimbal_Command_Dirty = true;
         Chassis_Command_Dirty = true;
         Shoot_Command_Dirty = true;
-        ShootEvent discarded{};
-        while (MessageCenter::Shoot_Event_Queue.Pop(discarded)) {}
+        RobotCmd_DiscardShootEvents();
     }
 }
 

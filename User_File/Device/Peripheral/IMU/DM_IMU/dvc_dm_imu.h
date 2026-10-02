@@ -67,6 +67,18 @@ bool DM_IMU_RequestGyro(void);
  */
 bool DM_IMU_GetPitch(float *pitch_deg);
 
+typedef struct
+{
+    float pitch_deg;
+    float yaw_deg;
+    float roll_deg;
+    uint32_t sequence;
+    uint32_t timestamp_ms;
+    bool valid;
+} Struct_DM_IMU_Euler_Snapshot;
+/** 欧拉角、序号、接收时间来自同一帧；短临界区内复制，不在控制周期重试。 */
+Struct_DM_IMU_Euler_Snapshot DM_IMU_GetEulerSnapshot(void);
+
 /**
  * @brief 连同接收序号一起读取 Pitch 角。
  * @param pitch_deg 输出角度，单位度。

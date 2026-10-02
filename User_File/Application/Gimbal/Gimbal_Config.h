@@ -1,24 +1,11 @@
 #ifndef GIMBAL_CONFIG_H
 #define GIMBAL_CONFIG_H
 
-#include "fdcan.h"
 #include "board_config.h"
+#include <cstdint>
 
-enum class GimbalGyroAxis : uint8_t { X, Y, Z };
-
-/** 轴配置：DualAxis = 双轴都由本板控制；PitchOnly = 只有 Pitch 由本板控制
- * （老步兵双板分工下 Yaw 由底盘板主控），Yaw 目标被忽略、Yaw 电机不初始化。 */
-enum class GimbalAxisMode : uint8_t { DualAxis, PitchOnly };
-
-/** Pitch 控制结构：MotorMit = 目标换算后由电机端 MIT kp/kd 闭环（框架默认）；
- * ImuTorque = IMU 角度外环 PID + 前馈/阻尼/摩擦补偿，纯力矩 t_ff 下发
- * （老步兵云台板低摩擦机构的实测控制结构）。 */
-enum class GimbalPitchControl : uint8_t { MotorMit, ImuTorque };
-
-/**
- * ImuTorque 模式参数。默认值取老步兵云台板 `Application/Pitch` 的实测标定，
- * 摩擦/扰动参数依赖具体机构，换机构必须重新标定。
- */
+// 本分支的云台 App 只有 Pitch；Yaw 属于底盘板，不保存 Yaw 电机或控制参数。
+// 内部角度 rad、角速度 rad/s、力矩 N·m。机构标定在这里，总线在 BoardConfig。
 struct Struct_Gimbal_PitchTorque_Config
 {
     /** IMU 外环位置刚度，N·m/rad。 */
@@ -31,7 +18,7 @@ struct Struct_Gimbal_PitchTorque_Config
     /** IMU 角速度阻尼系数，N·m·s/rad。 */
     float imu_velocity_damping = 0.043f;
     /** IMU 角速度低通时间常数，s（Class_Filter_IIR_First_Order）。 */
-    float imu_velocity_filter_tau_s = 0.010f;
+    float imu_velocity_filter_tau_s = 0.010f; // 0：INS 来源已滤波，直接使用。
     /** Stribeck 摩擦：静摩擦 / 库仑摩擦力矩（正负方向不对称），N·m。 */
     float static_friction_positive_nm = 0.038f;
     float static_friction_negative_nm = 0.040f;
@@ -51,7 +38,7 @@ struct Struct_Gimbal_PitchTorque_Config
     float torque_limit_nm = 0.5f;
     /** 力矩符号：电机正方向与 IMU Pitch 正方向相反时为 -1。 */
     float torque_sign = 1.0f;
-    /** 每次使能前（含恢复）延迟下发使能的时间，ms；期间不发 MIT 指令。 */
+    /** 每次使能前（含恢复）延迟下发使能帧，ms；期间不发 MIT 指令。 */
     uint32_t enable_delay_ms = 2000U;
 };
 
@@ -69,41 +56,28 @@ struct Struct_Gimbal_Motor_Config
 
 struct Struct_Gimbal_Config
 {
-    GimbalAxisMode axis_mode = GimbalAxisMode::DualAxis;
-    GimbalPitchControl pitch_control = GimbalPitchControl::MotorMit;
-    /** ImuTorque 模式专用参数；MotorMit 模式忽略。 */
-    Struct_Gimbal_PitchTorque_Config pitch_torque;
-    Struct_Gimbal_Motor_Config yaw;
     Struct_Gimbal_Motor_Config pitch;
-    GimbalGyroAxis yaw_gyro_axis = GimbalGyroAxis::Z;
-    GimbalGyroAxis pitch_gyro_axis = GimbalGyroAxis::Y;
-    float yaw_gyro_sign = 1.0f;
-    float pitch_gyro_sign = 1.0f;
-    // basic_framework 角度比例增益与 500 deg/s 上限，内部统一弧度。
-    float yaw_angle_kp = 8.0f;
-    float yaw_speed_limit = 8.72664626f;
-    // 待实机整定：转矩环不是 QD4310 电流环，默认不产生 Yaw 主动转矩。
-    float yaw_speed_kp = 0.0f;
-    float yaw_speed_ki = 0.0f;
-    float yaw_speed_kd = 0.0f;
-    float yaw_integral_limit = 0.0f;
-    float yaw_torque_limit = 18.0f;
-    // Meta 小米 Pitch 的 MIT 控制示例，增益及机械限位必须重新核对。
-    float pitch_kp = 20.0f;
-    float pitch_kd = 1.0f;
-    float pitch_min = -1.5f;
-    float pitch_max = 0.5f;
-    float pitch_speed_limit = 1.0f;
-    float pitch_motor_per_imu = 1.0f;
+    Struct_Gimbal_PitchTorque_Config pitch_torque;
+    float pitch_min = -0.6981317f; // -40 deg。
+    float pitch_max = 0.2617994f;  // +15 deg。
+    uint64_t ins_max_age_us = 100000U;
 };
 
 inline Struct_Gimbal_Config Gimbal_Default_Config()
 {
     Struct_Gimbal_Config config;
-    config.yaw.bus = BoardConfig_Get().gimbal_yaw_bus;
     config.pitch.bus = BoardConfig_Get().gimbal_pitch_bus;
-    config.pitch.id = 2;
-    config.pitch.feedback_id = 0x102;
+    config.pitch.id = 0x09U;
+    config.pitch.feedback_id = 0x019U;
+    config.pitch.position_max = 3.14f;
+    config.pitch.velocity_max = 30.0f;
+    config.pitch.torque_max = 10.0f;
+    // 电机正方向与 DM-IMU Pitch 正方向相反，只在最终力矩边界取负。
+    config.pitch_torque.torque_sign = -1.0f;
+#if LEGACY_INFANTRY_GIMBAL
+    // DM-IMU 桥已差分并滤波；不二次低通、不更换已标定的反馈源。
+    config.pitch_torque.imu_velocity_filter_tau_s = 0.0f;
+#endif
     return config;
 }
 

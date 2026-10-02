@@ -297,7 +297,10 @@ cmake --build --preset Release
 ```
 
 [CMakePresets.json](CMakePresets.json) 保留 Debug/Release 配置；[CMakeUserPresets.json](CMakeUserPresets.json) 提供 SingleBoard/GimbalBoard/ChassisBoard。Debug 使用 `-Og -g3`，Release 使用 `-Os -g0`。
-老步兵云台板实机固件使用 GimbalBoard 预设（含 DM Pitch、DM-IMU 与 0x065 遥控转发适配）。
+老步兵云台板实机固件使用 GimbalBoard 预设（含 DM-IMU 与 0x065 遥控转发适配）。
+当前分支已收敛为 [单 Pitch 云台应用](User_File/Application/Gimbal/README.md)，Yaw 由底盘板控制；
+[Shoot](User_File/Application/Shoot/README.md) 使用统一命令/事件入口并按 DM3519 + M2006 装配。
+双轴参考例程和独立 Application/Pitch 不再保留，公共消息布局与旧底盘线协议保持不变。
 
 ### 主机回归
 

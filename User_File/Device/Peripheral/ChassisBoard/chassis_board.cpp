@@ -44,6 +44,24 @@ bool Class_ChassisBoard::Init(FDCAN_HandleTypeDef *motor_hfdcan)
     return true;
 }
 
+bool Class_ChassisBoard::ReadChannels(Struct_ChassisBoard_Channels &channels) const
+{
+    const uint32_t interrupt_state = __get_PRIMASK();
+    __disable_irq();
+    __DMB();
+    const Struct_ChassisBoard_Channels snapshot{fire_channel, dial_channel,
+                                               pitch_channel, last_rx_ms};
+    const bool valid = initialized && received;
+    __DMB();
+    __set_PRIMASK(interrupt_state);
+    if (!valid || HAL_GetTick() - snapshot.timestamp_ms > CHASSIS_BOARD_CHANNEL_TIMEOUT_MS)
+    {
+        return false;
+    }
+    channels = snapshot;
+    return true;
+}
+
 bool Class_ChassisBoard::GetFire(int16_t *value)
 {
     return ReadChannel(fire_channel, value);

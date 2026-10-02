@@ -1,32 +1,44 @@
 /**
  * @file Shoot.cpp
- * @brief 摩擦轮与拨弹盘应用：老步兵云台板路径与框架通用路径。
+ * @brief 摩擦轮与拨弹盘应用：统一消息入口与按板型装配的发射机构。
  *
  * - `SHOOT && LEGACY_INFANTRY_GIMBAL`：老步兵云台板，DM3519 摩擦轮 + M2006 拨弹盘，
- *   移植自云台板原工程（H7_RM），含扳机状态机、单发/连发、卡弹检测回退、
- *   Post-shot friction 与热量估计，控制行为与实机验证一致。
+ *   移植自云台板原工程（H7_RM），含事件单发/连续连发、卡弹检测回退、
+ *   Post-shot friction 与热量估计，保留原机构控制参数；迁移后的事件与安全行为需上板复验。
  * - `SHOOT && !LEGACY_INFANTRY_GIMBAL`：RoboMaster_H7 框架通用实现，私有上下文
  *   收拢运行状态，M3508/C620 直驱摩擦轮（gear_ratio=1）默认目标 25 rad/s。
  *   未直接移植热量限制和堵转阈值：依赖实车机构与裁判系统数据。
- * 两条路径由编译期宏互斥选择。
+ * 设备型号与机构控制由板型选择；命令、事件和反馈生命周期共用。
  */
 
 #include "Shoot.h"
-#include "../physical_units.h"
+#include "Shoot_Config.h"
 #include "board_config.h"
 
-#include "message_center.h"
-
 
 #include "message_center.h"
 
-static Subscriber<ShootCmd> Shoot_Command_Subscriber(
-    MessageCenter::Shoot_Command_Topic);
-static Publisher<ShootFeedback> Shoot_Feedback_Publisher(
-    MessageCenter::Shoot_Feedback_Topic);
-static ShootCmd Shoot_Command;
-static ShootFeedback Shoot_Feedback;
-static uint8_t Shoot_Feedback_Divider;
+namespace
+{
+// 所有板型共用同一命令入口、事件队列和 100 Hz 反馈，不再各自维护消息链。
+struct ShootApplication
+{
+    Subscriber<ShootCmd> command_subscriber{MessageCenter::Shoot_Command_Topic};
+    Publisher<ShootFeedback> feedback_publisher{MessageCenter::Shoot_Feedback_Topic};
+    ShootCmd command{};
+    ShootFeedback feedback{};
+    uint8_t feedback_divider = 0U;
+};
+ShootApplication app;
+void DiscardEvents()
+{
+    ShootEvent discarded{};
+    size_t pending = MessageCenter::Shoot_Event_Queue.Size();
+    while (pending-- > 0U && MessageCenter::Shoot_Event_Queue.Pop(discarded))
+    {
+    }
+}
+} // namespace
 
 #if SHOOT && LEGACY_INFANTRY_GIMBAL
 
@@ -34,8 +46,8 @@ static uint8_t Shoot_Feedback_Divider;
  * 老步兵云台板实现：DM3519 摩擦轮（FDCAN1）+ M2006 拨弹盘（FDCAN2）
  *
  * 与云台板原实现保持一致的语义：
- * - 摩擦轮是速度模式 DM 电机，扳机按下即正反转恒速，松扳机后仍延时 300 ms 继续转；
- * - 拨弹盘由「短按单发 / 长按连发」状态机驱动，连发速度来自波轮档位；
+ * - 摩擦轮是速度模式 DM 电机，输入许可下按摩擦轮命令正反转恒速，松扳机后仍延时 300 ms 继续转；
+ * - 拨弹盘由「事件单发 / 连续模式」状态机驱动，连发速度来自波轮档位；
  * - 单发用角度环推一颗弹的距离，到位后锁住实际角度抑制回弹；
  * - 堵转按相电流阈值确认 300 ms 后回退 15 度；
  * - 热量按摩擦轮力矩突变点估计单发累积，超过上限后停止拨弹。
@@ -52,56 +64,7 @@ static uint8_t Shoot_Feedback_Divider;
 
 namespace
 {
-constexpr float SHOOT_PI = 3.14159265358979323846f;
-
-/* 硬件 ID 与云台板原工程一致。 */
-constexpr uint8_t FRICTION_LEFT_ID = 0x07U;
-constexpr uint16_t FRICTION_LEFT_FEEDBACK_ID = 0x027U;
-constexpr uint8_t FRICTION_RIGHT_ID = 0x08U;
-constexpr uint16_t FRICTION_RIGHT_FEEDBACK_ID = 0x028U;
-constexpr uint8_t LOADER_ID = 1U;
-
-/* 反馈与使能重试。 */
-constexpr uint32_t FEEDBACK_TIMEOUT_MS = 100U;
-constexpr uint32_t ENABLE_RETRY_MS = 100U;
-
-/* 机构参数。 */
-constexpr float FRICTION_SPEED_RAD_S = 25.0f;
-constexpr float FRICTION_READY_TOLERANCE_RAD_S = 1.0f;
-constexpr float DM3519_VELOCITY_MAX_RAD_S = 200.0f;
-constexpr float DM3519_TORQUE_MAX_NM = 10.0f;
-constexpr float DM3519_POSITION_MAX_RAD = 12.5f;
-constexpr float LOADER_MAX_ROTOR_RPM = 4500.0f;
-constexpr float M2006_GEAR_RATIO = 36.0f;
-constexpr float M2006_RPM_PER_OUTPUT_RAD_S =
-    M2006_GEAR_RATIO * 60.0f / (2.0f * SHOOT_PI);
-constexpr float LOADER_SPEED_KP = 17.0f * M2006_RPM_PER_OUTPUT_RAD_S;
-constexpr float LOADER_SPEED_KI =
-    2.0f * M2006_RPM_PER_OUTPUT_RAD_S / 0.001f;
-constexpr float LOADER_SINGLE_SPEED_KP = 10.0f * 180.0f / SHOOT_PI;
-constexpr float LOADER_SINGLE_SPEED_KI = 1.0f * 180.0f / SHOOT_PI;
-constexpr float LOADER_SINGLE_SPEED_LIMIT_RAD_S = 400.0f * SHOOT_PI / 180.0f;
-/* 拨弹盘直连 M2006 减速箱输出轴，7 个弹位均布一圈。 */
-constexpr float ONE_BULLET_OUTPUT_DEG = 360.0f / 7.0f;
-constexpr float ONE_BULLET_MOTOR_OUTPUT_RAD =
-    ONE_BULLET_OUTPUT_DEG * SHOOT_PI / 180.0f;
-constexpr float SINGLE_DONE_ANGLE_RAD = 2.0f * SHOOT_PI / 180.0f;
-constexpr uint32_t SINGLE_TIMEOUT_MS = 1000U;
-constexpr uint32_t SINGLE_HOLD_MS = 100U;
-constexpr uint32_t POST_SHOT_FRICTION_MS = 300U;
-constexpr uint32_t LONG_PRESS_MS = 300U;
-
-/* 安全参数，集中在一起便于按实车标定。 */
-constexpr int16_t JAM_CURRENT_THRESHOLD = 3800;
-constexpr uint32_t JAM_CONFIRM_MS = 300U;
-constexpr uint32_t JAM_HANDLE_MS = 200U;
-constexpr float JAM_BACKOFF_RAD = 15.0f * SHOOT_PI / 180.0f;
-constexpr float HEAT_LEFT_TORQUE_THRESHOLD_NM = -0.6f;
-constexpr float HEAT_RIGHT_TORQUE_THRESHOLD_NM = 0.5f;
-constexpr uint32_t HEAT_CONFIRM_MS = 20U;
-constexpr float HEAT_PER_SHOT = 10.0f;
-constexpr float HEAT_COOL_PER_SECOND = 35.0f;
-constexpr float HEAT_LIMIT = 220.0f;
+using namespace InfantryShootConfig;
 
 enum class FireState : uint8_t
 {
@@ -121,28 +84,36 @@ enum JamState : uint8_t
     JAM_HANDLING,
 };
 
-Class_FSM<3> Jam_FSM;
-
-Class_DMMotor Friction_Left;
-Class_DMMotor Friction_Right;
-Class_DJIMotor Loader;
-Class_DJIMotor_Group Loader_Group;
-
-FireState Fire_State;
-uint32_t Press_Start_Tick;
-uint32_t Single_Start_Tick;
-uint32_t Single_Hold_Start_Tick;
-uint32_t Post_Shot_Start_Tick;
-uint32_t Heat_Start_Tick;
-uint32_t Last_Loop_Tick;
-uint32_t Last_Enable_Tick;
-float Single_Target_Angle;
-bool Single_Holding;
-float Jam_Target_Angle;
-float Estimated_Heat;
-bool Heat_Suspect;
-bool Heat_Latched;
-bool Shoot_Initialized;
+// 本板的唯一设备所有者；Task/Input/遥测不能拿到电机指针。
+struct InfantryShootContext
+{
+    Class_FSM<3> Jam_FSM;
+    Class_DMMotor Friction_Left;
+    Class_DMMotor Friction_Right;
+    Class_DJIMotor Loader;
+    Class_DJIMotor_Group Loader_Group;
+    FireState Fire_State;
+    uint32_t Press_Start_Tick;
+    uint32_t Single_Start_Tick;
+    bool Single_Control_Started;
+    uint32_t Single_Hold_Start_Tick;
+    uint32_t Post_Shot_Start_Tick;
+    uint32_t Heat_Start_Tick;
+    uint32_t Jam_State_Start_Tick;
+    uint32_t Last_Loop_Tick;
+    float Single_Target_Angle;
+    bool Single_Holding;
+    float Jam_Target_Angle;
+    float Estimated_Heat;
+    bool Heat_Suspect;
+    bool Heat_Latched;
+    bool Shoot_Initialized;
+    Struct_DMMotor_Snapshot left_snapshot{};
+    Struct_DMMotor_Snapshot right_snapshot{};
+    Struct_DJIMotor_Motion_Snapshot loader_snapshot{};
+    decltype(Class_DJIMotor::feedback) loader_feedback{};
+};
+InfantryShootContext infantry{};
 
 PID_InitTypeDef MakePID(float kp, float ki, float kd,
                         float integral_limit, float output_limit)
@@ -159,72 +130,76 @@ PID_InitTypeDef MakePID(float kp, float ki, float kd,
 
 bool LoaderFeedbackFresh(void)
 {
-    const uint64_t timestamp = Loader.Get_Last_Feedback_Timestamp_Us();
-    return timestamp != 0U &&
-           SYS_Timestamp.Get_Now_Microsecond() - timestamp <=
-               static_cast<uint64_t>(FEEDBACK_TIMEOUT_MS) * 1000U;
+    return infantry.loader_snapshot.online;
 }
 
 bool FrictionReady(void)
 {
-    return Friction_Left.IsOnline() &&
-           Friction_Right.IsOnline() &&
-           Friction_Left.IsEnabled() &&
-           Friction_Right.IsEnabled() &&
-           std::fabs(Friction_Left.feedback.velocity + FRICTION_SPEED_RAD_S) <=
+    return infantry.left_snapshot.online &&
+           infantry.right_snapshot.online &&
+           infantry.left_snapshot.actual_enabled &&
+           infantry.right_snapshot.actual_enabled &&
+           std::fabs(infantry.left_snapshot.feedback.velocity + FRICTION_SPEED_RAD_S) <=
                FRICTION_READY_TOLERANCE_RAD_S &&
-           std::fabs(Friction_Right.feedback.velocity - FRICTION_SPEED_RAD_S) <=
+           std::fabs(infantry.right_snapshot.feedback.velocity - FRICTION_SPEED_RAD_S) <=
                FRICTION_READY_TOLERANCE_RAD_S;
 }
 
 void SetLoaderStopped(void)
 {
     // 停火时直接输出零电流，不用高增益速度环在零速附近反复制动。
-    Loader.speed_pid.Set_Integral_Error(0.0f);
-    Loader.angle_pid.Set_Integral_Error(0.0f);
-    Loader.Set_Outer_Loop(DJI_MOTOR_OPEN_LOOP);
-    Loader_Group.Control(0.0f);
+    infantry.Loader.speed_pid.Set_Integral_Error(0.0f);
+    infantry.Loader.angle_pid.Set_Integral_Error(0.0f);
+    infantry.Loader.Set_Outer_Loop(DJI_MOTOR_OPEN_LOOP);
+    infantry.Loader_Group.Control(0.0f);
+}
+
+void SetJamState(JamState state, uint32_t now)
+{
+    infantry.Jam_FSM.Set_Status(state);
+    infantry.Jam_State_Start_Tick = now;
 }
 
 void StopAll(void)
 {
-    Friction_Left.SetSpeed(0.0f);
-    Friction_Right.SetSpeed(0.0f);
+    infantry.Friction_Left.SetSpeed(0.0f);
+    infantry.Friction_Right.SetSpeed(0.0f);
     SetLoaderStopped();
-    Fire_State = FireState::IDLE;
-    Single_Holding = false;
-    Jam_FSM.Set_Status(JAM_NORMAL);
-    Heat_Suspect = false;
-    Heat_Latched = false;
+    infantry.Fire_State = FireState::IDLE;
+    infantry.Single_Holding = false;
+    infantry.Single_Control_Started = false;
+    SetJamState(JAM_NORMAL, HAL_GetTick());
+    infantry.Heat_Suspect = false;
+    infantry.Heat_Latched = false;
 }
 
 void UpdateHeat(uint32_t now, bool loader_active)
 {
-    Estimated_Heat -= HEAT_COOL_PER_SECOND *
-                      static_cast<float>(now - Last_Loop_Tick) * 0.001f;
-    if (Estimated_Heat < 0.0f)
-        Estimated_Heat = 0.0f;
+    infantry.Estimated_Heat -= HEAT_COOL_PER_SECOND *
+                               static_cast<float>(now - infantry.Last_Loop_Tick) * 0.001f;
+    if (infantry.Estimated_Heat < 0.0f)
+        infantry.Estimated_Heat = 0.0f;
 
     const bool spike = loader_active &&
-                       Friction_Left.feedback.torque <= HEAT_LEFT_TORQUE_THRESHOLD_NM &&
-                       Friction_Right.feedback.torque >= HEAT_RIGHT_TORQUE_THRESHOLD_NM;
+                       infantry.left_snapshot.feedback.torque <= HEAT_LEFT_TORQUE_THRESHOLD_NM &&
+                       infantry.right_snapshot.feedback.torque >= HEAT_RIGHT_TORQUE_THRESHOLD_NM;
     if (!spike)
     {
-        Heat_Suspect = false;
-        Heat_Latched = false;
+        infantry.Heat_Suspect = false;
+        infantry.Heat_Latched = false;
     }
-    else if (!Heat_Latched)
+    else if (!infantry.Heat_Latched)
     {
-        if (!Heat_Suspect)
+        if (!infantry.Heat_Suspect)
         {
-            Heat_Suspect = true;
-            Heat_Start_Tick = now;
+            infantry.Heat_Suspect = true;
+            infantry.Heat_Start_Tick = now;
         }
-        else if (now - Heat_Start_Tick >= HEAT_CONFIRM_MS)
+        else if (now - infantry.Heat_Start_Tick >= HEAT_CONFIRM_MS)
         {
-            Estimated_Heat += HEAT_PER_SHOT;
-            Heat_Latched = true;
-            Heat_Suspect = false;
+            infantry.Estimated_Heat += HEAT_PER_SHOT;
+            infantry.Heat_Latched = true;
+            infantry.Heat_Suspect = false;
         }
     }
 }
@@ -233,36 +208,36 @@ void UpdateHeat(uint32_t now, bool loader_active)
  * @brief 卡弹状态机（框架 Class_FSM 驱动）。
  *
  * NORMAL --(电流超阈值)--> SUSPECT --(持续 300 ms)--> HANDLING --(回退 200 ms)--> NORMAL；
- * SUSPECT 期间条件消失直接回 NORMAL。各状态驻留时长由 Count_Time 周期计数判定，
- * 进入状态的清零动作由 Set_Status 完成，与原手写 tick 差值判定逐拍等价。
+ * SUSPECT 期间条件消失直接回 NORMAL。状态驻留时间用 HAL tick 差写入 Count_Time，
+ * 由框架 FSM 管理状态切换；真实时间判定与老工程一致，漏拍不会延后保护。
  *
  * @param loader_active 本周期拨弹盘是否在出弹。
  * @return true 表示本周期由卡弹状态机接管拨弹盘（回退或保持回退）。
  */
-bool UpdateJam(bool loader_active)
+bool UpdateJam(uint32_t now, bool loader_active)
 {
-    switch (Jam_FSM.Get_Now_Status_Serial())
+    switch (infantry.Jam_FSM.Get_Now_Status_Serial())
     {
     case JAM_HANDLING:
-        Loader.Set_Outer_Loop(DJI_MOTOR_ANGLE_LOOP);
-        Loader_Group.Control(Jam_Target_Angle);
-        if (Jam_FSM.Status[JAM_HANDLING].Count_Time >= JAM_HANDLE_MS)
-            Jam_FSM.Set_Status(JAM_NORMAL);
+        infantry.Loader.Set_Outer_Loop(DJI_MOTOR_ANGLE_LOOP);
+        infantry.Loader_Group.Control(infantry.Jam_Target_Angle);
+        if (infantry.Jam_FSM.Status[JAM_HANDLING].Count_Time >= JAM_HANDLE_MS)
+            SetJamState(JAM_NORMAL, now);
         return true;
 
     case JAM_SUSPECT:
         if (!loader_active ||
-            std::abs(Loader.feedback.current_raw) <= JAM_CURRENT_THRESHOLD)
+            std::abs(infantry.loader_feedback.current_raw) <= JAM_CURRENT_THRESHOLD)
         {
-            Jam_FSM.Set_Status(JAM_NORMAL);
+            SetJamState(JAM_NORMAL, now);
             return false;
         }
-        if (Jam_FSM.Status[JAM_SUSPECT].Count_Time >= JAM_CONFIRM_MS)
+        if (infantry.Jam_FSM.Status[JAM_SUSPECT].Count_Time >= JAM_CONFIRM_MS)
         {
-            Jam_FSM.Set_Status(JAM_HANDLING);
-            Jam_Target_Angle = Loader.feedback.output_total_angle - JAM_BACKOFF_RAD;
-            Loader.Set_Outer_Loop(DJI_MOTOR_ANGLE_LOOP);
-            Loader_Group.Control(Jam_Target_Angle);
+            SetJamState(JAM_HANDLING, now);
+            infantry.Jam_Target_Angle = infantry.loader_feedback.output_total_angle - JAM_BACKOFF_RAD;
+            infantry.Loader.Set_Outer_Loop(DJI_MOTOR_ANGLE_LOOP);
+            infantry.Loader_Group.Control(infantry.Jam_Target_Angle);
             return true;
         }
         return false;
@@ -270,35 +245,35 @@ bool UpdateJam(bool loader_active)
     case JAM_NORMAL:
     default:
         if (loader_active &&
-            std::abs(Loader.feedback.current_raw) > JAM_CURRENT_THRESHOLD)
+            std::abs(infantry.loader_feedback.current_raw) > JAM_CURRENT_THRESHOLD)
         {
-            Jam_FSM.Set_Status(JAM_SUSPECT);
+            SetJamState(JAM_SUSPECT, now);
         }
         return false;
     }
 }
 
 /** 初始化两台摩擦轮与拨弹盘；返回 false 时上层保持不控制硬件。 */
-bool Shoot_Legacy_Init(void)
+bool Shoot_InitHardware(void)
 {
-    if (Shoot_Initialized)
+    if (infantry.Shoot_Initialized)
         return true;
 
-    const bool left_ok = Friction_Left.Init(&hfdcan1, FRICTION_LEFT_ID,
-                                            FRICTION_LEFT_FEEDBACK_ID,
-                                            Enum_DMMotor_Mode::SPEED, false,
-                                            DM3519_POSITION_MAX_RAD,
-                                            DM3519_VELOCITY_MAX_RAD_S,
-                                            DM3519_TORQUE_MAX_NM);
-    const bool right_ok = Friction_Right.Init(&hfdcan1, FRICTION_RIGHT_ID,
-                                              FRICTION_RIGHT_FEEDBACK_ID,
-                                              Enum_DMMotor_Mode::SPEED, false,
-                                              DM3519_POSITION_MAX_RAD,
-                                              DM3519_VELOCITY_MAX_RAD_S,
-                                              DM3519_TORQUE_MAX_NM);
+    const bool left_ok = infantry.Friction_Left.Init(BoardConfig_Get().shoot_bus, FRICTION_LEFT_ID,
+                                                     FRICTION_LEFT_FEEDBACK_ID,
+                                                     Enum_DMMotor_Mode::SPEED, false,
+                                                     DM3519_POSITION_MAX_RAD,
+                                                     DM3519_VELOCITY_MAX_RAD_S,
+                                                     DM3519_TORQUE_MAX_NM);
+    const bool right_ok = infantry.Friction_Right.Init(BoardConfig_Get().shoot_bus, FRICTION_RIGHT_ID,
+                                                       FRICTION_RIGHT_FEEDBACK_ID,
+                                                       Enum_DMMotor_Mode::SPEED, false,
+                                                       DM3519_POSITION_MAX_RAD,
+                                                       DM3519_VELOCITY_MAX_RAD_S,
+                                                       DM3519_TORQUE_MAX_NM);
 
     Struct_DJIMotor_Init_Config loader_config{};
-    loader_config.hfdcan = &hfdcan2;
+    loader_config.hfdcan = BoardConfig_Get().shoot_loader_bus;
     loader_config.can_id = LOADER_ID;
     loader_config.motor_type = Enum_DJIMotor_Type::M2006;
     loader_config.gear_ratio = M2006_GEAR_RATIO;
@@ -311,143 +286,182 @@ bool Shoot_Legacy_Init(void)
     loader_config.angle_pid = MakePID(10.0f, 0.0f, 0.0f, 0.0f,
                                       LOADER_SINGLE_SPEED_LIMIT_RAD_S);
 
-    const bool loader_ok = Loader.Init(loader_config) && Loader_Group.Init(&Loader);
+    const bool loader_ok = infantry.Loader.Init(loader_config) && infantry.Loader_Group.Init(&infantry.Loader);
 
-    Press_Start_Tick = 0U;
-    Single_Start_Tick = 0U;
-    Single_Hold_Start_Tick = 0U;
-    Post_Shot_Start_Tick = 0U;
-    Jam_FSM.Init(JAM_NORMAL);
-    Heat_Start_Tick = 0U;
-    Single_Target_Angle = 0.0f;
-    Single_Holding = false;
-    Jam_Target_Angle = 0.0f;
-    Estimated_Heat = 0.0f;
-    Heat_Suspect = false;
-    Heat_Latched = false;
+    infantry.Press_Start_Tick = 0U;
+    infantry.Single_Start_Tick = 0U;
+    infantry.Single_Control_Started = false;
+    infantry.Single_Hold_Start_Tick = 0U;
+    infantry.Post_Shot_Start_Tick = 0U;
+    infantry.Jam_FSM.Init(JAM_NORMAL);
+    infantry.Jam_State_Start_Tick = HAL_GetTick();
+    infantry.Heat_Start_Tick = 0U;
+    infantry.Single_Target_Angle = 0.0f;
+    infantry.Single_Holding = false;
+    infantry.Jam_Target_Angle = 0.0f;
+    infantry.Estimated_Heat = 0.0f;
+    infantry.Heat_Suspect = false;
+    infantry.Heat_Latched = false;
 
-    Shoot_Initialized = left_ok && right_ok && loader_ok;
-    Last_Loop_Tick = HAL_GetTick();
-    Last_Enable_Tick = Last_Loop_Tick;
-    if (Shoot_Initialized)
+    infantry.Shoot_Initialized = left_ok && right_ok && loader_ok;
+    infantry.Last_Loop_Tick = HAL_GetTick();
+    if (infantry.Shoot_Initialized)
     {
-        // 与云台板一致：电机内部已预先配置为速度模式，上电只发送使能帧。
-        Friction_Left.RequestEnabled(true);
-        Friction_Right.RequestEnabled(true);
+        // 电机端预先配置速度模式；初始化保持失能，许可由 RobotCmd 授予。
+        (void) infantry.Friction_Left.RequestEnabled(false);
+        (void) infantry.Friction_Right.RequestEnabled(false);
+        (void) infantry.Loader_Group.RequestEnabled(false);
         StopAll();
     }
-    return Shoot_Initialized;
+    else
+    {
+        (void) infantry.Friction_Left.RequestEnabled(false);
+        (void) infantry.Friction_Right.RequestEnabled(false);
+        (void) infantry.Loader_Group.RequestEnabled(false);
+    }
+    return infantry.Shoot_Initialized;
 }
 
 /**
  * @brief 老步兵云台板的 1 kHz 发射控制。
  *
- * 输入来自 ShootCmd：`shoot_mode == ON` 表示扳机按下，`loader_speed_rad_s` 表示
- * 波轮映射后的连发拨弹盘速度（rad/s）。通道失效由 Communication 解除 shoot_mode，
+ * 输入来自 ShootCmd：`shoot_mode == ON` 表示安全输出许可，`loader_speed_rad_s` 表示
+ * 波轮映射后的连发拨弹盘速度（rad/s）。通道失效由 Input/RobotCmd 解除 shoot_mode，
  * 本函数随即停火并复位状态机。
  */
-void Shoot_Legacy_Loop(void)
+void Shoot_ApplyCommand(void)
 {
     const uint32_t now = HAL_GetTick();
-    const bool trigger_pressed = Shoot_Command.shoot_mode == ShootMode::ON;
-
-    /* 在线只表示收到反馈；必须按驱动器状态码确认使能，未使能时周期重发。 */
-    if ((!Friction_Left.IsOnline() || !Friction_Left.IsEnabled() ||
-         !Friction_Right.IsOnline() || !Friction_Right.IsEnabled()) &&
-        now - Last_Enable_Tick >= ENABLE_RETRY_MS)
+    // OFF 是安全撤销，不是松扳机。失联同周期停轮/停拨弹并清除状态。
+    const bool enabled = app.command.shoot_mode == ShootMode::ON;
+    (void) infantry.Friction_Left.RequestEnabled(enabled);
+    (void) infantry.Friction_Right.RequestEnabled(enabled);
+    (void) infantry.Loader_Group.RequestEnabled(enabled);
+    if (!enabled)
     {
-        if (!Friction_Left.IsOnline() || !Friction_Left.IsEnabled())
-            Friction_Left.RequestEnabled(true);
-        if (!Friction_Right.IsOnline() || !Friction_Right.IsEnabled())
-            Friction_Right.RequestEnabled(true);
-        Last_Enable_Tick = now;
+        StopAll();
+        UpdateHeat(now, false);
+        infantry.Last_Loop_Tick = now;
+        return;
     }
+    // Count_Time 表示真实毫秒；线程标志合并/漏拍不能把 300 ms 拖成 300 次调用。
+    const auto jam_state = infantry.Jam_FSM.Get_Now_Status_Serial();
+    infantry.Jam_FSM.Status[jam_state].Count_Time = now - infantry.Jam_State_Start_Tick;
 
-    /* 卡弹 FSM 状态驻留计数（1 kHz 下 Count_Time 单位即 ms），先于转移判定自增。 */
-    Jam_FSM.TIM_Calculate_PeriodElapsedCallback();
-
-    /* 扳机状态机：短按单发、长按连发、松扳机后摩擦轮延时停转。 */
-    if (Fire_State == FireState::IDLE && trigger_pressed)
+    // PRESSING 仅表示摩擦轮准备阶段，不在此重复识别长短按。
+    if (infantry.Fire_State == FireState::IDLE && app.command.friction_mode == FrictionMode::ON)
     {
-        Fire_State = FireState::PRESSING;
-        Press_Start_Tick = now;
+        infantry.Fire_State = FireState::PRESSING;
+        infantry.Press_Start_Tick = now;
     }
-    else if (Fire_State == FireState::PRESSING)
+    // 连续模式优先；STOP 每周期至多接收一个不可覆盖的单发/三连发事件。
+    if (app.command.loader_mode == LoaderMode::BURST ||
+        app.command.loader_mode == LoaderMode::REVERSE)
     {
-        if (trigger_pressed && now - Press_Start_Tick >= LONG_PRESS_MS)
-            Fire_State = FireState::BURST;
-        else if (!trigger_pressed)
+        infantry.Fire_State = FireState::BURST;
+        infantry.Single_Holding = false;
+    }
+    else
+    {
+        if (infantry.Fire_State == FireState::BURST)
         {
-            Fire_State = FireState::SINGLE;
-            Single_Target_Angle = Loader.feedback.output_total_angle +
-                                  ONE_BULLET_MOTOR_OUTPUT_RAD;
-            Single_Start_Tick = now;
-            Single_Holding = false;
+            infantry.Fire_State = FireState::POST_SHOT;
+            infantry.Post_Shot_Start_Tick = now;
+        }
+        ShootEvent event{};
+        if (MessageCenter::Shoot_Event_Queue.Pop(event))
+        {
+            // 事件仅在电机反馈新鲜时起步；故障期间清除，不恢复后补射。
+            if (LoaderFeedbackFresh())
+            {
+                if (infantry.Fire_State != FireState::SINGLE)
+                {
+                    infantry.Single_Target_Angle = infantry.loader_feedback.output_total_angle;
+                }
+                const float bullets = event.type == ShootEventType::ShootTriple ? 3.0f : 1.0f;
+                infantry.Single_Target_Angle += bullets * ONE_BULLET_MOTOR_OUTPUT_RAD;
+                infantry.Fire_State = FireState::SINGLE;
+                // 摩擦轮准备不计入拨弹超时；首次真正进入角度控制时才启动计时。
+                infantry.Single_Control_Started = false;
+                infantry.Single_Holding = false;
+            }
+        }
+        if (infantry.Fire_State == FireState::PRESSING &&
+            app.command.friction_mode == FrictionMode::OFF)
+        {
+            infantry.Fire_State = FireState::POST_SHOT;
+            infantry.Post_Shot_Start_Tick = now;
+        }
+        if (infantry.Fire_State == FireState::POST_SHOT &&
+            now - infantry.Post_Shot_Start_Tick >= POST_SHOT_FRICTION_MS)
+        {
+            infantry.Fire_State = FireState::IDLE;
         }
     }
-    else if (Fire_State == FireState::BURST && !trigger_pressed)
-    {
-        Fire_State = FireState::IDLE;
-    }
-    else if (Fire_State == FireState::POST_SHOT && trigger_pressed)
-    {
-        Fire_State = FireState::PRESSING;
-        Press_Start_Tick = now;
-    }
-    else if (Fire_State == FireState::POST_SHOT &&
-             now - Post_Shot_Start_Tick >= POST_SHOT_FRICTION_MS)
-    {
-        Fire_State = FireState::IDLE;
-    }
 
-    /* 反馈瞬时丢失时仅停止电机，保留已识别的短按单发请求。 */
-    if (!Friction_Left.IsOnline() || !Friction_Right.IsOnline())
+    // 失效时撤销整个机构许可并丢弃已识别动作，恢复只接受新的事件。
+    if (!infantry.left_snapshot.online ||
+        infantry.left_snapshot.fault ||
+        !infantry.right_snapshot.online ||
+        infantry.right_snapshot.fault || !LoaderFeedbackFresh())
     {
-        Friction_Left.SetSpeed(0.0f);
-        Friction_Right.SetSpeed(0.0f);
-        SetLoaderStopped();
-        Last_Loop_Tick = now;
+        (void) infantry.Friction_Left.RequestEnabled(false);
+        (void) infantry.Friction_Right.RequestEnabled(false);
+        (void) infantry.Loader_Group.RequestEnabled(false);
+        DiscardEvents();
+        StopAll();
+        UpdateHeat(now, false);
+        infantry.Last_Loop_Tick = now;
         return;
     }
 
-    const bool firing_requested = Fire_State != FireState::IDLE;
-    Friction_Left.SetSpeed(firing_requested ? -FRICTION_SPEED_RAD_S : 0.0f);
-    Friction_Right.SetSpeed(firing_requested ? FRICTION_SPEED_RAD_S : 0.0f);
+    const bool firing_requested = app.command.friction_mode == FrictionMode::ON ||
+                                  infantry.Fire_State != FireState::IDLE;
+    infantry.Friction_Left.SetSpeed(firing_requested ? -FRICTION_SPEED_RAD_S : 0.0f);
+    infantry.Friction_Right.SetSpeed(firing_requested ? FRICTION_SPEED_RAD_S : 0.0f);
 
     bool loader_active = false;
-    if (LoaderFeedbackFresh() && FrictionReady() && Estimated_Heat < HEAT_LIMIT)
+    if (LoaderFeedbackFresh() && FrictionReady() && infantry.Estimated_Heat < HEAT_LIMIT)
     {
-        if (Fire_State == FireState::SINGLE)
+        if (infantry.Fire_State == FireState::SINGLE)
         {
+            if (!infantry.Single_Control_Started)
+            {
+                infantry.Single_Start_Tick = now;
+                infantry.Single_Control_Started = true;
+            }
             loader_active = true;
-            Loader.speed_pid.Set_K_P(LOADER_SINGLE_SPEED_KP);
-            Loader.speed_pid.Set_K_I(LOADER_SINGLE_SPEED_KI);
-            Loader.Set_Outer_Loop(DJI_MOTOR_ANGLE_LOOP);
-            Loader_Group.Control(Single_Target_Angle);
-            if (!Single_Holding &&
-                (std::fabs(Single_Target_Angle - Loader.feedback.output_total_angle) <=
+            infantry.Loader.speed_pid.Set_K_P(LOADER_SINGLE_SPEED_KP);
+            infantry.Loader.speed_pid.Set_K_I(LOADER_SINGLE_SPEED_KI);
+            infantry.Loader.Set_Outer_Loop(DJI_MOTOR_ANGLE_LOOP);
+            infantry.Loader_Group.Control(infantry.Single_Target_Angle);
+            if (!infantry.Single_Holding &&
+                (std::fabs(infantry.Single_Target_Angle - infantry.loader_feedback.output_total_angle) <=
                      SINGLE_DONE_ANGLE_RAD ||
-                 now - Single_Start_Tick >= SINGLE_TIMEOUT_MS))
+                 now - infantry.Single_Start_Tick >= SINGLE_TIMEOUT_MS))
             {
                 // 锁住结束时的实际角度，抑制惯性超调和机械回弹。
-                Single_Target_Angle = Loader.feedback.output_total_angle;
-                Single_Hold_Start_Tick = now;
-                Single_Holding = true;
+                infantry.Single_Target_Angle = infantry.loader_feedback.output_total_angle;
+                infantry.Single_Hold_Start_Tick = now;
+                infantry.Single_Holding = true;
             }
-            else if (Single_Holding && now - Single_Hold_Start_Tick >= SINGLE_HOLD_MS)
+            else if (infantry.Single_Holding && now - infantry.Single_Hold_Start_Tick >= SINGLE_HOLD_MS)
             {
-                Single_Holding = false;
-                Post_Shot_Start_Tick = now;
-                Fire_State = FireState::POST_SHOT;
+                infantry.Single_Holding = false;
+                infantry.Post_Shot_Start_Tick = now;
+                infantry.Fire_State = FireState::POST_SHOT;
             }
         }
-        else if (Fire_State == FireState::BURST)
+        else if (infantry.Fire_State == FireState::BURST)
         {
             loader_active = true;
-            Loader.speed_pid.Set_K_P(LOADER_SPEED_KP);
-            Loader.speed_pid.Set_K_I(LOADER_SPEED_KI);
-            Loader.Set_Outer_Loop(DJI_MOTOR_SPEED_LOOP);
-            Loader_Group.Control(Shoot_Command.loader_speed_rad_s);
+            infantry.Loader.speed_pid.Set_K_P(LOADER_SPEED_KP);
+            infantry.Loader.speed_pid.Set_K_I(LOADER_SPEED_KI);
+            infantry.Loader.Set_Outer_Loop(DJI_MOTOR_SPEED_LOOP);
+            const float speed = app.command.loader_mode == LoaderMode::REVERSE
+                                    ? -std::fabs(app.command.loader_speed_rad_s)
+                                    : app.command.loader_speed_rad_s;
+            infantry.Loader_Group.Control(speed);
         }
         else
         {
@@ -459,23 +473,26 @@ void Shoot_Legacy_Loop(void)
         SetLoaderStopped();
     }
 
-    if (UpdateJam(loader_active))
+    if (UpdateJam(now, loader_active))
         loader_active = true;
     UpdateHeat(now, loader_active);
-    Last_Loop_Tick = now;
+    infantry.Last_Loop_Tick = now;
 }
 
 /** 把云台板发射状态写入框架的统一反馈结构（速度 rad/s、角度 rad）。 */
-void Shoot_Legacy_UpdateFeedback(void)
+void Shoot_UpdateFeedback(void)
 {
-    Shoot_Feedback.friction_left_speed_rad_s = Friction_Left.feedback.velocity;
-    Shoot_Feedback.friction_right_speed_rad_s = Friction_Right.feedback.velocity;
-    Shoot_Feedback.loader_angle_rad = Loader.feedback.output_total_angle;
-    Shoot_Feedback.loader_speed_rad_s = Loader.feedback.output_speed;
-    Shoot_Feedback.enabled = Shoot_Initialized;
-    Shoot_Feedback.online = Friction_Left.IsOnline() &&
-                            Friction_Right.IsOnline() &&
-                            Loader.IsOnline();
+    app.feedback.friction_left_speed_rad_s = infantry.left_snapshot.feedback.velocity;
+    app.feedback.friction_right_speed_rad_s = infantry.right_snapshot.feedback.velocity;
+    app.feedback.loader_angle_rad = infantry.loader_feedback.output_total_angle;
+    app.feedback.loader_speed_rad_s = infantry.loader_feedback.output_speed;
+    app.feedback.enabled = app.command.shoot_mode == ShootMode::ON &&
+                           infantry.left_snapshot.ready &&
+                           infantry.right_snapshot.ready &&
+                           infantry.loader_snapshot.ready;
+    app.feedback.online = infantry.left_snapshot.online &&
+                          infantry.right_snapshot.online &&
+                          infantry.loader_snapshot.online;
 }
 } // namespace
 
@@ -494,35 +511,36 @@ extern "C" void Shoot_GetDebug(float *initialized,
                                float *right_motor_state)
 {
     if (initialized != nullptr)
-        *initialized = Shoot_Initialized ? 1.0f : 0.0f;
+        *initialized = infantry.Shoot_Initialized ? 1.0f : 0.0f;
     if (left_feedback != nullptr)
-        *left_feedback = Friction_Left.IsOnline() ? 1.0f : 0.0f;
+        *left_feedback = infantry.Friction_Left.IsOnline() ? 1.0f : 0.0f;
     if (right_feedback != nullptr)
-        *right_feedback = Friction_Right.IsOnline() ? 1.0f : 0.0f;
+        *right_feedback = infantry.Friction_Right.IsOnline() ? 1.0f : 0.0f;
     if (loader_feedback != nullptr)
-        *loader_feedback = Loader.IsOnline() ? 1.0f : 0.0f;
+        *loader_feedback = infantry.Loader.IsOnline() ? 1.0f : 0.0f;
     if (friction_ready != nullptr)
         *friction_ready = FrictionReady() ? 1.0f : 0.0f;
     if (left_velocity != nullptr)
-        *left_velocity = Friction_Left.feedback.velocity;
+        *left_velocity = infantry.Friction_Left.feedback.velocity;
     if (right_velocity != nullptr)
-        *right_velocity = Friction_Right.feedback.velocity;
+        *right_velocity = infantry.Friction_Right.feedback.velocity;
     /* 摩擦轮指令方向与云台板原实现一致：左轮取负、右轮取正。 */
-    const bool friction_commanded = (Fire_State != FireState::IDLE);
+    const bool friction_commanded = app.command.shoot_mode == ShootMode::ON &&
+                                    (app.command.friction_mode == FrictionMode::ON || infantry.Fire_State != FireState::IDLE);
     if (left_target != nullptr)
         *left_target = friction_commanded ? -FRICTION_SPEED_RAD_S : 0.0f;
     if (right_target != nullptr)
         *right_target = friction_commanded ? FRICTION_SPEED_RAD_S : 0.0f;
     if (fire_state != nullptr)
-        *fire_state = static_cast<float>(Fire_State);
+        *fire_state = static_cast<float>(infantry.Fire_State);
     if (press_duration_ms != nullptr)
-        *press_duration_ms = (Fire_State == FireState::PRESSING)
-                                 ? static_cast<float>(HAL_GetTick() - Press_Start_Tick)
+        *press_duration_ms = (infantry.Fire_State == FireState::PRESSING)
+                                 ? static_cast<float>(HAL_GetTick() - infantry.Press_Start_Tick)
                                  : 0.0f;
     if (left_motor_state != nullptr)
-        *left_motor_state = static_cast<float>(Friction_Left.feedback.state);
+        *left_motor_state = static_cast<float>(infantry.Friction_Left.feedback.state);
     if (right_motor_state != nullptr)
-        *right_motor_state = static_cast<float>(Friction_Right.feedback.state);
+        *right_motor_state = static_cast<float>(infantry.Friction_Right.feedback.state);
 }
 
 extern "C" void Shoot_GetLoaderDebug(Struct_Legacy_Loader_Debug *debug)
@@ -530,18 +548,18 @@ extern "C" void Shoot_GetLoaderDebug(Struct_Legacy_Loader_Debug *debug)
     if (debug == nullptr)
         return;
 
-    const uint64_t timestamp_us = Loader.Get_Last_Feedback_Timestamp_Us();
+    const uint64_t timestamp_us = infantry.Loader.Get_Last_Feedback_Timestamp_Us();
     const uint64_t now_us = SYS_Timestamp.Get_Now_Microsecond();
-    debug->encoder = static_cast<float>(Loader.feedback.encoder);
-    debug->rotor_total_angle_degree = Loader.feedback.rotor_total_angle_degree;
-    debug->output_total_angle_degree = Loader.feedback.output_total_angle_degree;
-    debug->rotor_speed_rad_s = Loader.feedback.rotor_speed;
-    debug->output_speed_rad_s = Loader.feedback.output_speed;
-    debug->current_raw = static_cast<float>(Loader.feedback.current_raw);
+    debug->encoder = static_cast<float>(infantry.Loader.feedback.encoder);
+    debug->rotor_total_angle_degree = infantry.Loader.feedback.rotor_total_angle_degree;
+    debug->output_total_angle_degree = infantry.Loader.feedback.output_total_angle_degree;
+    debug->rotor_speed_rad_s = infantry.Loader.feedback.rotor_speed;
+    debug->output_speed_rad_s = infantry.Loader.feedback.output_speed;
+    debug->current_raw = static_cast<float>(infantry.Loader.feedback.current_raw);
     debug->feedback_age_ms = timestamp_us == 0U
                                  ? -1.0f
                                  : static_cast<float>(now_us - timestamp_us) * 0.001f;
-    debug->speed_pid_out = Loader.feedback.pid.speed.out;
+    debug->speed_pid_out = infantry.Loader.feedback.pid.speed.out;
 }
 
 #endif /* SHOOT && LEGACY_INFANTRY_GIMBAL */
@@ -576,8 +594,6 @@ struct ShootContext
 {
     Subscriber<ShootCmd> command_subscriber{MessageCenter::Shoot_Command_Topic};
     Publisher<ShootFeedback> feedback_publisher{MessageCenter::Shoot_Feedback_Topic};
-    ShootCmd command{};
-    ShootFeedback feedback{};
     uint8_t feedback_divider = 0U;
 #if SHOOT
     Class_DJIMotor friction_left;
@@ -614,7 +630,7 @@ static PID_InitTypeDef Shoot_MakePID(const ShootPidConfig &config)
 static void Shoot_ApplyCommand(void)
 {
     /* ShootMode 是总使能；关闭后摩擦轮和拨弹盘都停止主动输出。 */
-    const bool enabled = ctx.command.shoot_mode == ShootMode::ON;
+    const bool enabled = app.command.shoot_mode == ShootMode::ON;
     (void)ctx.friction_group.RequestEnabled(enabled);
     (void)ctx.loader_group.RequestEnabled(enabled);
     if (!enabled)
@@ -624,36 +640,37 @@ static void Shoot_ApplyCommand(void)
     }
 
     float friction_reference_rad_s = 0.0f;
-    if (ctx.command.friction_mode == FrictionMode::ON)
+    if (app.command.friction_mode == FrictionMode::ON)
     {
-        friction_reference_rad_s = ctx.command.friction_speed_rad_s > 0.0f
-            ? ctx.command.friction_speed_rad_s
-            : kShootConfig.default_friction_speed_rad_s;
+        friction_reference_rad_s = app.command.friction_speed_rad_s > 0.0f
+                                       ? app.command.friction_speed_rad_s
+                                       : kShootConfig.default_friction_speed_rad_s;
     }
     ctx.friction_group.Control(friction_reference_rad_s, friction_reference_rad_s);
 
     float loader_speed_target_rad_s = 0.0f;
-    switch (ctx.command.loader_mode)
+    switch (app.command.loader_mode)
     {
     case LoaderMode::BURST:
     {
         // 连发以角速度控制，退出之前的事件角度保持；射速乘单弹角得到 rad/s。
         ctx.event_angle_active = false;
         ctx.loader.Set_Outer_Loop(DJI_MOTOR_SPEED_LOOP);
-        const float rate = ctx.command.shoot_rate_hz > 0.0f
-            ? ctx.command.shoot_rate_hz : kShootConfig.default_rate_hz;
-        loader_speed_target_rad_s = ctx.command.loader_speed_rad_s != 0.0f
-            ? ctx.command.loader_speed_rad_s
-            : rate * kShootConfig.one_bullet_angle_rad;
+        const float rate = app.command.shoot_rate_hz > 0.0f
+                               ? app.command.shoot_rate_hz
+                               : kShootConfig.default_rate_hz;
+        loader_speed_target_rad_s = app.command.loader_speed_rad_s != 0.0f
+                                        ? app.command.loader_speed_rad_s
+                                        : rate * kShootConfig.one_bullet_angle_rad;
         break;
     }
 
     case LoaderMode::REVERSE:
         ctx.event_angle_active = false;
         ctx.loader.Set_Outer_Loop(DJI_MOTOR_SPEED_LOOP);
-        loader_speed_target_rad_s = ctx.command.loader_speed_rad_s != 0.0f
-            ? -std::fabs(ctx.command.loader_speed_rad_s)
-            : kShootConfig.reverse_speed_rad_s;
+        loader_speed_target_rad_s = app.command.loader_speed_rad_s != 0.0f
+                                        ? -std::fabs(app.command.loader_speed_rad_s)
+                                        : kShootConfig.reverse_speed_rad_s;
         break;
 
     case LoaderMode::STOP:
@@ -700,28 +717,28 @@ static void Shoot_ApplyCommand(void)
 
 static void Shoot_UpdateFeedback(void)
 {
-    ctx.feedback.friction_left_speed_rad_s =
+    app.feedback.friction_left_speed_rad_s =
         ctx.friction_left_snapshot.output_speed;
-    ctx.feedback.friction_right_speed_rad_s =
+    app.feedback.friction_right_speed_rad_s =
         ctx.friction_right_snapshot.output_speed;
-    ctx.feedback.loader_angle_rad = ctx.loader_snapshot.output_total_angle;
-    ctx.feedback.loader_speed_rad_s = ctx.loader_snapshot.output_speed;
-    ctx.feedback.enabled = ctx.command.shoot_mode == ShootMode::ON &&
+    app.feedback.loader_angle_rad = ctx.loader_snapshot.output_total_angle;
+    app.feedback.loader_speed_rad_s = ctx.loader_snapshot.output_speed;
+    app.feedback.enabled = app.command.shoot_mode == ShootMode::ON &&
                            ctx.friction_left_snapshot.ready &&
                            ctx.friction_right_snapshot.ready && ctx.loader_snapshot.ready;
-    ctx.feedback.online = ctx.friction_left_snapshot.online &&
-                            ctx.friction_right_snapshot.online &&
-                            ctx.loader_snapshot.online;
+    app.feedback.online = ctx.friction_left_snapshot.online &&
+                          ctx.friction_right_snapshot.online &&
+                          ctx.loader_snapshot.online;
 }
 #endif
 
-bool Shoot_Init(void)
-{
-    ctx.command = {};
-    ctx.feedback = {};
-    ctx.feedback_divider = 0U;
-
 #if SHOOT
+static bool Shoot_InitHardware(void)
+{
+    app.command = {};
+    app.feedback = {};
+    app.feedback_divider = 0U;
+
     Struct_DJIMotor_Init_Config friction_config{};
     friction_config.hfdcan = BoardConfig_Get().shoot_bus;
     friction_config.motor_type = Enum_DJIMotor_Type::M3508;
@@ -762,6 +779,19 @@ bool Shoot_Init(void)
     ctx.event_angle_active = false;
     ctx.loader_angle_target_rad = 0.0f;
     return ctx.initialized;
+}
+
+#endif
+
+#endif /* !LEGACY_INFANTRY_GIMBAL */
+
+bool Shoot_Init(void)
+{
+    app.command = {};
+    app.feedback = {};
+    app.feedback_divider = 0U;
+#if SHOOT
+    return Shoot_InitHardware();
 #else
     return true;
 #endif
@@ -769,147 +799,51 @@ bool Shoot_Init(void)
 
 void Shoot_Update(void)
 {
-    /* 每个控制周期读取最新命令；没有新消息时继续执行上一帧。 */
-    ShootCmd command;
-    if (ctx.command_subscriber.Read(command))
+    ShootCmd command{};
+    if (app.command_subscriber.Read(command))
     {
-        ctx.command = command;
+        app.command = command;
     }
-
-    if (ctx.command.shoot_mode == ShootMode::OFF)
+    if (app.command.shoot_mode == ShootMode::OFF ||
+        app.command.loader_mode != LoaderMode::STOP)
     {
-        // 清除本周期开始时已有的事件，避免重新使能后补射；按队列快照限制循环次数。
-        ShootEvent discarded_event;
-        size_t pending_events = MessageCenter::Shoot_Event_Queue.Size();
-        while (pending_events-- > 0U &&
-               MessageCenter::Shoot_Event_Queue.Pop(discarded_event))
-        {
-        }
+        // 安全撤销/连续模式取消排队动作；按开始时的容量快照有界排空。
+        DiscardEvents();
     }
-
 #if SHOOT
-    if (ctx.initialized)
+#if LEGACY_INFANTRY_GIMBAL
+    const bool initialized = infantry.Shoot_Initialized;
+    if (initialized)
+    {
+        infantry.left_snapshot = infantry.Friction_Left.GetFeedbackSnapshot();
+        infantry.right_snapshot = infantry.Friction_Right.GetFeedbackSnapshot();
+        infantry.loader_snapshot = infantry.Loader.GetMotionSnapshot();
+        // 控制判定用同一份拨弹盘反馈，避免 ISR 在角度/电流读取之间改写。
+        const uint32_t interrupt_state = __get_PRIMASK();
+        __disable_irq();
+        __DMB();
+        infantry.loader_feedback = infantry.Loader.feedback;
+        __DMB();
+        __set_PRIMASK(interrupt_state);
+    }
+#else
+    const bool initialized = ctx.initialized;
+    if (initialized)
     {
         ctx.friction_left_snapshot = ctx.friction_left.GetMotionSnapshot();
         ctx.friction_right_snapshot = ctx.friction_right.GetMotionSnapshot();
         ctx.loader_snapshot = ctx.loader.GetMotionSnapshot();
+    }
+#endif
+    if (initialized)
+    {
         Shoot_ApplyCommand();
         Shoot_UpdateFeedback();
     }
 #endif
-
-    /* 控制按 1 kHz 更新，应用层反馈降频到 100 Hz。 */
-    ctx.feedback_divider++;
-    if (ctx.feedback_divider >= 10U)
+    if (++app.feedback_divider >= 10U)
     {
-        ctx.feedback_divider = 0U;
-        ctx.feedback_publisher.Publish(ctx.feedback);
+        app.feedback_divider = 0U;
+        app.feedback_publisher.Publish(app.feedback);
     }
 }
-
-#endif /* !LEGACY_INFANTRY_GIMBAL */
-
-#if LEGACY_INFANTRY_GIMBAL
-
-bool Shoot_Init(void)
-{
-    Shoot_Command = {};
-    Shoot_Feedback = {};
-    Shoot_Feedback_Divider = 0U;
-
-#if SHOOT && LEGACY_INFANTRY_GIMBAL
-    return Shoot_Legacy_Init();
-#elif SHOOT
-    Struct_DJIMotor_Init_Config friction_config{};
-    friction_config.hfdcan = BoardConfig_Get().shoot_bus;
-    friction_config.motor_type = Enum_DJIMotor_Type::M3508;
-    friction_config.gear_ratio = 1.0f; // 摩擦轮直驱，不使用 M3508 默认减速比 19。
-    friction_config.close_loop = DJI_MOTOR_SPEED_LOOP;
-    friction_config.outer_loop = DJI_MOTOR_SPEED_LOOP;
-    // 速度环输入为 rad/s；增益无可信实车标定依据，启用前需重新整定。
-    friction_config.speed_pid = Shoot_MakePID(7.5f, 5.0f, 0.0f, 16000.0f, 16000.0f);
-
-    friction_config.can_id = 3U;
-    const bool left_initialized = Shoot_Friction_Left.Init(friction_config);
-    friction_config.can_id = 2U;
-    friction_config.reverse = true;
-    const bool right_initialized = Shoot_Friction_Right.Init(friction_config);
-
-    Struct_DJIMotor_Init_Config loader_config{};
-    loader_config.hfdcan = BoardConfig_Get().shoot_bus;
-    loader_config.can_id = 8U;
-    loader_config.motor_type = Enum_DJIMotor_Type::M3508;
-    loader_config.close_loop = DJI_MOTOR_CURRENT_LOOP |
-                               DJI_MOTOR_SPEED_LOOP |
-                               DJI_MOTOR_ANGLE_LOOP;
-    loader_config.outer_loop = DJI_MOTOR_SPEED_LOOP;
-    loader_config.current_pid = Shoot_MakePID(1.0f, 50.0f, 0.0f, 12000.0f, 12000.0f);
-    loader_config.speed_pid = Shoot_MakePID(7.5f, 20.0f, 0.0f, 12000.0f, 12000.0f);
-    // 角度环输出是 rad/s；原 360 deg/s 限幅转换为 2π rad/s。
-    loader_config.angle_pid = Shoot_MakePID(10.0f, 0.0f, 0.0f,
-                                            0.0f, DegToRad(360.0f));
-    const bool loader_initialized = Shoot_Loader.Init(loader_config);
-
-    Shoot_Initialized = left_initialized && right_initialized && loader_initialized &&
-        Shoot_Friction_Group.Init(&Shoot_Friction_Left, &Shoot_Friction_Right) &&
-        Shoot_Loader_Group.Init(&Shoot_Loader);
-    Shoot_Output_Enabled = true;
-    if (Shoot_Initialized)
-    {
-        Shoot_SetEnabled(false);
-    }
-    Shoot_Event_Angle_Active = false;
-    Shoot_Loader_Angle_Target_Rad = 0.0f;
-    return Shoot_Initialized;
-#else
-    return true;
-#endif
-}
-
-void Shoot_Update(void)
-{
-    /* 每个控制周期读取最新命令；没有新消息时继续执行上一帧。 */
-    ShootCmd command;
-    if (Shoot_Command_Subscriber.Read(command))
-    {
-        Shoot_Command = command;
-    }
-
-    if (Shoot_Command.shoot_mode == ShootMode::OFF)
-    {
-        ShootEvent discarded_event;
-        size_t pending_events = MessageCenter::Shoot_Event_Queue.Size();
-        while (pending_events-- > 0U &&
-               MessageCenter::Shoot_Event_Queue.Pop(discarded_event))
-        {
-        }
-    }
-
-#if SHOOT && LEGACY_INFANTRY_GIMBAL
-    /* 老步兵云台板：扳机沿与长短按判定都在发射状态机内部，不使用事件队列。 */
-    if (Shoot_Initialized)
-    {
-        Shoot_Legacy_Loop();
-        Shoot_Legacy_UpdateFeedback();
-    }
-#elif SHOOT
-    if (Shoot_Initialized)
-    {
-        Shoot_Friction_Left_Snapshot = Shoot_Friction_Left.GetMotionSnapshot();
-        Shoot_Friction_Right_Snapshot = Shoot_Friction_Right.GetMotionSnapshot();
-        Shoot_Loader_Snapshot = Shoot_Loader.GetMotionSnapshot();
-        Shoot_ApplyCommand();
-        Shoot_UpdateFeedback();
-    }
-#endif
-
-    /* 控制按 1 kHz 更新，应用层反馈降频到 100 Hz。 */
-    Shoot_Feedback_Divider++;
-    if (Shoot_Feedback_Divider >= 10U)
-    {
-        Shoot_Feedback_Divider = 0U;
-        Shoot_Feedback_Publisher.Publish(Shoot_Feedback);
-    }
-}
-
-#endif /* LEGACY_INFANTRY_GIMBAL */

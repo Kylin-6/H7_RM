@@ -1,94 +1,61 @@
-# 双达妙云台
+# 老步兵单 Pitch 云台
 
-云台由统一 ControlTask 以 1 kHz 调度，两轴均使用现有 `Class_DMMotor` 和 MIT 模式。
-QD4310 驱动仍作为独立设备保留，云台不再依赖它。SingleBoard 默认
-`H7_APP_GIMBAL=OFF`；GimbalBoard 构建固定启用云台硬件路径。
+本分支的云台 App 按实车只有一个 Pitch 电机编写。Yaw 由底盘板控制，本板不保存
+Yaw 电机、PID 或就绪状态；双轴例程的 MotorMit 位置/速度控制路径已移除。
+公共 `GimbalCmd` / `GimbalFeedback` 保持框架布局，Yaw 命令字段被忽略，Yaw 反馈仅为姿态观测。
 
-## 配置与参考来源
+## 所有权与数据流
 
-在 [Gimbal_Config.h](Gimbal_Config.h) 集中配置；`Gimbal_Init()` 复制默认配置，
-也可在启动阶段传入一份 `Struct_Gimbal_Config`。初始化只调用一次，不等待电机、
-不自动设置机械零位、不切换控制模式、不写电机持久化参数。电机端须预先设置 MIT 模式。
-配置校验失败或驱动注册失败返回 false，`Gimbal_GetStatus()` 返回 CONFIG_ERROR。
-电机、PID、目标和 Snapshot 由 `Gimbal.cpp` 的私有 `GimbalContext` 持有；
-外部只能通过初始化、周期入口和只读状态接口访问 Application。
+```text
+底盘 0x065 → RemoteInput → InputState/来源仲裁 → RobotCmd → Gimbal_Command_Topic
+DM-IMU → DM_IMU_InsBridge → INS_State_Topic → Gimbal_Update → Class_DMMotor → CAN BSP
+```
 
-| 项目 | 示例 | 来源与限制 |
-| --- | --- | --- |
-| Yaw / Pitch 总线 | GimbalBoard 均为 FDCAN1；SingleBoard 为 FDCAN2 / FDCAN1 | 由所选 BoardConfig 固定接线，板间链路占用 GimbalBoard 的 FDCAN2 |
-| 电机 ID | 1 / 2 | 示例，需与电机端对应 |
-| 反馈 Master ID | 0x101 / 0x102 | 示例，不能与同总线现有接收 ID 冲突 |
-| 协议量程 | ±12.5 rad、±45 rad/s、±18 N·m | Meta 达妙驱动示例，必须与电机端 PMAX/VMAX/TMAX 相同 |
-| Yaw 角度 Kp / 速度上限 | 8 / 8.72664626 rad/s | 参考 basic 云台，速度上限按示例 500 deg/s 转换 |
-| Yaw 转矩环 Kp/Ki/Kd | 全部为 0 | 没有可直接移植的达妙整定值，默认无 Yaw 主动转矩 |
-| Yaw 转矩 / 积分上限 | 18 / 0 N·m | 转矩上限仅为协议范围示例，须按机构调整；启用 Ki 时同时设置积分限幅 |
-| Pitch MIT Kp/Kd | 20 / 1 | 来自 Meta 小米 Pitch 示例，不是已验证的达妙参数 |
-| Pitch 位置 / 速度限位 | [-1.5, 0.5] rad / ±1 rad/s | Meta 机构示例，必须按实际机械零位重新标定 |
-| Pitch 电机/姿态比例 | 1 | 直接驱动示例；使用正传动比，反向由电机 reverse 配置 |
-| IMU 角速度轴 | Yaw Z、Pitch Y，符号均 +1 | 对应本工程 Z-Y-X 姿态定义；安装方向改变时须复核 |
+ControlTask 按 1 kHz 调用，反馈每 10 个周期发布一次。Gimbal 的私有 Context 唯一持有
+Pitch 电机和外环状态，不向外暴露电机指针。独立 `Application/Pitch` 已合并移除；
+原无人调用的手工目标覆盖/S 曲线接口不保留，目标统一通过 RobotCmd 发布。
 
-参考文件：basic_framework 的 `application/gimbal/gimbal.c`；Meta-Embedded-NG 的
-`application/gimbal/2yaw_gimbal.c`、`application/sentry/sentry_def.h` 和
-`module/motor/DMmotor/dmmotor.h`。这是控制结构与数值示例的适配，不代表参考工程已经
-实现或验证了本工程的双达妙硬件。许可见 [THIRD_PARTY_NOTICES](../THIRD_PARTY_NOTICES.md)。
+## 接线与标定
 
-## 控制契约
+接线在 `User_Config/Board/gimbal_board_config.cpp`；机构参数集中在
+[Gimbal_Config.h](Gimbal_Config.h)。
 
-`GimbalCmd` 的角度是 INS 姿态 rad，速度是姿态角速度前馈 rad/s。
+| 项目 | 当前老步兵值 |
+| --- | --- |
+| Pitch 电机 | FDCAN1，节点 0x09，反馈 0x019，预先配置 MIT 模式 |
+| DM-IMU | FDCAN3，请求 0x66，反馈 0x33 |
+| 电机协议量程 | ±3.14 rad、±30 rad/s、±10 N·m |
+| 姿态目标范围 | -40°～+15°，边界转换为 rad |
+| 遥控目标斜坡 | 3 rad/s |
+| 最大输出力矩 | 0.5 N·m |
+| 输出方向 | IMU 正方向与电机正方向相反，最终力矩乘 -1 |
+| 每次使能延迟 | 2000 ms，等待期不发送 Enable 或 MIT 力矩 |
+| INS / 电机运动反馈时效 | 100 ms |
 
-### Pitch 控制结构（`GimbalPitchControl`）
+输入的两级低通保留老工程 alpha=dt/(tau+dt)，在 Init 时反解框架 IIR 的截止频率。
+参数来自原老步兵控制，不作为其他机构默认标定。电源、FDCAN 重传与旧底盘协议配置未改。
 
-- `MotorMit`（默认）：目标按 `pitch_motor_per_imu` 换算到电机坐标，由电机端
-  MIT kp/kd 闭环。IMU 只参与目标换算。
-- `ImuTorque`：IMU 角度外环 PID + 目标速度前馈 + IMU 角速度阻尼 + 连续
-  Stribeck 摩擦补偿 + 低带宽扰动估计，纯力矩经 MIT `t_ff` 下发（电机侧
-  kp/kd 为 0）。控制律迁移自老步兵云台板 `Application/Pitch`，公式与
-  计算顺序一致（host 对拍：`build/tmp/host_duibi/`，200k 随机输入逐位一致）。
-  组件复用：目标斜坡 `Class_Slope`、位置环 `Class_PID`、角速度低通
-  `Class_Filter_IIR_First_Order`、轴向映射复用 `pitch_gyro_axis/sign`。
-  与 legacy 的两点分层差异：角速度改用传感器原生陀螺仪帧（INS gyro）替代
-  差分估计，摩擦/阻尼参数换源后须实机复验；使能延迟只延迟 MIT 力矩输出，
-  使能帧由 `RequestEnabled` 边沿先行下发。手写 S 曲线路径（调试用
-  `Pitch_SetTargetAngle`）没有框架输入映射，不迁移。
-- 单轴（`GimbalAxisMode::PitchOnly`）与两种 Pitch 控制结构正交组合：
-  老步兵双板分工 = PitchOnly + ImuTorque + DM-IMU（经 INS 桥发布）。
+## 控制与安全契约
 
-- Yaw：最短路径角误差 → 角度比例环 → 叠加速度前馈并限幅 → 速度 PID → 转矩限幅 → `SetTorque()`。
-- Pitch：`p_ref = p_motor + ratio * (pitch_ref - pitch_imu)`；
-  `v_ref = v_motor + ratio * (pitch_speed_ref - gyro_pitch)`。
-  使用一次快照中的电机位置/速度，按配置限幅后发出 MIT 指令，转矩前馈为零。
-- 电机反馈及目标均使用经过 reverse 统一的逻辑方向，协议编码只在驱动中翻转一次。
-- 姿态轴和选用的机体系角速度须与机构约定匹配；当前不是任意安装姿态的完整坐标变换器。
-- LOCK 捕获并保持当前姿态，忽略随后发布的目标字段；IMU 使用新发布的目标。
-- 输入边界校验外部命令与 INS 数值，DM 驱动解码合法反馈；云台控制路径只判断命令模式、INS 新鲜度及电机快照，DISABLED 始终优先停机。
+- `IMU`：接收绝对 Pitch 姿态目标，限位后经框架 Slope 从当前姿态平滑接入。
+- `LOCK` / `DISABLED`：本单轴应用保持失能，沿用老步兵无明确目标不带力矩启动的行为。
+- 位置 PID + 不对称目标速度前馈 - IMU 速度阻尼 + Stribeck 摩擦补偿 + 低带宽扰动估计。
+  电机端 MIT `kp/kd` 恒为 0，仅用 `t_ff` 执行力矩。
+- DM-IMU 桥沿用欧拉角差分速度：序号差乘标称 1 ms，限幅 ±3 rad/s，变间隔一阶低通
+  tau=10 ms，结果放在 INS 的 `gyro_y_rad_s`。它是 Pitch 姿态速度，不是原始机体系陀螺。
+- 桥只在收到新欧拉角帧时发布；无数据不发布零姿态续期，Gimbal 根据 Topic 时间戳停机。
+- 初始化不发使能、不置零、不写电机持久化参数。注册失败时 Update 安全返回。
+- 输入撤销、INS 过期、电机掉线或故障时请求失能并清除目标路径与扰动状态。
+  健康恢复重新等待 2 s，电机 ready 后从当前姿态向当前有效目标限速过渡。
+- DMMotor 处理协议请求边沿及 100 Hz 失败补交/状态纠正；Gimbal 每 1 ms 提交最新力矩，
+  不阻塞等待发送。软件提交成功不代表设备执行成功。
 
-## 状态与恢复
+`Gimbal_GetStatus()` 用于观察 CONFIG_ERROR / DISABLE / FAULT / ENABLING / READY。
+`GimbalFeedback.enabled` 表示当前控制许可有效且本板唯一 Pitch 电机 ready。
 
-`Gimbal_GetStatus()` 返回 DISABLE、ENABLING、READY、FAULT 或 CONFIG_ERROR。
-`Gimbal_Init()` 不发送使能；收到活动模式后才启动就绪流程。现有 RobotCmd 启动默认
-发布 LOCK，因此打开云台编译选项后会自动进入此流程，不能把示例参数当作上板标定结果。
+## 验证边界
 
-- INS 必须不超过 10 ms；两轴运动反馈必须小于 100 ms，在线判断不等待 StatusTask。INS 发布端拒绝非有限姿态或角速度。
-- 云台每周期读取命令、INS 与两轴快照；活动模式请求两轴使能，两轴 ready 后立即捕获当前姿态并执行控制。没有就绪超时、退避或稳定窗口。
-- `Gimbal_GetStatus()` 根据初始化结果、当前命令、INS 新鲜度和两轴 `ready/fault` 给出 DISABLE、ENABLING、READY、FAULT 或 CONFIG_ERROR；状态只用于观察，不驱动恢复流程。CAN 软件周期槽是否接受目标不改变云台状态。
-- DMMotor 的 `RequestEnabled()` 处理首次请求和状态边沿：`false→true` 立即尝试一次 Enable，不主动发布安全目标；首次 `false` 或 `true→false` 立即尝试发布安全目标并提交一次 Disable。相同状态重复请求不执行收发；存在待提交项时返回 `false`。云台只有在两轴 ready 后才写正常目标，DMMotor 的 `SetXXX()` 在未 ready 时仍自动安全化。
-- 100 Hz StatusTask 调用 `ServiceAll()`：补交失败的安全目标；在线且无故障时补交失败的当前协议命令，并在反馈与请求不一致时再次提交。离线或故障时不新增 Enable/Disable。详细提交语义见 [DM 电机驱动](../../Device/Peripheral/Motor/DMmotor/dmmotor.md)。已进入硬件 FIFO 的帧由 FDCAN Auto Retransmission 处理总线级重发。
-- DISABLED、故障或初始化部分失败时，对已注册电机调用 `RequestEnabled(false)`；
-  DMMotor 在首次请求或 `true→false` 边沿立即尝试覆盖周期槽为零刚度/阻尼/转矩并提交一次失能，相同请求不重复发布；失败项交给低频服务补交，在线反馈仍显示使能时继续纠正失能。离线时不反复刷失能命令；停止帧不能
-  保证在物理断线时送达，也不会清除已经进入硬件 FIFO 的帧。
-- 活动模式下按当前设备状态恢复。恢复先清空 PID 历史并捕获当前姿态；IMU 等待 READY 后重新
-  发布目标，LOCK 直接保持新捕获的姿态，故障前目标不会重放。
-- Daemon 只判断反馈活性；DMMotor 根据云台请求维护协议状态，不自动 ClearError。
-
-`GimbalFeedback` 仍为 100 Hz，字段布局不变。`enabled` 表示两轴电机均 ready；
-`ins_valid=false` 时发布零姿态/速度。使能命令提交成功不代表已使能。
-
-本次没有增加命令来源心跳和整车输入仲裁；无新命令时保持最后模式和目标。自动恢复后
-需要新目标这一规则，也不能替代上层的遥控失联策略。
-
-## 验证
-
-`RoboMaster_Test` 分支的 `Tests/Gimbal` 编译真实云台、达妙驱动、PID、Daemon
-和消息中心，验证协议、控制、失效及恢复。固件构建覆盖默认、仅云台及三应用开启配置。
-尚未完成板测：需要验证型号/量程、方向/零位、MIT 增益、Yaw 转矩环、机械限位、
-CAN 满载、断线恢复、使能顺序及实际控制周期。
+主机回归位于独立测试工作区的 `Tests/InfantryMigration`，编译迁移后的实际应用、DM/DJI
+驱动、输入适配和消息中心，检查单轴注册、2 s 延迟、恢复、INS 断线和发射事件。
+固件验证覆盖 SingleBoard / GimbalBoard / ChassisBoard。原双轴主机测试不再适用于此单轴 App。
+实机尚需核对方向、量程、2 s 时序、断线恢复和 Pitch 阻尼；主机测试不替代上板闭环验证。

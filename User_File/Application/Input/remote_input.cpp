@@ -21,13 +21,15 @@
 
 #if LEGACY_INFANTRY_GIMBAL
 
-#include "Pitch.h"
+#include "Gimbal_Config.h"
+#include "board_config.h"
 #include "chassis_board.h"
 #include "fdcan.h"
 
 #include "alg_filter_iir.h"
 
 #include <string.h>
+#include <cmath>
 
 namespace
 {
@@ -35,9 +37,9 @@ namespace
 constexpr float kPitchChannelMin = -770.0f;
 constexpr float kPitchChannelSpan = 1520.0f;
 constexpr float kPitchChannelFilterTauS = 0.025f;
-/** 由时间常数换算的一阶低通截止频率：fc = 1 / (2*pi*tau)，Hz。 */
-constexpr float kPitchChannelFilterCutoffHz =
-    1.0f / (6.283185307179586f * kPitchChannelFilterTauS);
+/* 老工程使用后向欧拉系数 dt/(tau+dt)；框架 IIR 使用 1-exp(-2πfc/fs)。
+ * Init 时反解 fc，复用组件并保持原递推系数，不能直接套 fc=1/(2πtau)。 */
+constexpr float kControlPeriodS = 0.001f;
 
 /* 火控开关双阈值：端点约为 +/-780，中间区保持上次状态以抑制抖动。 */
 constexpr int16_t kFirePressedThreshold = -500;
@@ -55,6 +57,9 @@ constexpr float kLoaderMaxOutputRadS =
 Class_ChassisBoard chassis_board;
 bool remote_input_initialized;
 bool fire_trigger_pressed;
+uint32_t trigger_start_ms;
+uint32_t shoot_event_sequence;
+constexpr uint32_t kLongPressMs = 300U;
 /* Pitch 通道两级一阶低通（框架 Class_Filter_IIR_First_Order 级联），
  * 每级时间常数 25 ms，总延迟约 50 ms，与原手写实现一致。 */
 Class_Filter_IIR_First_Order pitch_filter_stage1;
@@ -64,7 +69,8 @@ Class_Filter_IIR_First_Order pitch_filter_stage2;
 float MapPitchChannel(float channel)
 {
     const float ratio = 1.0f - (channel - kPitchChannelMin) / kPitchChannelSpan;
-    return PITCH_TARGET_MIN_RAD + ratio * (PITCH_TARGET_MAX_RAD - PITCH_TARGET_MIN_RAD);
+    const auto config = Gimbal_Default_Config();
+    return config.pitch_min + ratio * (config.pitch_max - config.pitch_min);
 }
 
 /** 波轮档位线性映射到拨弹盘输出速度（输出轴 rad/s），负档位为 0。 */
@@ -91,11 +97,18 @@ bool RemoteInput_Init(void)
     }
 
     /* 板间链路走云台板的 FDCAN2，与底盘板的下行帧一致。 */
-    chassis_board.Init(&hfdcan2);
+    if (!chassis_board.Init(BoardConfig_Get().remote_forward_bus))
+    {
+        return false;
+    }
     fire_trigger_pressed = false;
+    trigger_start_ms = 0U;
+    shoot_event_sequence = 0U;
     /* 两级低通：每级 tau = 25 ms（原工程数值），1 kHz 采样。 */
-    pitch_filter_stage1.Init(kPitchChannelFilterCutoffHz, 1000.0f);
-    pitch_filter_stage2.Init(kPitchChannelFilterCutoffHz, 1000.0f);
+    constexpr float alpha = kControlPeriodS / (kPitchChannelFilterTauS + kControlPeriodS);
+    const float cutoff_hz = -std::log1p(-alpha) / (6.283185307179586f * kControlPeriodS);
+    pitch_filter_stage1.Init(cutoff_hz, 1000.0f);
+    pitch_filter_stage2.Init(cutoff_hz, 1000.0f);
     /* 输入仲裁状态一并复位：上电即处于 Remote 失联安全态。 */
     InputState_Reset();
     InputState_SetTime(HAL_GetTick());
@@ -122,21 +135,24 @@ void RemoteInput_Update(void)
     const uint32_t now_ms = HAL_GetTick();
     InputState_SetTime(now_ms);
 
-    int16_t fire = 0;
-    int16_t dial = 0;
-    int16_t pitch = 0;
-    const bool channels_valid = chassis_board.GetFire(&fire) &&
-                                chassis_board.GetDial(&dial) &&
-                                chassis_board.GetPitch(&pitch);
+    // 三个通道必须来自同一帧，不能在独立 getter 之间被 CAN ISR 更新。
+    Struct_ChassisBoard_Channels channels{};
+    const bool channels_valid = chassis_board.ReadChannels(channels);
+    const int16_t fire = channels.fire;
+    const int16_t dial = channels.dial;
+    const int16_t pitch = channels.pitch;
 
     if (!channels_valid)
     {
         /* 安全互锁：提交空输入由仲裁输出 safe state；不再清除滤波历史，
          * 链路恢复后目标由限速率路径平滑过渡。 */
+        fire_trigger_pressed = false;
+        trigger_start_ms = now_ms;
         InputState_SubmitRemote({});
         return;
     }
 
+    const bool was_pressed = fire_trigger_pressed;
     if (fire <= kFirePressedThreshold)
     {
         fire_trigger_pressed = true;
@@ -147,11 +163,23 @@ void RemoteInput_Update(void)
     }
     const bool trigger_pressed = fire_trigger_pressed;
 
+    if (trigger_pressed && !was_pressed)
+    {
+        trigger_start_ms = now_ms;
+    }
+    const bool short_release = was_pressed && !trigger_pressed &&
+                               now_ms - trigger_start_ms < kLongPressMs;
+    if (short_release)
+    {
+        ++shoot_event_sequence;
+    }
+    const bool burst = trigger_pressed && now_ms - trigger_start_ms >= kLongPressMs;
     ControlInput remote_input{};
+    remote_input.shoot_event_sequence = shoot_event_sequence;
 
     GimbalCmd gimbal_command{};
     gimbal_command.mode = GimbalMode::IMU;
-    /* 云台板没有 Yaw 目标输入：Yaw 锁在使能时刻的姿态，目标角由 Gimbal 保持。 */
+    /* 本板只拥有 Pitch：Yaw 字段不参与控制，也不初始化 Yaw 电机。 */
     gimbal_command.yaw_angle_rad = 0.0f;
     gimbal_command.yaw_speed_rad_s = 0.0f;
     /* 两级级联低通：首帧由 Set_Now 自动对齐通道值（与原实现一致）；
@@ -166,11 +194,12 @@ void RemoteInput_Update(void)
     remote_input.gimbal = gimbal_command;
 
     ShootCmd shoot_command{};
-    shoot_command.shoot_mode = trigger_pressed ? ShootMode::ON : ShootMode::OFF;
-    /* 摩擦轮由发射状态机自己驱动，这两个字段只作为上层可读的意图描述。 */
+    // ON 表示健康输入授予输出许可；松扳机不撤销单发/延时停轮，失联才 OFF。
+    shoot_command.shoot_mode = ShootMode::ON;
+    /* 输入层识别长短按：短按为事件，长按为持续 BURST。 */
     shoot_command.friction_mode =
         trigger_pressed ? FrictionMode::ON : FrictionMode::OFF;
-    shoot_command.loader_mode = trigger_pressed ? LoaderMode::BURST : LoaderMode::STOP;
+    shoot_command.loader_mode = burst ? LoaderMode::BURST : LoaderMode::STOP;
     /* 拨弹盘输出轴速度，rad/s。 */
     shoot_command.loader_speed_rad_s = MapDialToLoaderSpeed(dial);
     remote_input.shoot = shoot_command;
@@ -187,24 +216,20 @@ bool RemoteInput_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch)
         return false;
     }
 
-    int16_t local_fire = 0;
-    int16_t local_dial = 0;
-    int16_t local_pitch = 0;
-    const bool valid = chassis_board.GetFire(&local_fire) &&
-                       chassis_board.GetDial(&local_dial) &&
-                       chassis_board.GetPitch(&local_pitch);
+    Struct_ChassisBoard_Channels channels{};
+    const bool valid = chassis_board.ReadChannels(channels);
 
     if (fire != nullptr)
     {
-        *fire = local_fire;
+        *fire = channels.fire;
     }
     if (dial != nullptr)
     {
-        *dial = local_dial;
+        *dial = channels.dial;
     }
     if (pitch != nullptr)
     {
-        *pitch = local_pitch;
+        *pitch = channels.pitch;
     }
     return valid;
 }

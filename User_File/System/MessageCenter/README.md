@@ -160,7 +160,7 @@ bool available = queue.Pop(event);
 
 | 通道 | 发布者 | 消费者 | 语义 |
 | --- | --- | --- | --- |
-| `INS_State_Topic` | `System_IMU_Publish_State` | Gimbal | 最新姿态与角速度 |
+| `INS_State_Topic` | BMI088 `System_IMU_Publish_State`；老步兵 DM-IMU 桥（二选一） | Gimbal | 最新姿态与角速度 |
 | `Gimbal_Command_Topic` | RobotCmd | Gimbal | 最新云台控制目标 |
 | `Chassis_Command_Topic` | 单板 RobotCmd；底盘板 Transport 接收入口 | Chassis | 最新底盘速度目标 |
 | `Shoot_Command_Topic` | RobotCmd | Shoot | 最新发射连续状态 |
@@ -310,3 +310,13 @@ Message Center 不负责：
 - [BSP](../../Middleware/BSP/README.md)
 - [Application](../../Application/README.md)
 - [交互式架构图](../../../Assets/Architecture/H7_BSP.html)
+
+## 老步兵单轴适配
+
+本分支的 Gimbal 只控制 Pitch，Yaw 消息字段保留用于公共布局与姿态观测。
+DM-IMU 桥仅在新欧拉角帧到达时发布 INS；Pitch 差分速度放 `gyro_y_rad_s`，过期不续期。
+具体控制契约见 [单 Pitch 云台](../../Application/Gimbal/README.md)。
+
+输入事件随来源仲裁传递序号，由 RobotCmd 去重并推入唯一 Shoot_Event_Queue。
+健康输入 ON 表示许可；短按释放仍为 ON + STOP + ShootOnce，失联才 OFF 并清队列。
+机构消费与恢复规则见 [老步兵发射](../../Application/Shoot/README.md)。

@@ -1,101 +1,90 @@
 /**
- * ******************************************************************************
- * @file    dm_imu_ins.cpp
- * @brief   DM-IMU → INS_State_Topic 桥实现。
- * @details 发布模式与 System/IMU/sys_imu（BMI088 链路）对齐：Daemon 30 ms 活性、
- *          Publisher 固定绑定 INS_State_Topic、只在任务上下文发布。单位换算：
- *          欧拉角 度 → rad，角速度帧本身是 rad/s。数据不新鲜时发布零姿态并置
- *          ins_valid=false，由消费端（如框架 Gimbal 的 10 ms 新鲜度检查）决定
- *          安全行为。
- * ******************************************************************************
+ * @file dm_imu_ins.cpp
+ * @brief 老步兵 DM-IMU 姿态适配：设备快照 → SI → 唯一 INS Topic。
+ * @details Pitch 阻尼沿用欧拉角差分测速（限幅 3 rad/s、tau=10 ms），
+ *          不替换为尚未上板标定的原生 gyro。每个新欧拉角帧只发布一次；
+ *          无应答时不刷新 Topic 时间戳，Gimbal 按 100 ms 时效失能。
  */
-
 #include "dm_imu_ins.h"
-
 #include "dvc_dm_imu.h"
-
-#include "daemon.h"
+#include "board_config.h"
 #include "message_center.h"
-#include "message_types.h"
-
 #include "stm32h7xx_hal.h"
-
-#include <cmath>
-#include <stddef.h>
 
 namespace
 {
-/** 姿态角 度 → rad。 */
-constexpr float kDegToRad = 0.017453292519943295f;
-/** INS 活性判定窗口；与 sys_imu 的 30 ms Daemon 语义一致。 */
+constexpr float kDegToRad = 0.0174532925f;
 constexpr uint32_t kInsTimeoutMs = 100U;
-/** 请求周期计数：奇偶交替请求欧拉角 / 角速度帧。 */
-uint32_t request_divider;
-bool bridge_initialized;
-bool bridge_registered;
+constexpr float kVelocityTauS = 0.010f;
+constexpr float kVelocityMaxRadS = 3.0f;
+bool initialized;
+bool has_sample;
+uint32_t last_sequence;
+float last_pitch_rad;
+float velocity_rad_s;
 } // namespace
 
 extern "C" bool DM_IMU_InsBridge_Init(void)
 {
-    if (bridge_initialized)
+    if (initialized)
     {
         return true;
     }
-
-    Daemon ins_daemon{30U};
-    bridge_registered = DaemonManager::Register(ins_daemon);
-    request_divider = 0U;
-    bridge_initialized = true;
-    return bridge_registered;
+    initialized = DM_IMU_Init(BoardConfig_Get().external_imu_bus,
+                              DM_IMU_DEFAULT_CAN_ID, DM_IMU_DEFAULT_MST_ID);
+    return initialized;
 }
 
 extern "C" bool DM_IMU_InsBridge_IsFresh(void)
 {
-    return DM_IMU_GetLastRxMs() != 0U &&
-           (HAL_GetTick() - DM_IMU_GetLastRxMs()) <= kInsTimeoutMs;
+    const auto sample = DM_IMU_GetEulerSnapshot();
+    return initialized && sample.valid &&
+           HAL_GetTick() - sample.timestamp_ms <= kInsTimeoutMs;
 }
 
 extern "C" void DM_IMU_InsBridge_Update(void)
 {
-    if (!bridge_initialized || !bridge_registered)
+    if (!initialized)
     {
         return;
     }
-
-    /* 奇偶交替请求：单帧应答率不变的前提下同时覆盖欧拉角与角速度。 */
-    ++request_divider;
-    if ((request_divider & 1U) != 0U)
+    // 单次提交失败在下一周期重试；不阻塞、不循环等待应答。
+    (void) DM_IMU_RequestEuler();
+    const auto sample = DM_IMU_GetEulerSnapshot();
+    if (!sample.valid || HAL_GetTick() - sample.timestamp_ms > kInsTimeoutMs)
     {
-        (void)DM_IMU_RequestEuler();
+        has_sample = false;
+        velocity_rad_s = 0.0f;
+        return;
     }
-    else
+    if (has_sample && sample.sequence == last_sequence)
     {
-        (void)DM_IMU_RequestGyro();
+        return;
     }
-
-    const bool fresh = DM_IMU_InsBridge_IsFresh();
+    const float pitch_rad = sample.pitch_deg * kDegToRad;
+    if (has_sample)
+    {
+        // 保留原 Pitch 的采样约定：每个合法欧拉角序号代表标称 1 ms。
+        const float dt_s = 0.001f * static_cast<float>(sample.sequence - last_sequence);
+        float velocity = (pitch_rad - last_pitch_rad) / dt_s;
+        if (velocity > kVelocityMaxRadS)
+        {
+            velocity = kVelocityMaxRadS;
+        }
+        if (velocity < -kVelocityMaxRadS)
+        {
+            velocity = -kVelocityMaxRadS;
+        }
+        velocity_rad_s += dt_s / (kVelocityTauS + dt_s) * (velocity - velocity_rad_s);
+    }
+    last_pitch_rad = pitch_rad;
+    last_sequence = sample.sequence;
+    has_sample = true;
     INS_State ins{};
-    if (fresh)
-    {
-        float pitch_deg = 0.0f;
-        float yaw_deg = 0.0f;
-        float roll_deg = 0.0f;
-        if (DM_IMU_GetEuler(&pitch_deg, &yaw_deg, &roll_deg))
-        {
-            ins.pitch_rad = pitch_deg * kDegToRad;
-            ins.yaw_rad = yaw_deg * kDegToRad;
-            ins.roll_rad = roll_deg * kDegToRad;
-        }
-        float gyro_x = 0.0f;
-        float gyro_y = 0.0f;
-        float gyro_z = 0.0f;
-        if (DM_IMU_GetGyro(&gyro_x, &gyro_y, &gyro_z))
-        {
-            ins.gyro_x_rad_s = gyro_x;
-            ins.gyro_y_rad_s = gyro_y;
-            ins.gyro_z_rad_s = gyro_z;
-        }
-    }
-    /* fresh=false 时保持零姿态默认值发布，消费端按新鲜度判定安全行为。 */
+    ins.pitch_rad = pitch_rad;
+    ins.yaw_rad = sample.yaw_deg * kDegToRad;
+    ins.roll_rad = sample.roll_deg * kDegToRad;
+    // 统一 INS 的 Pitch 角速度槽为 Y；这是姿态差分速度，不是原始机体系 gyro。
+    ins.gyro_y_rad_s = velocity_rad_s;
     MessageCenter::INS_State_Topic.Publish(ins);
 }

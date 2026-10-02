@@ -39,7 +39,9 @@ bool CommandValid(const ControlInput &input)
            (s.loader_mode == LoaderMode::STOP || s.loader_mode == LoaderMode::REVERSE ||
             s.loader_mode == LoaderMode::BURST) &&
            std::isfinite(s.friction_speed_rad_s) &&
-           std::isfinite(s.loader_speed_rad_s) && std::isfinite(s.shoot_rate_hz);
+           std::isfinite(s.loader_speed_rad_s) && std::isfinite(s.shoot_rate_hz) &&
+           (input.shoot_event.type == ShootEventType::ShootOnce ||
+            input.shoot_event.type == ShootEventType::ShootTriple);
 }
 }
 
@@ -80,6 +82,8 @@ InputDecision SourceArbitration_Resolve(const InputState &state)
     decision.chassis = selected->chassis;
     decision.gimbal = selected->gimbal;
     decision.shoot = selected->shoot;
+    decision.shoot_event = selected->shoot_event;
+    decision.shoot_event_sequence = selected->shoot_event_sequence;
     decision.armed = true;
     if (state.vision_enabled && decision.gimbal.mode != GimbalMode::DISABLED)
     {

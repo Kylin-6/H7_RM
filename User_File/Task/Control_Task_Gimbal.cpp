@@ -51,12 +51,10 @@ extern "C" void Control_Task(void *)
     }
     (void)RemoteInput_Init();
 #if LEGACY_INFANTRY_GIMBAL
-    /* DM-IMU → INS_State_Topic 桥：云台板 BMI088 缺席，由 DM-IMU 提供统一姿态
-     * Topic。legacy 控制路径不消费该 Topic（Pitch 直读设备），此发布只改善
-     * 反馈/遥测并为框架 Gimbal 单轴模式提供 INS 来源。 */
+    /* BMI088 缺席：DM-IMU 统一发布姿态，Gimbal 只读取 INS Topic。 */
     (void)DM_IMU_InsBridge_Init();
 #endif
-    Gimbal_Init();
+    (void) Gimbal_Init();
     (void)Shoot_Init();
 
     for (;;)

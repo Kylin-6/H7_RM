@@ -1,118 +1,15 @@
 /**
  * @file Gimbal.cpp
- * @brief 云台应用：老步兵云台板路径与框架通用路径。
- * @details
- * - `LEGACY_INFANTRY_GIMBAL=1`（老步兵云台板）：过渡路径。轴侧控制全部在
- *   Application/Pitch（DM MIT + DM-IMU），本文件只做模式门控与反馈汇总。
- *   原 Yaw/QD4310 逻辑已随 LEGACY_INFANTRY_GIMBAL_YAW=0 的架构决定删除
- *   （Yaw 由底盘板主控）。框架路径（PitchOnly + ImuTorque）上板验证后本段退役。
- * - 其他板型：RoboMaster_H7 框架通用实现——配置驱动（Gimbal_Config.h），
- *   支持 DualAxis/PitchOnly 轴模式与 MotorMit/ImuTorque 两种 Pitch 控制结构。
- * 两条路径由编译期宏互斥选择。
+ * @brief 老步兵单 Pitch 云台：框架消息入口、私有设备所有权和 IMU 力矩闭环。
+ * @details Yaw 由底盘板主控，本板不注册 Yaw。Pitch 电机编码器用于健康判断，
+ *          角度/角速度来自统一 INS Topic；DM-IMU 的适配与换算由设备桥完成。
  */
-
-#include "Gimbal.h"
-#include "message_center.h"
-#include <cmath>
-
-#if GIMBAL && LEGACY_INFANTRY_GIMBAL
-
-/* ==========================================================================
- * 老步兵云台板实现（legacy 过渡路径）
- *
- * 职责只剩三件事：INS 姿态快照、Pitch 模式门控、云台反馈汇总。轴侧控制全部
- * 在 Application/Pitch（DM MIT + DM-IMU）。原 Yaw/QD4310 逻辑随
- * LEGACY_INFANTRY_GIMBAL_YAW=0 的架构决定废弃（Yaw 由底盘板主控），已删除。
- * 框架路径（PitchOnly + ImuTorque，见 #else 分支）完成上板验证后，
- * 本段与 Application/Pitch 一并退役。
- * ========================================================================== */
-
-#include "Pitch.h"
-
-static constexpr float GIMBAL_DEG_TO_RAD = 0.0174532925f;
-static constexpr uint64_t GIMBAL_INS_MAX_AGE_US = 10000U;
-
-static INS_State Gimbal_INS_State;
-static bool Gimbal_INS_Valid = false;
-static GimbalCmd Gimbal_Command;
-static Subscriber<GimbalCmd> Gimbal_Command_Subscriber(
-    MessageCenter::Gimbal_Command_Topic);
-static Publisher<GimbalFeedback> Gimbal_Feedback_Publisher(
-    MessageCenter::Gimbal_Feedback_Topic);
-static uint8_t Gimbal_Message_Divider;
-
-void Gimbal_Init(void)
-{
-    /* Pitch 轴只做设备与参数初始化，使能帧由 Pitch 内部延迟下发，不会阻塞。 */
-    Pitch_Init();
-}
-
-void Gimbal_Update(void)
-{
-    /* 高频姿态走静态 Topic（云台板由 DM-IMU INS 桥发布）。 */
-    INS_State ins_state;
-    if (MessageCenter::INS_State_Topic.ReadFresh(ins_state,
-                                                  GIMBAL_INS_MAX_AGE_US))
-    {
-        Gimbal_INS_State = ins_state;
-        Gimbal_INS_Valid = true;
-    }
-    else
-    {
-        Gimbal_INS_Valid = false;
-    }
-
-    /* 没有新命令时继续沿用上一帧 Latest-Value。 */
-    GimbalCmd command;
-    if (Gimbal_Command_Subscriber.Read(command))
-    {
-        Gimbal_Command = command;
-    }
-
-    /* Pitch 轴只在 IMU 模式下使能——链路健康且确实有目标时才允许输出，
-     * LOCK / DISABLED 都不更新目标，避免无目标时带力矩启动。与云台板原实现
-     * 一致：不使用 READY 门控。 */
-    if (Gimbal_Command.mode == GimbalMode::IMU)
-    {
-        Pitch_Update(Gimbal_Command.pitch_angle_rad, true, true);
-    }
-    else
-    {
-        Pitch_Update(Pitch_GetTargetAngle(), false, false);
-    }
-
-    /* 控制保持 1 kHz，反馈降频到 100 Hz，减少应用消息复制。 */
-    Gimbal_Message_Divider++;
-    if (Gimbal_Message_Divider >= 10U)
-    {
-        Gimbal_Message_Divider = 0U;
-        GimbalFeedback feedback{};
-        feedback.yaw_rad = Gimbal_INS_State.yaw_rad;
-        feedback.pitch_rad = Gimbal_INS_State.pitch_rad;
-        feedback.yaw_speed_rad_s = Gimbal_INS_State.gyro_z_rad_s;
-        feedback.pitch_speed_rad_s = Gimbal_INS_State.gyro_x_rad_s;
-        feedback.ins_valid = Gimbal_INS_Valid;
-        /* Pitch 反馈来自 DM-IMU：欧拉角与差分角速度。 */
-        float pitch_deg = 0.0f;
-        if (Pitch_GetImuPitchDeg(&pitch_deg))
-        {
-            feedback.pitch_rad = pitch_deg * GIMBAL_DEG_TO_RAD;
-        }
-        feedback.pitch_speed_rad_s = Pitch_GetImuVelocityRadS();
-        feedback.enabled = Pitch_IsEnabled();
-        feedback.ins_valid = Gimbal_INS_Valid || Pitch_IsImuValid();
-        Gimbal_Feedback_Publisher.Publish(feedback);
-    }
-}
-
-#else
 #include "Gimbal.h"
 #include "message_center.h"
 #if GIMBAL
 #include "alg_filter_iir.h"
 #include "alg_pid.h"
 #include "alg_slope.h"
-#include "cmsis_os2.h"
 #include "dmmotor.h"
 #include "stm32h7xx_hal.h"
 #endif
@@ -120,7 +17,7 @@ void Gimbal_Update(void)
 
 namespace
 {
-constexpr uint64_t GIMBAL_INS_MAX_AGE_US = 10000U;
+constexpr float CONTROL_PERIOD_S = 0.001f;
 struct GimbalContext
 {
     INS_State ins{};
@@ -128,461 +25,247 @@ struct GimbalContext
     uint8_t feedback_divider = 0U;
 #if GIMBAL
     Struct_Gimbal_Config config{};
-    Class_DMMotor yaw_motor;
     Class_DMMotor pitch_motor;
-    Class_PID yaw_angle_pid;
-    Class_PID yaw_speed_pid;
-    Struct_DMMotor_Snapshot yaw_snapshot{};
-    Struct_DMMotor_Snapshot pitch_snapshot{};
+    Struct_DMMotor_Snapshot motor_snapshot{};
+    Class_PID position_pid;
+    Class_Slope target_slope;
+    Class_Filter_IIR_First_Order velocity_filter;
     GimbalCmd command{};
-    GimbalMode last_mode = GimbalMode::DISABLED;
     bool initialized = false;
-    bool was_ready = false;
-    float target_yaw_angle_rad = 0.0f;
-    float target_pitch_angle_rad = 0.0f;
-    float target_yaw_speed_rad_s = 0.0f;
-    float target_pitch_speed_rad_s = 0.0f;
-    bool yaw_registered = false;
-    bool pitch_registered = false;
-    uint32_t target_sequence = 0U;
-    // ---- ImuTorque 模式状态（pitch_control == ImuTorque 时使用）----
-    Class_PID pitch_position_pid;
-    Class_Slope pitch_target_slope;
-    Class_Filter_IIR_First_Order pitch_gyro_filter;
-    bool torque_path_initialized = false;
-    bool gyro_filter_initialized = false;
-    float gyro_filtered_rad_s = 0.0f;
-    float disturbance_torque_nm = 0.0f;
-    // 使能延迟（ARMING）：每次输出许可恢复时重新计时。
-    bool torque_enabled = false;
+    bool motor_registered = false;
+    bool arming = false;
+    bool path_initialized = false;
     uint32_t arming_start_ms = 0U;
+    float disturbance_torque_nm = 0.0f;
 #endif
 };
-
 GimbalContext ctx;
 
-}
-
 #if GIMBAL
-namespace
-{
-constexpr float GIMBAL_PI = 3.14159265358979323846f;
 float Clamp(float value, float minimum, float maximum)
 {
     return value < minimum ? minimum : (value > maximum ? maximum : value);
 }
 
-bool ConfigValid(const Struct_Gimbal_Config &c)
+bool ConfigValid(const Struct_Gimbal_Config& config)
 {
-    // PitchOnly 模式下 Yaw 配置不参与控制，只校验 Pitch 相关字段。
-    const bool dual = c.axis_mode == GimbalAxisMode::DualAxis;
-    if (dual)
+    const auto& c = config.pitch_torque;
+    const float positive[] = {c.position_kp, c.target_rate_rad_s,
+                              c.stribeck_velocity_rad_s, c.stribeck_smooth_rad_s, c.disturbance_decay_tau_s,
+                              c.torque_limit_nm};
+    for (float value : positive)
     {
-        const float yaw_nonnegative[] = {c.yaw_angle_kp, c.yaw_speed_kp, c.yaw_speed_ki,
-            c.yaw_speed_kd, c.yaw_integral_limit};
-        for (float value : yaw_nonnegative)
+        if (!std::isfinite(value) || value <= 0.0f)
         {
-            if (!std::isfinite(value) || value < 0) { return false; }
-        }
-        const float yaw_positive[] = {c.yaw_speed_limit, c.yaw_torque_limit};
-        for (float value : yaw_positive)
-        {
-            if (!std::isfinite(value) || value <= 0) { return false; }
+            return false;
         }
     }
-    const float pitch_nonnegative[] = {c.pitch_kp, c.pitch_kd};
-    for (float value : pitch_nonnegative)
+    const float nonnegative[] = {c.imu_velocity_filter_tau_s,
+                                 c.ff_velocity_positive, c.ff_velocity_negative, c.imu_velocity_damping,
+                                 c.static_friction_positive_nm, c.static_friction_negative_nm,
+                                 c.coulomb_friction_positive_nm, c.coulomb_friction_negative_nm,
+                                 c.stribeck_error_gain, c.disturbance_integral_gain, c.disturbance_max_nm,
+                                 c.disturbance_target_speed_rad_s, c.disturbance_actual_speed_rad_s};
+    for (float value : nonnegative)
     {
-        if (!std::isfinite(value) || value < 0) { return false; }
-    }
-    const float pitch_positive[] = {c.pitch_speed_limit, c.pitch_motor_per_imu};
-    for (float value : pitch_positive)
-    {
-        if (!std::isfinite(value) || value <= 0) { return false; }
-    }
-    if (c.pitch_control == GimbalPitchControl::ImuTorque)
-    {
-        const auto &t = c.pitch_torque;
-        const float positive[] = {t.position_kp, t.target_rate_rad_s,
-            t.stribeck_velocity_rad_s, t.stribeck_smooth_rad_s,
-            t.imu_velocity_filter_tau_s, t.torque_limit_nm};
-        for (float value : positive)
+        if (!std::isfinite(value) || value < 0.0f)
         {
-            if (!std::isfinite(value) || value <= 0) { return false; }
+            return false;
         }
-        const float nonnegative[] = {t.ff_velocity_positive, t.ff_velocity_negative,
-            t.imu_velocity_damping, t.static_friction_positive_nm,
-            t.static_friction_negative_nm, t.coulomb_friction_positive_nm,
-            t.coulomb_friction_negative_nm, t.disturbance_integral_gain,
-            t.disturbance_max_nm, t.disturbance_target_speed_rad_s,
-            t.disturbance_actual_speed_rad_s, t.disturbance_decay_tau_s};
-        for (float value : nonnegative)
-        {
-            if (!std::isfinite(value) || value < 0) { return false; }
-        }
-        if (t.torque_sign != 1.0f && t.torque_sign != -1.0f) { return false; }
     }
-    return (!dual ||
-            !(c.yaw.bus == c.pitch.bus &&
-              (c.yaw.id == c.pitch.id || c.yaw.feedback_id == c.pitch.feedback_id))) &&
-           c.yaw_gyro_axis <= GimbalGyroAxis::Z && c.pitch_gyro_axis <= GimbalGyroAxis::Z &&
-           (c.yaw_gyro_sign == 1 || c.yaw_gyro_sign == -1) &&
-           (c.pitch_gyro_sign == 1 || c.pitch_gyro_sign == -1) &&
-           c.yaw_integral_limit <= c.yaw_torque_limit &&
-           std::isfinite(c.pitch_min) && std::isfinite(c.pitch_max) &&
-           c.pitch_min < c.pitch_max;
-}
-
-float Gyro(GimbalGyroAxis axis, float sign)
-{
-    const float rates[] = {ctx.ins.gyro_x_rad_s, ctx.ins.gyro_y_rad_s,
-                           ctx.ins.gyro_z_rad_s};
-    return sign * rates[static_cast<unsigned>(axis)];
-}
-
-/** ImuTorque 模式控制周期；与 1 kHz 控制任务一致。 */
-constexpr float GIMBAL_CONTROL_PERIOD_S = 0.001f;
-
-/** ImuTorque 模式：初始化外环组件（斜坡目标、位置环、陀螺低通）。 */
-void TorqueInitControllers()
-{
-    const auto &c = ctx.config.pitch_torque;
-    ctx.pitch_position_pid = Class_PID{};
-    ctx.pitch_position_pid.Init(c.position_kp, 0, 0, 0, 0, c.torque_limit_nm);
-    const float max_step = c.target_rate_rad_s * GIMBAL_CONTROL_PERIOD_S;
-    ctx.pitch_target_slope.Init(max_step, max_step, Slope_First_TARGET);
-    ctx.pitch_gyro_filter = Class_Filter_IIR_First_Order{};
-    // 桥按固定 1 kHz 发布 INS，采样率恒定，可用框架固定系数 IIR。
-    const float cutoff = 1.0f / (6.283185307179586f * c.imu_velocity_filter_tau_s);
-    ctx.pitch_gyro_filter.Init(cutoff, 1.0f / GIMBAL_CONTROL_PERIOD_S);
-}
-
-/** ImuTorque 模式：复位目标路径与估计状态（激活边沿 / LOCK 捕获时调用）。 */
-void TorqueResetPath()
-{
-    const auto &c = ctx.config.pitch_torque;
-    ctx.torque_path_initialized = false;
-    ctx.gyro_filter_initialized = false;
-    ctx.gyro_filtered_rad_s = 0.0f;
-    ctx.disturbance_torque_nm = 0.0f;
-    ctx.torque_enabled = false;
-    ctx.arming_start_ms = HAL_GetTick();
-    (void)c;
-}
-
-/**
- * @brief ImuTorque 模式控制律：IMU 外环 PID + 前馈/阻尼/Stribeck 摩擦/扰动估计，
- *        纯力矩经 MIT t_ff 下发（电机侧 kp/kd 为 0）。
- * @note 迁移自老步兵云台板 Application/Pitch，公式与计算顺序一致；两点分层差异：
- *       1) 角速度改用传感器原生陀螺仪帧（INS gyro，轴向由 pitch_gyro_axis 配置），
- *          替代原差分估计——摩擦/阻尼参数换陀螺仪来源后须实机复验；
- *       2) 使能延迟只延迟 MIT 力矩输出，使能帧由 RequestEnabled 边沿先行。
- */
-void ControlTorque()
-{
-    const auto &c = ctx.config.pitch_torque;
-
-    // ARMING：输出许可恢复后延迟下发 MIT 力矩，避免指令恢复时带力矩启动。
-    if (!ctx.torque_enabled)
-    {
-        ctx.arming_start_ms = HAL_GetTick();
-        ctx.torque_enabled = true;
-    }
-    if (HAL_GetTick() - ctx.arming_start_ms < c.enable_delay_ms)
-    {
-        return;
-    }
-
-    // 目标：斜坡限速路径（Class_Slope），从当前 INS 姿态起步，限幅到机构限位。
-    if (!ctx.torque_path_initialized)
-    {
-        ctx.pitch_target_slope.Reset(ctx.ins.pitch_rad);
-        ctx.torque_path_initialized = true;
-    }
-    const float requested =
-        Clamp(ctx.target_pitch_angle_rad, ctx.config.pitch_min, ctx.config.pitch_max);
-    const float previous_target = ctx.pitch_target_slope.Get_Out();
-    ctx.pitch_target_slope.Set_Now_Real(previous_target);
-    ctx.pitch_target_slope.Set_Target(requested);
-    ctx.pitch_target_slope.TIM_Calculate_PeriodElapsedCallback();
-    const float target_rad = ctx.pitch_target_slope.Get_Out();
-    const float target_velocity_rad_s =
-        (target_rad - previous_target) / GIMBAL_CONTROL_PERIOD_S;
-    const float position_error_rad = target_rad - ctx.ins.pitch_rad;
-
-    // 角速度：INS 陀螺仪经一阶低通（轴向与符号由配置映射）。
-    const float gyro_raw = Gyro(ctx.config.pitch_gyro_axis, ctx.config.pitch_gyro_sign);
-    if (!ctx.gyro_filter_initialized)
-    {
-        ctx.pitch_gyro_filter.Set_Now(gyro_raw);
-        ctx.gyro_filter_initialized = true;
-    }
-    ctx.pitch_gyro_filter.Set_Now(gyro_raw);
-    ctx.pitch_gyro_filter.TIM_Calculate_PeriodElapsedCallback();
-    ctx.gyro_filtered_rad_s = ctx.pitch_gyro_filter.Get_Out();
-    const float abs_gyro_rad_s = std::fabs(ctx.gyro_filtered_rad_s);
-
-    // 位置环：IMU 角度误差 → 力矩。
-    ctx.pitch_position_pid.Set_Target(target_rad);
-    ctx.pitch_position_pid.Set_Now(ctx.ins.pitch_rad);
-    ctx.pitch_position_pid.TIM_Calculate_PeriodElapsedCallback();
-
-    // 目标速度前馈（正负不对称）与 IMU 角速度阻尼。
-    const float ff_gain = target_velocity_rad_s >= 0.0f ? c.ff_velocity_positive
-                                                        : c.ff_velocity_negative;
-    float torque = ctx.pitch_position_pid.Get_Out() +
-                   ff_gain * target_velocity_rad_s -
-                   c.imu_velocity_damping * ctx.gyro_filtered_rad_s;
-
-    // 连续 Stribeck 摩擦补偿：低速接近静摩擦，高速平滑过渡到库仑摩擦。
-    const float stribeck_ratio = abs_gyro_rad_s / c.stribeck_velocity_rad_s;
-    const float direction_input =
-        target_velocity_rad_s + c.stribeck_error_gain * position_error_rad;
-    const float static_friction = direction_input >= 0.0f
-                                      ? c.static_friction_positive_nm
-                                      : c.static_friction_negative_nm;
-    const float coulomb_friction = direction_input >= 0.0f
-                                       ? c.coulomb_friction_positive_nm
-                                       : c.coulomb_friction_negative_nm;
-    const float friction_magnitude =
-        coulomb_friction + (static_friction - coulomb_friction) *
-                               std::exp(-(stribeck_ratio * stribeck_ratio));
-    torque += friction_magnitude *
-              std::tanh(direction_input / c.stribeck_smooth_rad_s);
-
-    // 低带宽扰动估计：接近静止时积分学习重力/负载，运动时按时间常数衰减。
-    if (std::fabs(target_velocity_rad_s) < c.disturbance_target_speed_rad_s &&
-        abs_gyro_rad_s < c.disturbance_actual_speed_rad_s)
-    {
-        ctx.disturbance_torque_nm +=
-            c.disturbance_integral_gain * position_error_rad * GIMBAL_CONTROL_PERIOD_S;
-        ctx.disturbance_torque_nm =
-            Clamp(ctx.disturbance_torque_nm, -c.disturbance_max_nm, c.disturbance_max_nm);
-    }
-    else
-    {
-        ctx.disturbance_torque_nm -= ctx.disturbance_torque_nm *
-                                     GIMBAL_CONTROL_PERIOD_S / c.disturbance_decay_tau_s;
-    }
-    torque += ctx.disturbance_torque_nm;
-
-    torque = Clamp(torque, -c.torque_limit_nm, c.torque_limit_nm);
-    (void)ctx.pitch_motor.SetMIT(0.0f, 0.0f, 0.0f, 0.0f, c.torque_sign * torque);
-}
-
-void ResetControllers()
-{
-    // PID::Init 保留历史，因此先重建值对象，清除积分、微分及目标历史。
-    ctx.yaw_angle_pid = Class_PID{};
-    ctx.yaw_speed_pid = Class_PID{};
-    ctx.yaw_angle_pid.Init(ctx.config.yaw_angle_kp, 0, 0, 0, 0, ctx.config.yaw_speed_limit);
-    ctx.yaw_speed_pid.Init(ctx.config.yaw_speed_kp, ctx.config.yaw_speed_ki,
-        ctx.config.yaw_speed_kd, 0, ctx.config.yaw_integral_limit, ctx.config.yaw_torque_limit);
-}
-
-void CapturePose(uint32_t sequence)
-{
-    ResetControllers();
-    if (ctx.config.pitch_control == GimbalPitchControl::ImuTorque)
-    {
-        // 激活边沿 / LOCK 捕获：复位斜坡路径并重新进入使能延迟。
-        TorqueResetPath();
-    }
-    ctx.target_yaw_angle_rad = ctx.ins.yaw_rad;
-    ctx.target_pitch_angle_rad = ctx.ins.pitch_rad;
-    ctx.target_yaw_speed_rad_s = ctx.target_pitch_speed_rad_s = 0;
-    // 恢复前已发布的目标全部丢弃；IMU 只接受之后的新序号。
-    ctx.target_sequence = sequence;
+    return (c.torque_sign == 1.0f || c.torque_sign == -1.0f) &&
+           c.torque_limit_nm <= config.pitch.torque_max && config.ins_max_age_us > 0U &&
+           std::isfinite(config.pitch_min) && std::isfinite(config.pitch_max) &&
+           config.pitch_min < config.pitch_max;
 }
 
 void Stop()
 {
-    // 首次失能请求或失能边沿立即尝试发布安全目标；补交与协议纠正交给 ServiceAll。
-    if (ctx.yaw_registered) { (void)ctx.yaw_motor.RequestEnabled(false); }
-    if (ctx.pitch_registered) { (void)ctx.pitch_motor.RequestEnabled(false); }
+    // 驱动处理边沿安全目标、失能帧及失败补交；重复请求不刷总线。
+    if (ctx.motor_registered)
+    {
+        (void) ctx.pitch_motor.RequestEnabled(false);
+    }
+    ctx.arming = false;
+    ctx.path_initialized = false;
+    ctx.disturbance_torque_nm = 0.0f;
 }
 
-void Control(const Struct_DMMotor_Snapshot &pitch)
+bool ControlPermitted()
 {
-    if (ctx.config.axis_mode == GimbalAxisMode::PitchOnly)
+    // 单轴 LOCK 沿用老步兵安全语义：失能；只有显式 IMU 目标允许输出。
+    return ctx.initialized && ctx.command.mode == GimbalMode::IMU &&
+           std::isfinite(ctx.command.pitch_angle_rad) && ctx.ins_valid &&
+           std::isfinite(ctx.ins.pitch_rad) && std::isfinite(ctx.ins.gyro_y_rad_s) &&
+           ctx.motor_snapshot.online && !ctx.motor_snapshot.fault;
+}
+
+void Control()
+{
+    const auto &c = ctx.config.pitch_torque;
+    if (!ctx.path_initialized)
     {
-        // 单轴模式：Yaw 由底盘板控制，本板只输出 Pitch MIT 目标。
-        const float position = pitch.feedback.position + ctx.config.pitch_motor_per_imu *
-                              (ctx.target_pitch_angle_rad - ctx.ins.pitch_rad);
-        const float velocity = pitch.feedback.velocity + ctx.config.pitch_motor_per_imu *
-                              (ctx.target_pitch_speed_rad_s - Gyro(ctx.config.pitch_gyro_axis, ctx.config.pitch_gyro_sign));
-        (void)ctx.pitch_motor.SetMIT(Clamp(position, ctx.config.pitch_min, ctx.config.pitch_max),
-            Clamp(velocity, -ctx.config.pitch_speed_limit, ctx.config.pitch_speed_limit), ctx.config.pitch_kp, ctx.config.pitch_kd, 0);
+        // 恢复时从当前姿态起步，清除外环历史与旧扰动估计，目标通过限速斜坡接入。
+        ctx.position_pid = Class_PID{};
+        ctx.position_pid.Init(c.position_kp, 0, 0, 0, 0, c.torque_limit_nm);
+        ctx.target_slope.Reset(ctx.ins.pitch_rad);
+        ctx.velocity_filter = Class_Filter_IIR_First_Order{};
+        if (c.imu_velocity_filter_tau_s > 0.0f)
+        {
+            const float cutoff_hz = 1.0f / (6.283185307179586f * c.imu_velocity_filter_tau_s);
+            ctx.velocity_filter.Init(cutoff_hz, 1.0f / CONTROL_PERIOD_S);
+        }
+        ctx.path_initialized = true;
+    }
+    const float previous = ctx.target_slope.Get_Out();
+    ctx.target_slope.Set_Now_Real(previous);
+    ctx.target_slope.Set_Target(Clamp(ctx.command.pitch_angle_rad,
+                                      ctx.config.pitch_min, ctx.config.pitch_max));
+    ctx.target_slope.TIM_Calculate_PeriodElapsedCallback();
+    const float target_rad = ctx.target_slope.Get_Out();
+    const float target_velocity_rad_s = (target_rad - previous) / CONTROL_PERIOD_S;
+    const float error_rad = target_rad - ctx.ins.pitch_rad;
+    float velocity_rad_s = ctx.ins.gyro_y_rad_s;
+    if (c.imu_velocity_filter_tau_s > 0.0f)
+    {
+        ctx.velocity_filter.Set_Now(velocity_rad_s);
+        ctx.velocity_filter.TIM_Calculate_PeriodElapsedCallback();
+        velocity_rad_s = ctx.velocity_filter.Get_Out();
+    }
+    ctx.position_pid.Set_Target(target_rad);
+    ctx.position_pid.Set_Now(ctx.ins.pitch_rad);
+    ctx.position_pid.TIM_Calculate_PeriodElapsedCallback();
+
+    // 原实车控制律：位置环 + 不对称目标速度前馈 - IMU 速度阻尼。
+    const float ff_gain = target_velocity_rad_s >= 0.0f
+                              ? c.ff_velocity_positive
+                              : c.ff_velocity_negative;
+    float torque_nm = ctx.position_pid.Get_Out() + ff_gain * target_velocity_rad_s -
+                      c.imu_velocity_damping * velocity_rad_s;
+    const float speed_ratio = std::fabs(velocity_rad_s) / c.stribeck_velocity_rad_s;
+    const float direction = target_velocity_rad_s + c.stribeck_error_gain * error_rad;
+    const float static_friction = direction >= 0.0f
+                                      ? c.static_friction_positive_nm
+                                      : c.static_friction_negative_nm;
+    const float coulomb_friction = direction >= 0.0f
+                                       ? c.coulomb_friction_positive_nm
+                                       : c.coulomb_friction_negative_nm;
+    torque_nm += (coulomb_friction + (static_friction - coulomb_friction) *
+                                         std::exp(-(speed_ratio * speed_ratio))) *
+                 std::tanh(direction / c.stribeck_smooth_rad_s);
+    // 静止时学习重力/负载；运动时衰减，故障恢复时不重用旧补偿。
+    if (std::fabs(target_velocity_rad_s) < c.disturbance_target_speed_rad_s &&
+        std::fabs(velocity_rad_s) < c.disturbance_actual_speed_rad_s)
+    {
+        ctx.disturbance_torque_nm = Clamp(ctx.disturbance_torque_nm +
+                                              c.disturbance_integral_gain * error_rad * CONTROL_PERIOD_S,
+                                          -c.disturbance_max_nm, c.disturbance_max_nm);
+    }
+    else
+    {
+        ctx.disturbance_torque_nm -= ctx.disturbance_torque_nm *
+                                     CONTROL_PERIOD_S / c.disturbance_decay_tau_s;
+    }
+    torque_nm = Clamp(torque_nm + ctx.disturbance_torque_nm,
+                      -c.torque_limit_nm, c.torque_limit_nm);
+    // kp/kd 恒为 0：电机侧只执行 t_ff，位置闭环由本板 IMU 外环完成。
+    // 发布失败由下一 1 ms 周期提交最新目标，不阻塞等待 CAN。
+    (void) ctx.pitch_motor.SetMIT(0.0f, 0.0f, 0.0f, 0.0f, c.torque_sign * torque_nm);
+}
+#endif
+
+void PublishFeedback()
+{
+    if (++ctx.feedback_divider < 10U)
+    {
         return;
     }
-    // Yaw 复用现有 PID：最短角误差生成角速度，再由速度环生成转矩。
-    const float error = std::remainder(ctx.target_yaw_angle_rad - ctx.ins.yaw_rad, 2 * GIMBAL_PI);
-    ctx.yaw_angle_pid.Set_Target(error);
-    ctx.yaw_angle_pid.Set_Now(0);
-    ctx.yaw_angle_pid.TIM_Calculate_PeriodElapsedCallback();
-    const float speed = ctx.yaw_angle_pid.Get_Out() + ctx.target_yaw_speed_rad_s;
-    ctx.yaw_speed_pid.Set_Target(Clamp(speed, -ctx.config.yaw_speed_limit, ctx.config.yaw_speed_limit));
-    ctx.yaw_speed_pid.Set_Now(Gyro(ctx.config.yaw_gyro_axis, ctx.config.yaw_gyro_sign));
-    ctx.yaw_speed_pid.TIM_Calculate_PeriodElapsedCallback();
-    const float torque = ctx.yaw_speed_pid.Get_Out();
-    // Pitch 将 INS 姿态/角速度误差换算为电机目标；位置、速度均基于同一次反馈快照。
-    const float position = pitch.feedback.position + ctx.config.pitch_motor_per_imu *
-                          (ctx.target_pitch_angle_rad - ctx.ins.pitch_rad);
-    const float velocity = pitch.feedback.velocity + ctx.config.pitch_motor_per_imu *
-                          (ctx.target_pitch_speed_rad_s - Gyro(ctx.config.pitch_gyro_axis, ctx.config.pitch_gyro_sign));
-    (void)ctx.yaw_motor.SetTorque(Clamp(torque, -ctx.config.yaw_torque_limit, ctx.config.yaw_torque_limit));
-    (void)ctx.pitch_motor.SetMIT(Clamp(position, ctx.config.pitch_min, ctx.config.pitch_max),
-        Clamp(velocity, -ctx.config.pitch_speed_limit, ctx.config.pitch_speed_limit), ctx.config.pitch_kp, ctx.config.pitch_kd, 0);
+    ctx.feedback_divider = 0U;
+    GimbalFeedback feedback{};
+    feedback.ins_valid = ctx.ins_valid;
+    if (ctx.ins_valid)
+    {
+        // Yaw 仅是姿态观测值，不代表本板拥有 Yaw 电机。
+        feedback.yaw_rad = ctx.ins.yaw_rad;
+        feedback.pitch_rad = ctx.ins.pitch_rad;
+        feedback.yaw_speed_rad_s = ctx.ins.gyro_z_rad_s;
+        feedback.pitch_speed_rad_s = ctx.ins.gyro_y_rad_s;
+    }
+#if GIMBAL
+    feedback.enabled = ControlPermitted() && ctx.motor_snapshot.ready;
+#endif
+    MessageCenter::Gimbal_Feedback_Topic.Publish(feedback);
+}
 }
 
-void UpdateTarget(const TopicSnapshot<GimbalCmd> &message)
+#if GIMBAL
+bool Gimbal_Init(const Struct_Gimbal_Config& config)
 {
-    // LOCK 只在进入时捕获姿态；IMU 只接受新序号，避免恢复后重放旧目标。
-    if (ctx.command.mode == GimbalMode::LOCK && ctx.last_mode != GimbalMode::LOCK)
+    if (!ConfigValid(config))
     {
-        CapturePose(message.sequence);
-    }
-    if (ctx.command.mode == GimbalMode::IMU && message.sequence != ctx.target_sequence)
-    {
-        ctx.target_yaw_angle_rad = ctx.command.yaw_angle_rad;
-        ctx.target_pitch_angle_rad = ctx.command.pitch_angle_rad;
-        ctx.target_yaw_speed_rad_s = ctx.command.yaw_speed_rad_s;
-        ctx.target_pitch_speed_rad_s = ctx.command.pitch_speed_rad_s;
-        ctx.target_sequence = message.sequence;
-    }
-    ctx.last_mode = ctx.command.mode;
-}
-} // namespace
-
-bool Gimbal_Init(const Struct_Gimbal_Config &requested)
-{
-    if (!ConfigValid(requested))
-    {
-        ctx.initialized = false;
         return false;
     }
-    ctx.config = requested;
-    // PitchOnly（单轴）模式不初始化 Yaw：老步兵双板分工下 Yaw 由底盘板主控。
-    ctx.yaw_registered =
-        ctx.config.axis_mode == GimbalAxisMode::DualAxis &&
-        ctx.yaw_motor.Init(ctx.config.yaw.bus, ctx.config.yaw.id, ctx.config.yaw.feedback_id,
-            Enum_DMMotor_Mode::MIT, ctx.config.yaw.reverse, ctx.config.yaw.position_max,
-            ctx.config.yaw.velocity_max, ctx.config.yaw.torque_max);
-    ctx.pitch_registered = ctx.pitch_motor.Init(ctx.config.pitch.bus, ctx.config.pitch.id, ctx.config.pitch.feedback_id,
-        Enum_DMMotor_Mode::MIT, ctx.config.pitch.reverse, ctx.config.pitch.position_max,
-        ctx.config.pitch.velocity_max, ctx.config.pitch.torque_max);
-    ctx.initialized = ctx.yaw_registered && ctx.pitch_registered;
-    ctx.command = {};
-    ctx.was_ready = false;
-    ResetControllers();
-    if (ctx.config.pitch_control == GimbalPitchControl::ImuTorque)
-    {
-        TorqueInitControllers();
-        TorqueResetPath();
-    }
+    ctx.config = config;
+    ctx.motor_registered = ctx.pitch_motor.Init(config.pitch.bus, config.pitch.id,
+                                                config.pitch.feedback_id, Enum_DMMotor_Mode::MIT, config.pitch.reverse,
+                                                config.pitch.position_max, config.pitch.velocity_max, config.pitch.torque_max);
+    ctx.initialized = ctx.motor_registered;
+    const float max_step = config.pitch_torque.target_rate_rad_s * CONTROL_PERIOD_S;
+    ctx.target_slope.Init(max_step, max_step, Slope_First_TARGET);
     return ctx.initialized;
 }
 
 Enum_Gimbal_Status Gimbal_GetStatus(void)
 {
-    // 状态由当前输入与电机快照推导，仅用于观察，不安排重试或驱动状态迁移。
     if (!ctx.initialized) { return Gimbal_Status_CONFIG_ERROR; }
-    if (ctx.command.mode == GimbalMode::DISABLED) { return Gimbal_Status_DISABLE; }
-    const bool dual = ctx.config.axis_mode == GimbalAxisMode::DualAxis;
-    if (!ctx.ins_valid || ctx.pitch_snapshot.fault || (dual && ctx.yaw_snapshot.fault))
+    if (ctx.command.mode != GimbalMode::IMU)
+    {
+        return Gimbal_Status_DISABLE;
+    }
+    if (!ControlPermitted())
     {
         return Gimbal_Status_FAULT;
     }
-    const bool ready = ctx.pitch_snapshot.ready && (!dual || ctx.yaw_snapshot.ready);
-    return ready ? Gimbal_Status_READY : Gimbal_Status_ENABLING;
+    return ctx.motor_snapshot.ready ? Gimbal_Status_READY : Gimbal_Status_ENABLING;
 }
 #endif
-
-static void PublishFeedback(void)
-{
-    if (++ctx.feedback_divider >= 10U)
-    {
-        ctx.feedback_divider = 0;
-        GimbalFeedback feedback{};
-        if (ctx.ins_valid)
-        {
-            feedback.yaw_rad = ctx.ins.yaw_rad;
-            feedback.pitch_rad = ctx.ins.pitch_rad;
-#if GIMBAL
-            feedback.yaw_speed_rad_s = Gyro(ctx.config.yaw_gyro_axis, ctx.config.yaw_gyro_sign);
-            feedback.pitch_speed_rad_s = Gyro(ctx.config.pitch_gyro_axis, ctx.config.pitch_gyro_sign);
-#else
-            feedback.yaw_speed_rad_s = ctx.ins.gyro_z_rad_s;
-            feedback.pitch_speed_rad_s = ctx.ins.gyro_y_rad_s;
-#endif
-        }
-        feedback.ins_valid = ctx.ins_valid;
-#if GIMBAL
-        feedback.enabled = ctx.pitch_snapshot.ready &&
-            (ctx.config.axis_mode != GimbalAxisMode::DualAxis || ctx.yaw_snapshot.ready);
-#endif
-        MessageCenter::Gimbal_Feedback_Topic.Publish(feedback);
-    }
-}
 
 void Gimbal_Update(void)
 {
-    ctx.ins_valid = MessageCenter::INS_State_Topic.ReadFresh(ctx.ins, GIMBAL_INS_MAX_AGE_US);
 #if GIMBAL
+    ctx.ins_valid = MessageCenter::INS_State_Topic.ReadFresh(ctx.ins, ctx.config.ins_max_age_us);
     const auto message = MessageCenter::Gimbal_Command_Topic.ReadWithMeta();
     ctx.command = message.valid ? message.data : GimbalCmd{};
-    ctx.yaw_snapshot = ctx.yaw_motor.GetFeedbackSnapshot();
-    ctx.pitch_snapshot = ctx.pitch_motor.GetFeedbackSnapshot();
-
-    if (!ctx.initialized || !message.valid ||
-        ctx.command.mode == GimbalMode::DISABLED || !ctx.ins_valid ||
-        ctx.yaw_snapshot.fault || ctx.pitch_snapshot.fault)
+    ctx.motor_snapshot = ctx.pitch_motor.GetFeedbackSnapshot();
+    if (!ControlPermitted())
     {
         Stop();
-        ctx.was_ready = false;
-        ctx.last_mode = GimbalMode::DISABLED;
-        if (ctx.config.pitch_control == GimbalPitchControl::ImuTorque)
-        {
-            // 与 legacy 行为一致：链路丢失/失能时复位目标路径并重新进入使能延迟。
-            TorqueResetPath();
-        }
-        ctx.yaw_snapshot = ctx.yaw_motor.GetFeedbackSnapshot();
-        ctx.pitch_snapshot = ctx.pitch_motor.GetFeedbackSnapshot();
-        PublishFeedback();
-        return;
-    }
-
-    // 每周期表达输出许可；驱动只处理请求边沿，重复使能不会覆盖正常周期目标。
-    const bool dual = ctx.config.axis_mode == GimbalAxisMode::DualAxis;
-    if (dual) { (void)ctx.yaw_motor.RequestEnabled(true); }
-    (void)ctx.pitch_motor.RequestEnabled(true);
-    ctx.yaw_snapshot = ctx.yaw_motor.GetFeedbackSnapshot();
-    ctx.pitch_snapshot = ctx.pitch_motor.GetFeedbackSnapshot();
-    if (!ctx.pitch_snapshot.ready || (dual && !ctx.yaw_snapshot.ready))
-    {
-        // 等待受控轴反馈就绪；安全输出和低频协议纠正由 DMMotor 维护。
-        ctx.was_ready = false;
-        PublishFeedback();
-        return;
-    }
-
-    if (!ctx.was_ready)
-    {
-        CapturePose(message.sequence);
-        ctx.last_mode = ctx.command.mode;
-        ctx.was_ready = true;
-    }
-    UpdateTarget(message);
-    if (ctx.config.pitch_control == GimbalPitchControl::ImuTorque)
-    {
-        ControlTorque();
     }
     else
     {
-        Control(ctx.pitch_snapshot);
+        if (!ctx.arming)
+        {
+            ctx.arming_start_ms = HAL_GetTick();
+            ctx.arming = true;
+        }
+        // 每次健康许可恢复重新等待；使能帧与 MIT 输出均不在等待期发送。
+        if (HAL_GetTick() - ctx.arming_start_ms >= ctx.config.pitch_torque.enable_delay_ms)
+        {
+            (void) ctx.pitch_motor.RequestEnabled(true);
+            ctx.motor_snapshot = ctx.pitch_motor.GetFeedbackSnapshot();
+            if (ctx.motor_snapshot.ready)
+            {
+                Control();
+            }
+            else
+            {
+                ctx.path_initialized = false;
+            }
+        }
     }
+    ctx.motor_snapshot = ctx.pitch_motor.GetFeedbackSnapshot();
+#else
+    ctx.ins_valid = MessageCenter::INS_State_Topic.ReadFresh(ctx.ins, 100000U);
 #endif
     PublishFeedback();
 }
-
-#endif

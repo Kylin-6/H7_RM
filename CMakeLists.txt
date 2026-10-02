@@ -204,7 +204,6 @@ elseif(H7_BOARD STREQUAL "GimbalBoard")
         User_Config/Board/gimbal_board_config.cpp
         User_Config/Board/board_tasks_gimbal.c
         ${H7_GIMBAL_TASK_DEVICE_SOURCES}
-        User_File/System/Transport/transport_gimbal.cpp
         User_File/Task/Control_Task_Gimbal.cpp
         User_File/Application/RobotCmd/RobotCmd.cpp
         User_File/Application/Input/remote_input.cpp
@@ -212,9 +211,8 @@ elseif(H7_BOARD STREQUAL "GimbalBoard")
         User_File/Application/Input/source_arbitration.cpp
         User_File/Application/Gimbal/Gimbal.cpp
         User_File/Application/Shoot/Shoot.cpp
-        # 老步兵云台板专属适配：DM Pitch 轴、DM-IMU（BMI088 损坏）、
+        # 老步兵云台板设备适配：DM-IMU（BMI088 损坏）、
         # 底盘板 0x065 转发接收接口。
-        User_File/Application/Pitch/Pitch.cpp
         User_File/Device/Peripheral/IMU/DM_IMU/dvc_dm_imu.cpp
         User_File/Device/Peripheral/IMU/DM_IMU/dm_imu_ins.cpp
         User_File/Device/Peripheral/ChassisBoard/chassis_board.cpp)
@@ -288,7 +286,6 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Application/
         User_File/Application/RobotCmd/
         User_File/Application/Gimbal/
-        User_File/Application/Pitch/
         User_File/Application/Chassis/
         User_File/Application/Shoot/
         User_File/Application/Input/

@@ -60,7 +60,7 @@ struct INS_State
 };
 
 /** 两轴目标均为 INS 姿态 rad；速度字段为 IMU 模式的 rad/s 前馈。
- * LOCK 捕获当前姿态并忽略目标字段；自动恢复后 IMU 需发布新目标。
+ * 本分支单 Pitch 只消费 pitch_angle_rad；LOCK 与 DISABLED 保持失能。
  */
 struct GimbalCmd
 {
@@ -90,7 +90,7 @@ struct ShootCmd
     LoaderMode loader_mode = LoaderMode::STOP;
 };
 
-/** 姿态来自 INS；enabled 表示两轴电机均 ready，不表示 CAN 目标已被硬件发送。
+/** 姿态来自 INS；enabled 表示本板 Pitch 电机 ready 且控制许可有效，不表示 CAN 目标已被硬件发送。
  * gyro 轴由云台配置选择；INS 无效时姿态/速度清零，调用者须检查 ins_valid。
  */
 struct GimbalFeedback
@@ -119,7 +119,7 @@ struct ShootFeedback
     float friction_right_speed_rad_s = 0.0f;
     float loader_angle_rad = 0.0f;
     float loader_speed_rad_s = 0.0f;
-    bool enabled = false; ///< 摩擦轮和拨弹盘三个 DJI 电机均 ready；OFF 时为 false。
+    bool enabled = false; ///< 摩擦轮和拨弹盘三台电机均 ready；OFF 时为 false。
     bool online = false;
 };
 

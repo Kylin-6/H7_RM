@@ -17,6 +17,10 @@ struct BoardHardware
     bool power;
     bool indicators;
     bool usb_debug;
+    // 独立外接资源；未装配板型沿用 nullptr 默认值。
+    FDCAN_HandleTypeDef* external_imu_bus = nullptr;
+    FDCAN_HandleTypeDef* shoot_loader_bus = nullptr;
+    FDCAN_HandleTypeDef* remote_forward_bus = nullptr;
 };
 
 const BoardHardware &BoardConfig_Get(void);
