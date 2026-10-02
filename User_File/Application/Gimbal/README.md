@@ -9,7 +9,9 @@ QD4310 驱动仍作为独立设备保留，云台不再依赖它。SingleBoard �
 在 [Gimbal_Config.h](Gimbal_Config.h) 集中配置；`Gimbal_Init()` 复制默认配置，
 也可在启动阶段传入一份 `Struct_Gimbal_Config`。初始化只调用一次，不等待电机、
 不自动设置机械零位、不切换控制模式、不写电机持久化参数。电机端须预先设置 MIT 模式。
-配置校验失败或驱动注册失败返回 false，`Gimbal.status` 为 CONFIG_ERROR。
+配置校验失败或驱动注册失败返回 false，`Gimbal_GetStatus()` 返回 CONFIG_ERROR。
+电机、PID、目标和 Snapshot 由 `Gimbal.cpp` 的私有 `GimbalContext` 持有；
+外部只能通过初始化、周期入口和只读状态接口访问 Application。
 
 | 项目 | 示例 | 来源与限制 |
 | --- | --- | --- |
@@ -41,26 +43,28 @@ QD4310 驱动仍作为独立设备保留，云台不再依赖它。SingleBoard �
 - 电机反馈及目标均使用经过 reverse 统一的逻辑方向，协议编码只在驱动中翻转一次。
 - 姿态轴和选用的机体系角速度须与机构约定匹配；当前不是任意安装姿态的完整坐标变换器。
 - LOCK 捕获并保持当前姿态，忽略随后发布的目标字段；IMU 使用新发布的目标。
-- 非有限命令、INS、运动反馈或计算结果不会继续驱动闭环；DISABLED 始终优先停机。
+- 输入边界校验外部命令与 INS 数值，DM 驱动解码合法反馈；云台控制路径只判断命令模式、INS 新鲜度及电机快照，DISABLED 始终优先停机。
 
 ## 状态与恢复
 
-`Gimbal.status` 为 DISABLE、ENABLING、READY、FAULT 或 CONFIG_ERROR。
+`Gimbal_GetStatus()` 返回 DISABLE、ENABLING、READY、FAULT 或 CONFIG_ERROR。
 `Gimbal_Init()` 不发送使能；收到活动模式后才启动就绪流程。现有 RobotCmd 启动默认
 发布 LOCK，因此打开云台编译选项后会自动进入此流程，不能把示例参数当作上板标定结果。
 
-- INS 必须不超过 10 ms；两轴运动反馈必须小于 100 ms，在线判断不等待 StatusTask。
-- 使能每 20 ms 尝试一次；两秒未完成进入 FAULT，等待一秒后重试。全程不阻塞控制任务。
-- 两轴在线且使能、INS 有效持续 100 ms 才进入 READY；中间失能会重新计算稳定时间。
-- DISABLED、故障或初始化部分失败时，覆盖已注册电机的周期槽为零刚度/阻尼/转矩，
-  每 20 ms 重试失能，直至收到新鲜失能反馈。发布失败下一周期继续尝试；停止帧不能
+- INS 必须不超过 10 ms；两轴运动反馈必须小于 100 ms，在线判断不等待 StatusTask。INS 发布端拒绝非有限姿态或角速度。
+- 云台每周期读取命令、INS 与两轴快照；活动模式请求两轴使能，两轴 ready 后立即捕获当前姿态并执行控制。没有就绪超时、退避或稳定窗口。
+- `Gimbal_GetStatus()` 根据初始化结果、当前命令、INS 新鲜度和两轴 `ready/fault` 给出 DISABLE、ENABLING、READY、FAULT 或 CONFIG_ERROR；状态只用于观察，不驱动恢复流程。CAN 软件周期槽是否接受目标不改变云台状态。
+- DMMotor 的 `RequestEnabled()` 处理首次请求和状态边沿：`false→true` 立即尝试一次 Enable，不主动发布安全目标；首次 `false` 或 `true→false` 立即尝试发布安全目标并提交一次 Disable。相同状态重复请求不执行收发；存在待提交项时返回 `false`。云台只有在两轴 ready 后才写正常目标，DMMotor 的 `SetXXX()` 在未 ready 时仍自动安全化。
+- 100 Hz StatusTask 调用 `ServiceAll()`：补交失败的安全目标；在线且无故障时补交失败的当前协议命令，并在反馈与请求不一致时再次提交。离线或故障时不新增 Enable/Disable。详细提交语义见 [DM 电机驱动](../../Device/Peripheral/Motor/DMmotor/dmmotor.md)。已进入硬件 FIFO 的帧由 FDCAN Auto Retransmission 处理总线级重发。
+- DISABLED、故障或初始化部分失败时，对已注册电机调用 `RequestEnabled(false)`；
+  DMMotor 在首次请求或 `true→false` 边沿立即尝试覆盖周期槽为零刚度/阻尼/转矩并提交一次失能，相同请求不重复发布；失败项交给低频服务补交，在线反馈仍显示使能时继续纠正失能。离线时不反复刷失能命令；停止帧不能
   保证在物理断线时送达，也不会清除已经进入硬件 FIFO 的帧。
-- 活动模式下自动恢复。恢复先清空 PID 历史并捕获当前姿态；IMU 等待 READY 后重新
+- 活动模式下按当前设备状态恢复。恢复先清空 PID 历史并捕获当前姿态；IMU 等待 READY 后重新
   发布目标，LOCK 直接保持新捕获的姿态，故障前目标不会重放。
-- 云台关闭达妙驱动的离线自动 Enable 回调，由上述状态机独占恢复决策；不自动 ClearError。
+- Daemon 只判断反馈活性；DMMotor 根据云台请求维护协议状态，不自动 ClearError。
 
-`GimbalFeedback` 仍为 100 Hz，字段布局不变。`enabled` 表示两轴当前新鲜反馈均为使能，
-不是软件状态 READY；`ins_valid=false` 时发布零姿态/速度。使能命令提交成功不代表已使能。
+`GimbalFeedback` 仍为 100 Hz，字段布局不变。`enabled` 表示两轴电机均 ready；
+`ins_valid=false` 时发布零姿态/速度。使能命令提交成功不代表已使能。
 
 本次没有增加命令来源心跳和整车输入仲裁；无新命令时保持最后模式和目标。自动恢复后
 需要新目标这一规则，也不能替代上层的遥控失联策略。

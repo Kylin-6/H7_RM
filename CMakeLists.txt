@@ -177,6 +177,7 @@ set(H7_GIMBAL_TASK_DEVICE_SOURCES
     User_File/Device/Peripheral/Remote/remote_control.c
     User_File/Device/Peripheral/Remote/sbus.cpp)
 set(H7_CHASSIS_DEVICE_SOURCES
+    User_File/Device/Peripheral/Referee/referee_daemon.cpp
     User_File/Device/Peripheral/Referee/crc_ref.c
     User_File/Device/Peripheral/Referee/referee_26.c
     User_File/Device/Peripheral/Referee/referee_UI_26.c
@@ -192,9 +193,9 @@ if(H7_BOARD STREQUAL "SingleBoard")
         ${H7_CHASSIS_DEVICE_SOURCES}
         User_File/Task/Control_Task.cpp
         User_File/Application/RobotCmd/RobotCmd.cpp
-        User_File/Application/Communication/Com.cpp
-        User_File/Application/Communication/input_state.cpp
-        User_File/Application/Communication/source_arbitration.cpp
+        User_File/Application/Input/remote_input.cpp
+        User_File/Application/Input/input_state.cpp
+        User_File/Application/Input/source_arbitration.cpp
         User_File/Application/Gimbal/Gimbal.cpp
         User_File/Application/Chassis/Chassis.cpp
         User_File/Application/Shoot/Shoot.cpp)
@@ -206,17 +207,16 @@ elseif(H7_BOARD STREQUAL "GimbalBoard")
         User_File/System/Transport/transport_gimbal.cpp
         User_File/Task/Control_Task_Gimbal.cpp
         User_File/Application/RobotCmd/RobotCmd.cpp
-        User_File/Application/Communication/Com.cpp
-        User_File/Application/Communication/input_state.cpp
-        User_File/Application/Communication/source_arbitration.cpp
+        User_File/Application/Input/remote_input.cpp
+        User_File/Application/Input/input_state.cpp
+        User_File/Application/Input/source_arbitration.cpp
         User_File/Application/Gimbal/Gimbal.cpp
         User_File/Application/Shoot/Shoot.cpp
         # 老步兵云台板专属适配：DM Pitch 轴、DM-IMU（BMI088 损坏）、
-        # 底盘板接口与 0x065 遥控转发输入适配。
+        # 底盘板 0x065 转发接收接口。
         User_File/Application/Pitch/Pitch.cpp
         User_File/Device/Peripheral/IMU/DM_IMU/dvc_dm_imu.cpp
-        User_File/Device/Peripheral/ChassisBoard/chassis_board.cpp
-        User_File/Application/Communication/Com.cpp)
+        User_File/Device/Peripheral/ChassisBoard/chassis_board.cpp)
 else()
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         User_Config/Board/chassis_board_config.cpp
@@ -290,7 +290,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Application/Pitch/
         User_File/Application/Chassis/
         User_File/Application/Shoot/
-        User_File/Application/Communication/
+        User_File/Application/Input/
         User_File/Application/Balance/
 )
 
@@ -310,7 +310,9 @@ endif()
 # 老步兵云台板双板分工（架构决定，不要打开）：
 # - Yaw 轴由底盘板主控负责，云台板固件固定不编译 Yaw 轴
 #   （LEGACY_INFANTRY_GIMBAL_YAW=0），不要因 BMI088 修复而改变。
-# - 遥控通道由底盘板经 FDCAN2 的 0x065 帧转发，由 Communication 输入适配接收。
+# - 遥控通道由底盘板经 FDCAN2 的 0x065 帧转发，由 Input/remote_input 适配接收。
+# LEGACY_INFANTRY_GIMBAL 仅在 GimbalBoard 角色下为 1：Debug/Release 的 SingleBoard
+# 安全模板走纯框架路径，避免 legacy 段引用的 chassis_board 等专属源缺席链接失败。
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
     BALANCE=1
@@ -318,7 +320,7 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     CHASSIS=$<BOOL:${H7_APP_CHASSIS}>
     SHOOT=$<BOOL:${H7_APP_SHOOT}>
     H7_HAS_DM_MOTOR=$<NOT:$<STREQUAL:${H7_BOARD},ChassisBoard>>
-    LEGACY_INFANTRY_GIMBAL=1
+    LEGACY_INFANTRY_GIMBAL=$<STREQUAL:${H7_BOARD},GimbalBoard>
     LEGACY_INFANTRY_GIMBAL_YAW=0
 )
 

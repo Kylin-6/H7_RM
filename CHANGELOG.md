@@ -8,7 +8,16 @@
 
 ## 2026-09-29
 
-### 老步兵云台分支同步主线
+### 老步兵云台分支合入主线框架（3f22ac8 → 9b00782，194 个提交）
+
+- 主线三天内的框架级改动全部吸收：Daemon 统一周期数据源监控与设备接入、DMMotor/DJIMotor 生命周期重构（`RequestEnabled(bool)` 边沿语义替代 `Enable()/Disable()`，DJI 在线查询改 `IsOnline()`）、Gimbal/Shoot 应用重构（私有 Context、配置驱动）、Communication 目录更名为 Input（`remote_input`）、Referee daemon、电机补交驱动与文档。凡老步兵分支未实质改动的框架文件一律取主线（merge-base 早于 3f22ac8，交叉合并冲突共 56 个文件）。
+- 老步兵 0x065 输入适配迁入 `Input/remote_input.cpp` 的 `LEGACY_INFANTRY_GIMBAL` 条件段（与 S.BUS 路径互斥共存），删除 `Application/Communication/` 目录；新增 `RemoteInput_GetRawChannels()` 供遥测观测链路原始通道。Pitch 通道两级低通、火控滞回、波轮映射数值与原实现逐项一致。
+- `LEGACY_INFANTRY_GIMBAL` 从全局硬编码 1 改为 `$<STREQUAL:${H7_BOARD},GimbalBoard>`：GimbalBoard 角色编译 legacy 路径，Debug/Release 的 SingleBoard 安全模板走纯框架路径，修复了此前“Debug 预设链接失败”（SingleBoard 缺 chassis_board 源）的已知问题。
+- 保留的老步兵实车决定：FDCAN1 AutoRetransmission ENABLE 且 FDCAN2/3 DISABLE（.ioc 与 fdcan.c 同步）；云台板电源轨只开 5V、两路 24V 关闭（Init.cpp legacy 条件段）；BMI088/W25Q64 相关回调在云台板关闭。
+- Gimbal.cpp / Shoot.cpp 保持双路径互斥共存：legacy 段（Pitch/DM-IMU/状态机参数零改动）+ 主线框架段（新 Context 实现）；legacy 段电机调用迁移到 `RequestEnabled()` / `IsOnline()` 新 API，控制行为不变。
+- 构建验证：`H7_BOARD=GimbalBoard` 与 Debug（SingleBoard 安全模板）均通过。
+
+### 老步兵云台分支同步主线（至 3f22ac8）
 
 - 将 `RoboMaster_H7`（至 `3f22ac8`）合入 `老步兵云台`：InputState / SourceArbitration / RobotCmd 输入仲裁、SI 单位、Referee 流式 parser、UART/CAN BSP、DM 驱动防护、文档均以主线为准；恢复主线版 RobotCmd（该分支曾移除仲裁接入）。
 - 0x065 输入链改为 Remote 源：Decode → 通道整形（Pitch 两级低通 / 火控滞回 / 波轮映射）→ `InputState_SubmitRemote()` → SourceArbitration → RobotCmd；链路失效提交空输入，由仲裁输出云台 DISABLED、Shoot OFF。

@@ -18,7 +18,7 @@ Application、Algorithm、Message Center 和 Transport 的物理量统一使用 
 
 Application 可以：
 
-- 保存控制目标、反馈缓存和应用状态。
+- 保存控制目标、反馈缓存和必要的应用状态。
 - 组合 PID、轨迹、滤波等算法。
 - 初始化并直接控制自己拥有的 Device。
 - 通过 Message Center 与同级 Application 交换状态、命令和事件。
@@ -29,50 +29,56 @@ Application 不应：
 - 解析底层 CAN/UART/SPI 协议帧。
 - 创建另一套消息总线或用字符串查找 Topic。
 - 把设备在线检测迁入应用消息中心。
+- 维护电机协议重试、退避或 CAN 发送细节；用电机快照决定何时计算机构目标。
 - 在多个模块中争用同一电机或同一命令所有权。
 
 ## 2. 当前目录
 
 | 模块 | 职责 | 拥有/调用的主要对象 |
 | --- | --- | --- |
-| `RobotCmd` | 命令唯一所有者和发布者；输入互锁失效时立即发布安全目标 | Output、Message Center Subscriber |
+| `RobotCmd` | 命令唯一所有者和发布者；输入互锁失效时立即发布安全目标 | Output、ShootEvent FIFO、反馈 Topic getter |
 | `Gimbal` | 云台模式、目标角/速度、达妙控制和反馈 | 两轴 Class_DMMotor、Yaw PID、INS Topic |
 | `Chassis` | 四舵轮运动学、最短转向和电机目标 | 8 个 DJI 电机及电机组 |
 | `Shoot` | 摩擦轮、拨弹连续模式和离散射击动作 | 3 个 DJI 电机、ShootEvent FIFO |
-| `Communication` | UART5 S.BUS 适配、固定来源输入状态与仲裁 | S.BUS、InputState |
+| `Input` | UART5 S.BUS 适配、固定来源输入状态与仲裁 | RemoteInput、InputState |
+
+Chassis 与 Shoot 的机械参数和 PID 初值分别放在 `Chassis_Config.h`、`Shoot_Config.h`；
+运行状态和设备实例由各自 `.cpp` 内的私有 Context 持有。BoardConfig 只提供总线等硬件
+资源，不存机构参数。Gimbal 的配置保存在 `Gimbal_Config.h`，状态根据当前命令、INS 和电机快照计算。
+`Input` 保存 Remote 输入适配、输入状态和来源仲裁；设备协议仍由 Device/BSP 处理。
 
 单板固件的硬件路径由 `H7_APP_GIMBAL`、`H7_APP_CHASSIS`、`H7_APP_SHOOT` 控制，默认均关闭；
 双板固件由 CMake 在构建期分别选择应用和任务源码。板内命令通过 `LocalPublisher` 进入
 Message Center，云台板的底盘命令通过 `RemotePublisher` 进入固定 CAN Transport。
 
 老步兵云台板单一构建（`LEGACY_INFANTRY_GIMBAL=1`，Gimbal + Shoot 启用、Chassis 关闭）：
-关闭的模块仍保留消息端点和反馈结构，但不会访问对应电机硬件；Remote 输入来自
-底盘板 0x065 转发而非本板 S.BUS。
+关闭的模块仍保留消息端点和反馈结构，但不会访问对应电机硬件；Remote 输入由
+`Input/remote_input` 的 legacy 段从底盘板 0x065 转发读取，而非本板 S.BUS。
 
 ## 3. Control_Task 生命周期
 
 各板的 `Control_Task` 均由 1 ms 线程标志唤醒，当前初始化和更新顺序为：
 
 ```text
-SingleBoard: RobotCmd_Init → Communication_Init → Gimbal_Init(启用时) → Chassis_Init → Shoot_Init
-             Communication_Update → RobotCmd_Update → Gimbal_Update → Chassis_Update → Shoot_Update
-GimbalBoard: BoardTransport_Init → RobotCmd_Init → Communication_Init → Gimbal_Init → Shoot_Init
-             BoardTransport_Poll → Communication_Update → RobotCmd_Update → Gimbal_Update → Shoot_Update
+SingleBoard: RobotCmd_Init → RemoteInput_Init → Gimbal_Init(启用时) → Chassis_Init → Shoot_Init
+             RemoteInput_Update → RobotCmd_Update → Gimbal_Update → Chassis_Update → Shoot_Update
+GimbalBoard: BoardTransport_Init → RobotCmd_Init → RemoteInput_Init → Gimbal_Init → Shoot_Init
+             BoardTransport_Poll → RemoteInput_Update → RobotCmd_Update → Gimbal_Update → Shoot_Update
 ChassisBoard: BoardTransport_Init → Chassis_Init
               BoardTransport_Poll → Chassis_Update
 ```
 
 RobotCmd 初始化失败时控制任务停在延时循环；不会继续初始化电机应用。RobotCmd 在
-消费者之前发布命令，各 Application 更新后发布的反馈由 RobotCmd 在后续周期读取。
+消费者之前发布命令；反馈 getter 在调用时直接读取各 Application 的 Topic。
 Gimbal/Chassis 板间轮询复用该任务，不创建额外控制任务。
 
-## 4. RobotCmd：命令入口与反馈聚合
+## 4. RobotCmd：命令唯一入口
 
 RobotCmd 不直接访问电机、CAN 或 IMU。输入链现在是：
 
 ```text
-底盘板 S.BUS → 0x065 转发 → Communication_Update → InputState(Remote)（老步兵云台板）
-UART5 S.BUS → Communication_Update → InputState(Remote)（底盘板 / 单板）
+UART5 S.BUS → RemoteInput_Update → InputState(Remote)（底盘板 / 单板）
+底盘板 0x065 转发 → RemoteInput_Update（legacy 段）→ InputState(Remote)（老步兵云台板）
 VTM / Keyboard / Vision → InputState_Submit*（接入接口，当前未绑定设备）
 InputState → SourceArbitration_Resolve → RobotCmd_Update → Output
 ```
@@ -86,18 +92,19 @@ VTM、Keyboard、Vision 当前没有绑定 UART/协议，生产固件不会自�
 
 以下设置接口保留供已有调用方使用；控制任务运行时，仲裁结果在每次
 `RobotCmd_Update()` 中覆盖缓存目标：
->>>>>>> RoboMaster_H7
 
 ```cpp
+void RobotCmd_SetGimbal(const GimbalCmd &command);
 void RobotCmd_SetChassis(const ChassisCmd &command);
+void RobotCmd_SetShoot(const ShootCmd &command);
 bool RobotCmd_PushShootEvent(const ShootEvent &event);
 ```
 
 连续命令写入本地缓存并设置 dirty 标志，`RobotCmd_Update()` 才通过已注入的 Output
 发布；底盘命令每 10 ms 刷新。Setter 当前没有并发保护，应由 ControlTask 上下文调用，
 不能直接从 ISR/UART 回调并发修改。S.BUS 驱动只在 UART 中断保存完整帧，
-Communication 在 ControlTask 中读取快照并提交 Remote 输入；0x065 链路的通道值同样
-只在中断里缓存，由 Communication 在任务上下文整形后提交；VTM/键鼠/Vision 的
+RemoteInput 在 ControlTask 中读取快照并提交 Remote 输入；0x065 链路的通道值同样
+只在中断里缓存，由 RemoteInput legacy 段在任务上下文整形后提交；VTM/键鼠/Vision 的
 未来适配器同样必须在任务上下文提交状态。
 
 S.BUS 使用 UART5：帧新鲜度 50 ms，frame-lost/failsafe 立即锁定；连续 200 ms 健康且
@@ -113,8 +120,8 @@ RobotCmd 独立初始化时的默认值如下；ControlTask 随后初始化 UART
 - Chassis 为 `ZERO_FORCE`。
 - Shoot 总开关、摩擦轮和拨弹盘均关闭。
 
-反馈读取 API 在对应 Application 首次发布前返回 false，并保持调用者输出不变。
-底盘反馈另外要求最近 100 ms 内发布；云台和发射反馈缓存当前没有同样的时效检查。
+三个反馈 getter 都要求对应 Application 最近 100 ms 内发布；未发布或超时均返回
+false，并保持调用者输出不变。RobotCmd 不再维护应用反馈的二次缓存。
 
 ## 5. Gimbal
 
@@ -134,9 +141,10 @@ RobotCmd 独立初始化时的默认值如下；ControlTask 随后初始化 UART
 Yaw 使用 INS 角度/速度串级闭环，通过达妙 MIT 纯转矩指令输出 N·m；Pitch 将 INS
 姿态误差转换为 MIT 电机位置/速度目标，并限制机械范围。两轴预先配置为 MIT 模式。
 
-初始化仅校验配置和注册驱动。使能、两秒超时、一秒退避和自动恢复均由 Update
-非阻塞推进；恢复需反馈持续有效 100 ms，随后重置控制器并捕获当前姿态。IMU 模式
-需在恢复后发布新目标，避免旧目标重放；DISABLED 或故障时清零两轴 MIT 输出并重试失能。
+初始化只校验云台机构关系和控制参数并注册驱动；设备参数由 DMMotor 初始化校验。Gimbal 不维护
+就绪超时、退避、稳定窗口或 CAN 软件槽失败状态；电机协议在请求边沿立即提交，并由 DMMotor 的 100 Hz 服务依据在线反馈纠正。离线期间不追加离散命令，已进入 FDCAN 硬件 FIFO 的帧由硬件自动重发。恢复后重置控制器
+并捕获当前姿态，IMU 模式等待新目标，避免旧目标重放；DISABLED 或故障时调用
+`RequestEnabled(false)`，由电机立即覆盖安全输出并维护失能命令。
 
 配置集中在 [Gimbal_Config.h](Gimbal/Gimbal_Config.h)。默认关闭云台编译选项；Yaw 转矩环
 增益全零，Pitch 增益和限位来自参考机构示例，均须实机标定。完整公式、参数来源、
@@ -145,7 +153,7 @@ Yaw 使用 INS 角度/速度串级闭环，通过达妙 MIT 纯转矩指令输�
 ### 5.3 反馈
 
 控制每 1 ms 更新，`GimbalFeedback` 每 10 个周期发布一次，包含姿态、角速度、INS
-有效性和电机使能状态。
+有效性和两轴电机的 `ready` 汇总；`Gimbal_GetStatus()` 根据当前事实提供诊断状态。
 
 ## 6. Chassis
 
@@ -173,7 +181,8 @@ Yaw 使用 INS 角度/速度串级闭环，通过达妙 MIT 纯转矩指令输�
 表现视为等效基线。
 
 反馈由四个轮模块估算 `vx/vy/wz`，经过一阶平滑后每 10 ms 发布。`online` 只有八个
-电机均在线时为 true；在线状态来源仍是 Device/Daemon，而不是 Message Center。
+电机均在线时为 true；`enabled` 表示八个电机均 ready，且当前命令不是 `ZERO_FORCE`。
+在线状态来源仍是 Device，而不是 Message Center。
 
 ## 7. Shoot
 
@@ -200,7 +209,7 @@ Yaw 使用 INS 角度/速度串级闭环，通过达妙 MIT 纯转矩指令输�
 
 STOP 模式每周期最多消费一个事件：首次事件从当前反馈角建立目标，后续排队事件在已有
 目标上累加 1 或 3 个弹位。BURST/REVERSE 取消事件角度保持；OFF 禁用输出并排空当前
-队列，避免重新使能后补射。
+队列，避免重新使能后补射。`ShootFeedback.enabled` 表示三个电机均 ready 且总开关为 ON。
 每次成功 Push 只代表一个逻辑动作请求；事件按目标角累加，不等待前一发物理完成。
 当前没有摩擦轮就绪、卡弹检测/回退、热量限制、裁判系统互锁或完整 FEEDING 状态机。
 
@@ -228,6 +237,9 @@ STOP 模式每周期最多消费一个事件：首次事件从当前反馈角建
 5. 在 `Control_Task` 中按数据依赖安排调用顺序，不轻易新增任务。
 6. 用 CMake 选项控制尚未标定的硬件路径，默认状态必须安全。
 7. 更新本文、Message Center 通道表、根 README 和架构图。
+
+机械参数放 Application 的 Config，运行状态和设备实例放私有 Context；公共接口放 `.h`，
+控制细节和私有 helper 留在 `.cpp`。Task 只安排初始化顺序和周期调用。
 
 推荐接口形态：
 

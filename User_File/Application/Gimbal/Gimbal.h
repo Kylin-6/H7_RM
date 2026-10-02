@@ -3,7 +3,7 @@
 
 #include "message_types.h"
 
-/** 云台应用的 1 kHz 周期入口，由 Control_Task 调度。 */
+/** ControlTask 的 1 kHz 入口；状态发布为 100 Hz。 */
 void Gimbal_Update(void);
 
 #if GIMBAL
@@ -35,7 +35,7 @@ enum Enum_Gimbal_Status
  * `Application/Pitch`，本模块只负责模式门控与反馈汇总。Yaw 轴沿用云台板原工程的
  * QD4310 + INS 实现，但云台板当前 BMI088 硬件故障、原工程也没有调度
  * `Gimbal_Init` / `Gimbal_Loop`，因此默认关闭；需要 Yaw 时打开 CMake 选项
- * `H7_LEGACY_INFANTRY_GIMBAL_YAW`。
+ * `LEGACY_INFANTRY_GIMBAL_YAW`。
  */
 typedef struct
 {
@@ -59,8 +59,6 @@ void Gimbal_Loop(void);
 #else
 
 #include "Gimbal_Config.h"
-#include "alg_pid.h"
-#include "dmmotor.h"
 
 enum Enum_Gimbal_Status
 {
@@ -71,22 +69,10 @@ enum Enum_Gimbal_Status
     Gimbal_Status_CONFIG_ERROR,
 };
 
-struct Struct_Gimbal
-{
-    Class_DMMotor Yaw_Motor;
-    Class_DMMotor Pitch_Motor;
-    Class_PID Yaw_Angle_PID;
-    Class_PID Yaw_Speed_PID;
-    Enum_Gimbal_Status status = Gimbal_Status_DISABLE;
-    float Target_Yaw_Angle = 0.0f;
-    float Target_Pitch_Angle = 0.0f;
-    float Target_Yaw_Speed = 0.0f;
-    float Target_Pitch_Speed = 0.0f;
-};
-
-extern Struct_Gimbal Gimbal;
 /** 仅启动阶段调用一次；复制配置并注册驱动，不等待应答、不置零、不切换电机模式。 */
 bool Gimbal_Init(const Struct_Gimbal_Config &config = Gimbal_Default_Config());
+/** 返回应用状态快照；仅供任务上下文读取，不允许外部改写状态或直接控制电机。 */
+Enum_Gimbal_Status Gimbal_GetStatus(void);
 #endif /* LEGACY_INFANTRY_GIMBAL */
 
 #endif /* GIMBAL */

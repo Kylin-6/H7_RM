@@ -1,40 +1,33 @@
 /**
- * @file Com.cpp
- * @brief 通信应用实现：板间输入适配与健康互锁（老步兵云台板配置）。
+ * @file remote_input.cpp
+ * @brief Remote 输入源适配：S.BUS（默认）或板间 0x065 转发（老步兵云台板）。
  * @details
- * 底盘板代收遥控后经 0x065 转发关键通道，因此本模块属于 Remote 输入源：
- * 输入链为 0x065 Decode → 本层整形（Pitch 低通 / 火控滞回 / 波轮档位映射）
- * → ControlInput → InputState_SubmitRemote() → SourceArbitration → RobotCmd。
- * CAN RX 回调只缓存通道值，不在中断上下文写 RobotCmd；InputState 只在
- * ControlTask 上下文提交。
+ * 两种输入硬件由编译开关区分，均只产生 Remote 来源的 ControlInput：
  *
- * 输入适配的数值与云台板原工程逐项一致，只是把「通道 -> 目标」的换算从轴侧
- * （原 Pitch / Shoot 模块）集中到输入侧：
+ * - 默认：UART5 S.BUS → SBUS_Device 解析 → 健康检查/解锁去抖 → 通道映射；
+ * - `LEGACY_INFANTRY_GIMBAL`：底盘板 0x065 → Class_ChassisBoard 缓存 →
+ *   本层整形（Pitch 两级低通 / 火控滞回 / 波轮档位映射）→ 提交。
  *
- * - Pitch 通道：两级一阶低通（每级 tau = 25 ms，总延迟约 50 ms）+ 线性映射到
- *   DM-IMU 限位 [-40 度, +15 度]；
- * - 火控开关：使用 [-500, +500] 双阈值滞回，避免必须拨到通道端点；
- * - 波轮档位：[-780, 740] 线性映射到 [0, 拨弹盘输出最大速度]。
- *
- * 链路失效时提交空输入，由 SourceArbitration 输出 safe state：云台 DISABLED、
- * 发射 OFF，与原整车安全行为一致。
+ * 两种路径都在 ControlTask 上下文调用 InputState_SubmitRemote()；CAN/UART 中断
+ * 只缓存原始数据，不在中断上下文写 InputState。链路失效时提交空输入，由
+ * SourceArbitration 输出 safe state。
  */
 
-#include "Com.h"
+#include "remote_input.h"
 
-#include "message_center.h"
-
-#include "alg_filter_iir.h"
+#include "input_state.h"
 
 #include <cstdint>
-#include <string.h>
 
 #if LEGACY_INFANTRY_GIMBAL
 
 #include "Pitch.h"
 #include "chassis_board.h"
 #include "fdcan.h"
-#include "input_state.h"
+
+#include "alg_filter_iir.h"
+
+#include <string.h>
 
 namespace
 {
@@ -60,7 +53,7 @@ constexpr float kLoaderMaxOutputRadS =
     kLoaderMaxRotorRpm * kShootTwoPi / 60.0f / kM2006GearRatio;
 
 Class_ChassisBoard chassis_board;
-bool communication_initialized;
+bool remote_input_initialized;
 bool fire_trigger_pressed;
 /* Pitch 通道两级一阶低通（框架 Class_Filter_IIR_First_Order 级联），
  * 每级时间常数 25 ms，总延迟约 50 ms，与原手写实现一致。 */
@@ -90,11 +83,11 @@ float MapDialToLoaderSpeed(int16_t dial)
 }
 } // namespace
 
-void Communication_Init(void)
+bool RemoteInput_Init(void)
 {
-    if (communication_initialized)
+    if (remote_input_initialized)
     {
-        return;
+        return true;
     }
 
     /* 板间链路走云台板的 FDCAN2，与底盘板的下行帧一致。 */
@@ -106,7 +99,8 @@ void Communication_Init(void)
     /* 输入仲裁状态一并复位：上电即处于 Remote 失联安全态。 */
     InputState_Reset();
     InputState_SetTime(HAL_GetTick());
-    communication_initialized = true;
+    remote_input_initialized = true;
+    return true;
 }
 
 /**
@@ -117,9 +111,9 @@ void Communication_Init(void)
  * 发布。链路失效（100 ms 无新帧）：提交空输入 → 仲裁 disarm → 云台 DISABLED、
  * Shoot OFF，两个 Application 同周期停手。
  */
-void Communication_Update(void)
+void RemoteInput_Update(void)
 {
-    if (!communication_initialized)
+    if (!remote_input_initialized)
     {
         return;
     }
@@ -177,7 +171,7 @@ void Communication_Update(void)
     shoot_command.friction_mode =
         trigger_pressed ? FrictionMode::ON : FrictionMode::OFF;
     shoot_command.loader_mode = trigger_pressed ? LoaderMode::BURST : LoaderMode::STOP;
-    /* 拨弹盘输出轴速度，rad/s；旧字段名 *_deg_s 实装 rad/s 的问题已清理。 */
+    /* 拨弹盘输出轴速度，rad/s。 */
     shoot_command.loader_speed_rad_s = MapDialToLoaderSpeed(dial);
     remote_input.shoot = shoot_command;
 
@@ -186,9 +180,9 @@ void Communication_Update(void)
     InputState_SubmitRemote(remote_input);
 }
 
-bool Communication_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch)
+bool RemoteInput_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch)
 {
-    if (!communication_initialized)
+    if (!remote_input_initialized)
     {
         return false;
     }
@@ -215,30 +209,128 @@ bool Communication_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch)
     return valid;
 }
 
-#else
+#else /* !LEGACY_INFANTRY_GIMBAL：主线 S.BUS 输入 */
 
-void Communication_Init(void)
+#include "sbus.h"
+#include "usart.h"
+
+namespace
 {
+/* 步兵测试分支的零基通道索引；CH5 跟随须有底盘朝向反馈后再接入。 */
+constexpr unsigned TRANSLATE_X = 1U; // CH2
+constexpr unsigned TRANSLATE_Y = 0U; // CH1
+constexpr unsigned SPEED_GEAR = 6U;  // CH7
+constexpr unsigned ROTATION = 9U;    // CH10，负半轴为手动旋转
+constexpr float CHANNEL_RANGE = 784.0f;
+constexpr int16_t NEUTRAL_THRESHOLD = 50;
+constexpr uint32_t FRAME_FRESH_MS = 50U;
+constexpr uint32_t RECOVERY_MS = 200U;
+
+bool receiver_ready;
+bool armed;
+uint32_t last_unhealthy_ms;
+
+float Clamp(float value, float minimum, float maximum)
+{
+    return value < minimum ? minimum : (value > maximum ? maximum : value);
 }
 
-void Communication_Update(void)
+float Axis(int16_t channel)
 {
+    // 原始通道先限幅到 [-1, 1]，再设置中心死区；物理速度量程由调用处换算。
+    const float normalized = Clamp(static_cast<float>(channel) / CHANNEL_RANGE,
+                                   -1.0f, 1.0f);
+    return normalized > -0.04f && normalized < 0.04f ? 0.0f : normalized;
 }
 
-bool Communication_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch)
+bool Neutral(const Struct_SBUS_Frame &frame)
 {
-    if (fire != nullptr)
+    /* 解锁必须先松开平移和云台两轴；CH10 在旧遥控上是偏置开关。 */
+    constexpr unsigned axes[] = {0U, 1U, 2U, 3U};
+    for (unsigned index : axes)
     {
-        *fire = 0;
+        if (frame.channels[index] < -NEUTRAL_THRESHOLD ||
+            frame.channels[index] > NEUTRAL_THRESHOLD)
+        {
+            return false;
+        }
     }
-    if (dial != nullptr)
+    return true;
+}
+} // namespace
+
+bool RemoteInput_Init(void)
+{
+    armed = false;
+    last_unhealthy_ms = HAL_GetTick();
+    InputState_Reset();
+    InputState_SetTime(last_unhealthy_ms);
+    // S.BUS Device 负责协议解析，并通过 BSP UART 接收；应用只读取完整帧快照。
+    receiver_ready = SBUS_Init(&huart5);
+    return receiver_ready;
+}
+
+void RemoteInput_Update(void)
+{
+    Struct_SBUS_Frame frame{};
+    const uint32_t now = HAL_GetTick();
+    InputState_SetTime(now);
+    const bool healthy = receiver_ready && SBUS_ReadLatest(&frame) &&
+                         now - frame.timestamp_ms <= FRAME_FRESH_MS &&
+                         !frame.frame_lost && !frame.failsafe;
+    if (!healthy)
     {
-        *dial = 0;
+        last_unhealthy_ms = now;
+        armed = false;
+        InputState_SubmitRemote({});
+        return;
     }
-    if (pitch != nullptr)
+
+    if (!armed)
     {
-        *pitch = 0;
+        // 健康帧且摇杆连续回中 200 ms 才解锁；失联或未回中都会重新计时。
+        if (!Neutral(frame))
+        {
+            last_unhealthy_ms = now;
+            InputState_SubmitRemote({});
+            return;
+        }
+        if (now - last_unhealthy_ms < RECOVERY_MS)
+        {
+            InputState_SubmitRemote({});
+            return;
+        }
+        armed = true;
     }
+
+    // 速度档映射到 [0, 1]，只缩放 SI 速度目标；此处尚未接入云台和发射通道。
+    const float gear = Clamp((static_cast<float>(frame.channels[SPEED_GEAR]) +
+                              CHANNEL_RANGE) / (2.0f * CHANNEL_RANGE), 0.0f, 1.0f);
+    ChassisCmd chassis{};
+    chassis.velocity_x_m_s = Axis(frame.channels[TRANSLATE_X]) * gear * INPUT_MAX_TRANSLATION_M_S;
+    chassis.velocity_y_m_s = -Axis(frame.channels[TRANSLATE_Y]) * gear * INPUT_MAX_TRANSLATION_M_S;
+    if (frame.channels[ROTATION] < 0)
+    {
+        chassis.angular_velocity_rad_s = Axis(frame.channels[ROTATION]) * gear *
+                                         INPUT_MAX_ROTATION_RAD_S;
+    }
+    if (chassis.velocity_x_m_s != 0.0f || chassis.velocity_y_m_s != 0.0f ||
+        chassis.angular_velocity_rad_s != 0.0f)
+    {
+        chassis.mode = ChassisMode::NO_FOLLOW;
+    }
+    ControlInput remote{};
+    remote.chassis = chassis;
+    remote.received_ms = frame.timestamp_ms;
+    remote.valid = true;
+    InputState_SubmitRemote(remote);
+}
+
+bool RemoteInput_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch)
+{
+    (void)fire;
+    (void)dial;
+    (void)pitch;
     return false;
 }
 

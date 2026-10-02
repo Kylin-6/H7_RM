@@ -1,8 +1,19 @@
 # H7_BSP
 
+> **第一次使用 H7_RM？从这里开始**
+>
+> 1. 阅读 [30～60 分钟快速上手](GETTING_STARTED.md)，先构建并找到控制任务。
+> 2. 看 [新人控制数据流图](Assets/Architecture/H7_RM_GettingStarted.svg)（[交互版](Assets/Architecture/H7_RM_GettingStarted.html)），理解控制、姿态和在线监控三条链。
+> 3. 需要完整工程分层时，看 [H7_RM / H7_BSP 总览图](Assets/Architecture/H7_BSP.svg)（[交互版](Assets/Architecture/H7_BSP.html)）。
+> 4. 具体开发再进入下方各模块 reference；快速上手不替代接口与硬件约定。
+
 面向达妙 MC-02 开发板的 STM32H7 板级支持与机器人控制框架，基于 **STM32H723VGT6 / Cortex-M7 / 480 MHz**。工程围绕外设通信、设备驱动、控制与估计算法、系统服务组织代码，供机器人项目组合和复用。
 
 底层使用 STM32CubeMX、HAL 与 FreeRTOS，任务接口采用 CMSIS-RTOS V2，构建使用 CMake + Ninja。用户层保持 C 风格运算、结构体与自由函数，设备和算法保留简洁的 `Class_` 封装。
+
+内部物理量统一使用 SI：角度 rad、角速度 rad/s、线速度 m/s、转矩 N·m。
+degree 仅用于机械标定输入、调试显示和外部协议边界；进入控制链时转换为 rad。
+
 
 内部物理量统一使用 SI：角度 rad、角速度 rad/s、线速度 m/s、转矩 N·m。
 degree 仅用于机械标定输入、调试显示和外部协议边界；进入控制链时转换为 rad。
@@ -34,7 +45,7 @@ degree 仅用于机械标定输入、调试显示和外部协议边界；进入�
 
 ```text
 User_File/
-├── Application/            应用控制与通信接入
+├── Application/            输入适配、命令仲裁与机构控制
 ├── Task/                   CMSIS-RTOS V2 任务入口
 ├── Device/Onboard/         板载设备
 ├── Device/Peripheral/      外接电机与调试工具
@@ -69,7 +80,8 @@ CAN 的两条发送通道适用于不同数据语义：
 
 - `CAN_Tx_Perform()` 更新 `(FDCAN, ID)` 对应的周期槽，同一键保留最新数据，适合连续控制目标。
 - `CAN_Tx_Submit()` 将离散命令复制到 FDCAN1/2/3 各自的 FIFO；同总线按序重试，单总线拥塞不阻断其他总线或周期槽。
-- `CanTxTask` 每 1 ms 调用 `BSP_CAN_SendAsync()` / `BSP_CAN_SendPer()`。软件提交成功、写入硬件 FIFO、总线发送、对端收到和设备执行是不同阶段；调用方须检查提交结果。
+- `CanTxTask` 每 1 ms 调用 `BSP_CAN_SendAsync()` / `BSP_CAN_SendPer()`。三路 FDCAN 已启用硬件 Auto Retransmission；软件队列只重试 HAL 尚未接受的帧。软件提交成功、写入硬件 FIFO、总线发送、对端收到和设备执行是不同阶段；调用方须检查提交结果。
+  老步兵板卡按实车结论对 FDCAN2/3 保持硬件重传关闭，见下文故障记录。
 
 CAN 接收回调在中断上下文执行。UART 的 DMA 接收须同时具备 CubeMX 的 RX DMA 配置和 BSP 管理入口，接入新端口时需同步核对。
 
@@ -91,7 +103,7 @@ CAN 接收回调在中断上下文执行。UART 的 DMA 接收须同时具备 Cu
 
 达妙动作/模式请求及 QDrive 命令接口返回 `bool`，表示是否成功提交到软件发送通道。提交失败时保留相应状态，调用方可据此重试；达妙置零仅在提交成功后重置位置展开状态。返回成功不代表电机已经执行或确认命令。
 
-达妙反馈以 `(FDCAN, master_id)` 注册接收入口，并用反馈首字节低四位匹配 `can_id`；电机 ID 使用 8 位值，高四位仍用于发送 ID。只有总线、ID、DLC 和节点号全部合法的运动反馈才刷新在线状态。在线电机连续 100 ms 无合法反馈时，Daemon 离线回调首次尝试将使能帧入软件 FIFO；首次失败才由 `StatusTask` 的 `ServiceAll()` 至少间隔 50 ms 重试入队。入队成功不代表已恢复；Gimbal 两轴关闭此自动机制，使用自身状态机。
+达妙反馈以 `(FDCAN, master_id)` 注册接收入口，并用反馈首字节低四位匹配 `can_id`；电机 ID 使用非零 8 位值，高四位仍用于发送 ID。只有总线、ID、DLC 和节点号全部合法的运动反馈才刷新在线状态。Application 用 `RequestEnabled(bool)` 指定输出许可；DMMotor 在首次请求或状态边沿执行协议动作，失能请求立即尝试覆盖安全周期目标，相同状态重复请求不执行收发；具体语义见 [达妙电机驱动](User_File/Device/Peripheral/Motor/DMmotor/dmmotor.md)，由 `StatusTask` 的 `ServiceAll()` 以 100 Hz 补交失败项并依据新鲜反馈维护 Enable/Disable 协议状态。Daemon 只判断活性，Gimbal 根据当前 INS 与电机快照决定是否控制。
 
 ### 板载设备与外接工具
 
@@ -151,6 +163,7 @@ EricTool 的 USB/UART 解析均只读取回调传入的缓冲区及有效长度�
 | 参数配置 | 集中维护当前 IMU 采样、姿态与零偏估计参数 | [System/IMU](User_File/System/IMU) |
 | 消息中心 | 静态 Latest-Value Topic 与事件 FIFO | [System/MessageCenter](User_File/System/MessageCenter) |
 | 在线检测 | 固定容量设备注册、Feed 与超时状态检查 | [System/Daemon](User_File/System/Daemon) |
+| 板间 Transport | 构建期固定的双板命令与反馈协议 | [Transport](User_File/System/Transport/README.md) |
 | 调试数据 | 导出便于 Watch、绘图与遥测读取的状态 | [System/debug](User_File/System/debug) |
 | 周期与任务 | CMSIS-RTOS V2 任务入口、线程标志和周期回调 | [Task](User_File/Task) |
 
@@ -165,7 +178,7 @@ EricTool 的 USB/UART 解析均只读取回调传入的缓冲区及有效长度�
 
 业务类型和唯一静态通道统一定义在 [MessageCenter](User_File/System/MessageCenter)。`INS_State_Topic` 由 BMI088 链路发布，云台读取最新姿态；RobotCmd 通过 Output 发布 Gimbal、Chassis、Shoot 连续命令并汇总反馈，底盘命令在云台板由固定 Transport 送往底盘板 Topic。单发和三连发通过固定容量 `ShootEvent` FIFO 传递。完整 API、并发语义、通道所有权、示例和验证清单见 [Message Center 专篇](User_File/System/MessageCenter/README.md)。
 
-Daemon 只负责在线状态判断，不负责整车停机、安全策略或消息路由。设备在收到合法反馈后直接 `Feed()`；`StatusTask` 每 10 ms 调用 `CheckAll()`，并在包含 DM 电机的目标上调用 `Class_DMMotor::ServiceAll()`。管理器采用固定容量注册，无动态分配。
+所有正常工作时应持续收到反馈、心跳或数据流的模块优先注册静态 Daemon，只在收到合法数据时 `Feed()`。当前已接入 DM、DJI、S.BUS、有效 INS 输出、双板 Transport 及可选 Referee/VTM；`StatusTask` 每 10 ms（100 Hz）统一 `CheckAll()`，有 DM 电机时再调用原有 `Class_DMMotor::ServiceAll()`。Daemon 只负责 liveness，不负责整车停机、清错、重启、安全策略或消息路由。管理器保持 32 个固定槽位，无动态分配；当前三板最坏注册数为 17/8/11。在线查询不替代 Topic ReadFresh 或电机反馈的微秒 freshness，详见 [Daemon 说明](User_File/System/Daemon/README.md)。
 
 ### Application
 
@@ -200,15 +213,15 @@ Control_Task 调度顺序、RobotCmd 所有权、Gimbal/Chassis/Shoot 行为和�
 | 查询 | 语义 |
 | --- | --- |
 | `Online` | 在设备规定的超时窗口内收到过合法反馈 |
-| `Enabled` | 主动设备处于协议/本地使能状态；遥控器、S.BUS、裁判系统等被动设备表示驱动已初始化 |
+| `RequestedEnabled` | 电机的 Application 输出许可；DJI 只有软件 gate，DM 另有协议实际使能反馈 |
 | `DataValid` | 当前反馈可供上层使用；现有驱动通常要求 Online |
-| `Healthy` | 当前设备满足业务使用的最小条件，通常为 Enabled 且 DataValid |
+| `Ready` | 电机初始化、请求使能且反馈新鲜；DM 还要求协议报告已使能且无故障 |
 
-`Daemon` 只负责时间窗、在线/离线跃迁和可选离线回调。设备收到完整合法反馈后自行 `Feed()`，`StatusTask` 每 10 ms 统一 `CheckAll()`，有 DM 电机时随后执行待恢复入队服务。它不自动实现全车停机、云台 DISABLE、消息路由或故障上报；这些安全动作必须在拥有设备的 Application 中显式处理，并用实机拔线验证时限。
+`Daemon` 只负责时间窗及在线/离线跃迁。设备收到完整合法反馈后自行 `Feed()`，`StatusTask` 每 10 ms 统一 `CheckAll()`，有 DM 电机时随后执行电机协议期望状态服务。它不决定全车停机、云台 READY、消息路由或故障上报；业务安全策略仍由拥有设备的 Application 决定，并需实机拔线验证时限。
 
 ### 数据新鲜度、发送与可观测性
 
-- `Topic<T>::ReadFresh()` 用发布时间戳拒绝过期数据。云台对 INS 使用 10 ms 新鲜度门限；失效时两轴达妙清零 MIT 输出并重试失能；反馈持续有效后自动恢复并捕获当前姿态，IMU 模式等待新目标。见 [云台说明](User_File/Application/Gimbal/README.md)。
+- `Topic<T>::ReadFresh()` 用发布时间戳拒绝过期数据。云台对 INS 使用 10 ms 新鲜度门限；失效时向两轴达妙请求失能，电机立即发布安全 MIT 输出；INS 恢复且两轴 ready 后捕获当前姿态，IMU 模式等待新目标。见 [云台说明](User_File/Application/Gimbal/README.md)。
 - 连续控制目标走 `CAN_Tx_Perform()`，同一 `(FDCAN, ID)` 只保留最新值；使能、失能、清错和模式设置走 `CAN_Tx_Submit()` FIFO。软件接收成功、写入硬件 FIFO 和设备实际执行是三个不同阶段。
 - `BSP_CAN_GetTxStats()` 提供命令队列满、周期槽满、硬件 FIFO 满和 HAL 发送失败的饱和计数快照。计数只提供证据，不自动改变调度或执行安全策略。
 - 主机测试可以确认协议编解码、ID/DLC 隔离、超时边界、队列溢出和数据新鲜度；真实波特率/采样点、终端电阻、总线仲裁、供电时序、电机参数和 EMC 必须在目标板上确认。
@@ -276,14 +289,15 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-产物为 `build/Debug/H7_BSP.elf`，链接映射为同目录下的 `H7_BSP.map`。
+产物为 `build/Debug/H7_BSP.elf`，链接映射为同目录下的 `H7_BSP.map`。Release 使用对应 preset：
 
 ```powershell
 cmake --preset Release
 cmake --build --preset Release
 ```
 
-[CMakePresets.json](CMakePresets.json) 保留 Debug/Release 配置；[CMakeUserPresets.json](CMakeUserPresets.json) 提供 SingleBoard/GimbalBoard/ChassisBoard。Debug 使用 `-Og -g3`，Release 使用 `-Os -g0`。老步兵云台板实机固件使用 GimbalBoard 预设（含 DM Pitch、DM-IMU 与 0x065 遥控转发适配）。
+[CMakePresets.json](CMakePresets.json) 保留 Debug/Release 配置；[CMakeUserPresets.json](CMakeUserPresets.json) 提供 SingleBoard/GimbalBoard/ChassisBoard。Debug 使用 `-Og -g3`，Release 使用 `-Os -g0`。
+老步兵云台板实机固件使用 GimbalBoard 预设（含 DM Pitch、DM-IMU 与 0x065 遥控转发适配）。
 
 ### 主机回归
 
@@ -365,5 +379,69 @@ node bin/archify.mjs deliver architecture \
 ```
 
 交付后运行 `visual-check` 记录多分辨率浏览器证据，再人工检查亮色与暗色主题。
+## 文档与参考
+
+- [BSP 开发指南](User_File/Middleware/BSP/README.md) · [Message Center](User_File/System/MessageCenter/README.md) · [Application 开发指南](User_File/Application/README.md)。
+- [DJI 电机驱动](User_File/Device/Peripheral/Motor/DJImotor/dji_motor.md) · [达妙电机驱动](User_File/Device/Peripheral/Motor/DMmotor/dmmotor.md) · [更新记录](CHANGELOG.md)。
+- [文档与注释一致性审查](docs/documentation_sync_2026-09-28.md) · [2026-09-25 历史框架审查](docs/framework_review_2026-09-25.md)。
+- [FreeRTOS heap memory management](https://www.freertos.org/Documentation/02-Kernel/02-Kernel-features/09-Memory-management/01-Memory-management)。
+- [ST AN4891：STM32H7 系统架构与性能](https://www.st.com/resource/en/application_note/an4891-stm32h72x-stm32h73x-and-singlecore-stm32h74x75x-system-architecture-and-performance-stmicroelectronics.pdf)。
+- [ST AN4839：STM32F7/H7 一级缓存](https://www.st.com/resource/en/application_note/an4839-level-1-cache-on-stm32f7-series-and-stm32h7-series-stmicroelectronics.pdf)。
+
+## 致谢
+
+感谢 MermaidFAR 开源并提供本项目所基于的 [H7_BSP](https://github.com/MermaidFAR/H7_BSP) 基础工程。
+
+本框架的分层设计、设备抽象与工程组织参考了[湖南大学 RoboMaster 跃鹿战队 `basic_framework`](https://github.com/HNUYueLuRM/basic_framework)、中国科学技术大学 RoboWalker 的开源框架，以及 [Meta-Team 的 `Meta-Embedded-NG`](https://github.com/Meta-Team/Meta-Embedded-NG)。感谢这些团队对 RoboMaster 电控社区的开放分享与长期贡献。
+
+<a id="维护架构图"></a>
+
+<details>
+<summary>维护架构图</summary>
+
+两张图共用已有 **Archify** 工具链（当前产物生成版本 `2.17.0-dev.1`），仓库没有架构图专用 `package.json` / npm script，也没有 Python 生成器：
+
+- [H7_BSP.architecture.json](Assets/Architecture/H7_BSP.architecture.json)：工程分层总览，保留原文件名。
+- [H7_RM_GettingStarted.architecture.json](Assets/Architecture/H7_RM_GettingStarted.architecture.json)：新人控制、姿态、在线监控三条链。
+- [Export_Svg.mjs](Tools/Architecture/Export_Svg.mjs)：通过 Archify HTML 的浏览器导出接口生成 SVG，保留字体、主题和拓扑。
+
+**只修改 JSON 图源，不手改 SVG / HTML。** 图源使用 Archify `schemas/architecture.schema.json` 和 `schemas/common.schema.json`：`schema_version: 1`、`diagram_type: architecture`，主要字段为 `meta`、`components`、`boundaries`、`connections`、`cards`。
+component type 是固定枚举；本工程用 `meta.legend.entries.<type>.label` 显示嵌入式层次，不沿用 Web 图例。方向相反的关系用两条连接表达。
+`meta.repository.revision` 固定源码证据版本；更新架构时同步为已核对的 commit，`sources` 指向该版本中的真实文件。
+
+准备 Node.js 18+、已有 Archify skill 目录和 Chrome / Chromium（SVG 导出及浏览器验证需要；必要时用 `ARCHIFY_CHROME` 指定浏览器路径）。在**仓库根目录**执行以下命令，先将 `ARCHIFY_ROOT` 改为本机 skill 目录：
+
+```bash
+ARCHIFY_ROOT=/path/to/archify
+
+# 每份 JSON 独立校验并生成交互式 HTML
+for diagram in H7_BSP H7_RM_GettingStarted; do
+  node "$ARCHIFY_ROOT/bin/archify.mjs" validate architecture \
+    "Assets/Architecture/$diagram.architecture.json" \
+    --quality showcase --repo-root . --json || break
+  node "$ARCHIFY_ROOT/bin/archify.mjs" deliver architecture \
+    "Assets/Architecture/$diagram.architecture.json" \
+    "Assets/Architecture/$diagram.html" \
+    --quality showcase --repo-root . --json || break
+done
+
+# 从已成功交付的 HTML 生成 SVG
+for diagram in H7_BSP H7_RM_GettingStarted; do
+  node Tools/Architecture/Export_Svg.mjs "$ARCHIFY_ROOT" \
+    "Assets/Architecture/$diagram.html" \
+    "Assets/Architecture/$diagram.svg" || break
+done
+
+# 记录多分辨率浏览器证据
+for diagram in H7_BSP H7_RM_GettingStarted; do
+  node "$ARCHIFY_ROOT/bin/archify.mjs" visual-check \
+    "Assets/Architecture/$diagram.html" --json || break
+done
+```
+
+校验失败时先修复 JSON，再重新生成；不要从失败交付后保留的旧 HTML 导出 SVG。
+HTML 支持亮/暗主题、搜索、聚焦、关系追踪、三条链的引导视图和导出。
+两份 JSON 及对应的 SVG、HTML **一并提交 git**，方便 GitHub 阅读和离线交互。
+浏览器 QA 生成的截图与 receipt 是本地验证证据，不作为图源；交付前检查两种主题、文字和箭头，并运行 `git diff --check`。
 
 </details>

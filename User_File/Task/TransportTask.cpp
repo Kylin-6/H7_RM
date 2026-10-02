@@ -16,14 +16,13 @@
 #include "user_task.h"
 
 #if LEGACY_INFANTRY_GIMBAL && SHOOT
-#include "Com.h"
+#include "remote_input.h"
 #include "Shoot.h"
 #include "bsp_uart.h"
 #include "usart.h"
 
 #include <string.h>
 #endif
-
 
 /* Private macros ------------------------------------------------------------*/
 
@@ -79,7 +78,7 @@ extern "C" void Transport_Task(void *argument)
             int16_t fire = 0;
             int16_t dial = 0;
             int16_t pitch = 0;
-            const bool channels_valid = Communication_GetRawChannels(&fire, &dial, &pitch);
+            const bool channels_valid = RemoteInput_GetRawChannels(&fire, &dial, &pitch);
             channels[0] = channels_valid ? static_cast<float>(fire) : 0.0f;
             channels[1] = channels_valid ? static_cast<float>(dial) : 0.0f;
             channels[2] = channels_valid ? static_cast<float>(pitch) : 0.0f;

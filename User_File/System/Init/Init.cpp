@@ -1,7 +1,6 @@
 #include "Init.h"
 #include "board_config.h"
 
-#include "Com.h"
 #include "SEGGER_SYSVIEW.h"
 #include "bsp_adc.h"
 #include "bsp_bmi088.h"
@@ -74,22 +73,14 @@ extern "C" void System_Init(void)
 
     if (hardware.imu)
     {
-        // 陀螺仪的 SPI；未装配 IMU 的板型显式绑定空回调，
-        // 避免异常中断进入未初始化对象（老步兵云台板 BMI088 故障场景）。
         SPI_Init(&hspi2, SPI2_Callback);
-    }
-    else
-    {
-        SPI_Init(&hspi2, nullptr);
     }
     if (hardware.indicators)
     {
-        // WS2812的SPI
         SPI_Init(&hspi6, nullptr);
     }
     if (hardware.flash)
     {
-        // Flash 的 OSPI
         OSPI_Init(&hospi2, OSPI2_Polling_Callback, OSPI2_Rx_Callback, OSPI2_Tx_Callback);
     }
 
@@ -110,8 +101,7 @@ extern "C" void System_Init(void)
     bool bmi088_initialized = false;
     if (hardware.imu)
     {
-        System_IMU_Configure();
-        bmi088_initialized = BSP_BMI088.Init();
+        bmi088_initialized = System_IMU_Configure() && BSP_BMI088.Init();
         if (!bmi088_initialized)
         {
             System_Init_RecordFailure(SYSTEM_INIT_FAILURE_BMI088,
@@ -136,7 +126,13 @@ extern "C" void System_Init(void)
     }
     if (hardware.power)
     {
-        BSP_Power.Init(hardware.power_24v_1, hardware.power_24v_2, true);
+#if LEGACY_INFANTRY_GIMBAL
+        /* 老步兵云台板实车决定：只开板载 5V，两路 24V 保持关闭（电机用外部供电），
+         * 未经硬件确认不得改变电源开关状态。 */
+        BSP_Power.Init(false, false, true);
+#else
+        BSP_Power.Init(true, true, true);
+#endif
     }
     if (hardware.usb_debug)
     {
@@ -147,6 +143,6 @@ extern "C" void System_Init(void)
         // 只有完整通过芯片 ID 与配置回读后才允许启动 FIFO/姿态数据链路。
         BSP_BMI088.BMI088_Gyro.Start_FIFO_Acquisition();
     }
-
+    
     init_finished = true;
 }

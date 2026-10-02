@@ -25,7 +25,6 @@ static constexpr uint32_t DM_POSITION_SPEED_MODE_ID_OFFSET = 0x100U;
 static constexpr uint32_t DM_FORCE_POSITION_MODE_ID_OFFSET = 0x300U;
 static constexpr uint32_t DM_PARAMETER_ID = 0x7FFU;
 static constexpr uint64_t DM_MODE_TIMEOUT_US = 250000; ///< 模式切换应答等待上限，单位 us。
-static constexpr uint64_t DM_RECOVER_RETRY_US = 50000;
 static constexpr uint8_t DM_CMD_ENABLE = 0xFCU;
 static constexpr uint8_t DM_CMD_DISABLE = 0xFDU;
 static constexpr uint8_t DM_CMD_ZERO_POSITION = 0xFEU;
@@ -129,50 +128,39 @@ void Class_DMMotor::FeedbackCallback(FDCAN_HandleTypeDef *callback_hfdcan,
     motor->feedback_daemon.Feed();
 }
 
-/**
- * @brief Daemon 首次判定掉线时快速提交一帧使能命令。
- * @note 首次入队成功则不再重试；仅在队列已满时留给 StatusTask 限频重试。
- */
-void Class_DMMotor::OfflineCallback(void *owner)
-{
-    Class_DMMotor *motor = static_cast<Class_DMMotor *>(owner);
-    if (motor != nullptr && motor->auto_enable_on_offline)
-    {
-        motor->recover_pending = !motor->Enable();
-        motor->last_recover_attempt_us = SYS_Timestamp.Get_Now_Microsecond();
-    }
-}
-
-void Class_DMMotor::SetAutoEnableOnOffline(bool enable)
-{
-    auto_enable_on_offline = enable;
-    if (!enable)
-    {
-        recover_pending = false;
-    }
-}
-
+/** @brief 由 100 Hz StatusTask 根据新鲜反馈纠正协议状态，故障时不自动清错。 */
 void Class_DMMotor::ServiceAll()
 {
-    const uint64_t now_us = SYS_Timestamp.Get_Now_Microsecond();
     for (Class_DMMotor *motor = service_head; motor != nullptr;
          motor = motor->service_next)
     {
-        if (!motor->recover_pending)
+        // 与 ControlTask 的请求更新互斥，避免补交过时命令或覆盖新的待提交标志。
+        const uint32_t primask = __get_PRIMASK();
+        __disable_irq();
+        if (motor->lifecycle_requested)
         {
-            continue;
+            const Struct_DMMotor_Snapshot snapshot = motor->GetFeedbackSnapshot();
+            if (snapshot.ready)
+            {
+                // 已恢复正常输出许可，不再补写未就绪期间失败的安全目标。
+                motor->safe_output_pending = false;
+            }
+            else if (motor->safe_output_pending || snapshot.requested_enabled)
+            {
+                // 失能安全发布失败也必须补交，包括离线和故障期间。
+                motor->safe_output_pending = !motor->PublishSafeOutput();
+            }
+            // 离线或故障时不追加离散命令；硬件 FIFO 内的帧由 FDCAN 自动重发。
+            if (snapshot.online && !snapshot.fault &&
+                (motor->lifecycle_command_pending ||
+                 snapshot.requested_enabled != snapshot.actual_enabled))
+            {
+                motor->lifecycle_command_pending = !motor->SendModeCommand(
+                    snapshot.requested_enabled ? DM_CMD_ENABLE : DM_CMD_DISABLE);
+            }
         }
-        if (!motor->auto_enable_on_offline || motor->IsOnline())
-        {
-            motor->recover_pending = false;
-            continue;
-        }
-        if (now_us >= motor->last_recover_attempt_us &&
-            now_us - motor->last_recover_attempt_us >= DM_RECOVER_RETRY_US)
-        {
-            motor->last_recover_attempt_us = now_us;
-            motor->recover_pending = !motor->Enable();
-        }
+        __DMB();
+        if (primask == 0U) { __enable_irq(); }
     }
 }
 
@@ -206,7 +194,8 @@ bool Class_DMMotor::Init(FDCAN_HandleTypeDef *motor_hfdcan,
                          float motor_velocity_max,
                          float motor_torque_max)
 {
-    if (motor_hfdcan == nullptr || motor_master_id > 0x7FFU)
+    if (motor_hfdcan == nullptr || motor_can_id == 0U || motor_master_id > 0x7FFU ||
+        static_cast<uint8_t>(motor_mode) < 1U || static_cast<uint8_t>(motor_mode) > 4U)
     {
         return false;
     }
@@ -254,7 +243,11 @@ Struct_DMMotor_Snapshot Class_DMMotor::GetFeedbackSnapshot() const
     const uint64_t now = SYS_Timestamp.Get_Now_Microsecond();
     snapshot.online = feedback_initialized && now >= last_feedback_us &&
                       now - last_feedback_us < 100000U;
-    snapshot.enabled = snapshot.feedback.state == 1U;
+    snapshot.requested_enabled = requested_enabled;
+    snapshot.actual_enabled = snapshot.feedback.state == 1U;
+    snapshot.fault = snapshot.online && snapshot.feedback.state > 1U;
+    snapshot.ready = snapshot.requested_enabled && snapshot.online &&
+                     snapshot.actual_enabled && !snapshot.fault;
     __DMB();
     if (primask == 0U) { __enable_irq(); }
     return snapshot;
@@ -277,8 +270,9 @@ bool Class_DMMotor::IsDataValid() const
 
 bool Class_DMMotor::IsHealthy() const
 {
-    return IsOnline() && IsEnabled();
+    return GetFeedbackSnapshot().ready;
 }
+
 const Daemon &Class_DMMotor::GetDaemon() const
 {
     return feedback_daemon;
@@ -301,14 +295,45 @@ uint32_t Class_DMMotor::ControlId() const
     }
 }
 
-bool Class_DMMotor::Enable()
+bool Class_DMMotor::RequestEnabled(bool enabled)
 {
-    return SendModeCommand(DM_CMD_ENABLE);
+    // 请求状态、非阻塞提交和待提交标志一起更新，与低频服务互斥。
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    if (!lifecycle_requested || requested_enabled != enabled)
+    {
+        // 首次 false 也建立失能请求；新请求替换旧请求尚未提交的内容。
+        requested_enabled = enabled;
+        lifecycle_requested = true;
+        safe_output_pending = false;
+        if (!enabled)
+        {
+            // 安全发布失败仍尝试 Disable；两项独立记录，成功项不重复补交。
+            safe_output_pending = !PublishSafeOutput();
+        }
+        lifecycle_command_pending = !SendModeCommand(enabled ? DM_CMD_ENABLE : DM_CMD_DISABLE);
+    }
+    // 相同请求不执行收发；失败结果保留到 ServiceAll 补交成功，不伪报成功。
+    const bool submitted = !safe_output_pending && !lifecycle_command_pending;
+    __DMB();
+    if (primask == 0U) { __enable_irq(); }
+    return submitted;
 }
 
-bool Class_DMMotor::Disable()
+bool Class_DMMotor::PublishSafeOutput()
 {
-    return SendModeCommand(DM_CMD_DISABLE);
+    switch (mode)
+    {
+    case Enum_DMMotor_Mode::MIT:
+        return SetMIT(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+    case Enum_DMMotor_Mode::SPEED:
+        return SetSpeed(0.0f);
+    case Enum_DMMotor_Mode::POSITION_SPEED:
+        return SetPositionSpeed(feedback.position, 0.0f);
+    case Enum_DMMotor_Mode::FORCE_POSITION:
+        return SetForcePosition(feedback.position, 0.0f, 0.0f);
+    }
+    return false;
 }
 
 bool Class_DMMotor::ClearError()
@@ -401,6 +426,10 @@ bool Class_DMMotor::SetMIT(float position_rad,
                            float kd,
                            float torque_nm)
 {
+    if (!GetFeedbackSnapshot().ready)
+    {
+        position_rad = velocity_rad_s = kp = kd = torque_nm = 0.0f;
+    }
     const float direction = reverse ? -1.0f : 1.0f;
     /** 位置量化为 16 位，速度、kp、kd、转矩各量化为 12 位，总计 64 位。 */
     const uint16_t position = (uint16_t)Basic_Math_Float_To_Int(
@@ -437,8 +466,13 @@ bool Class_DMMotor::SetMIT(float position_rad,
  * @brief 发布位置速度模式目标，前 4 字节为位置 rad，后 4 字节为速度 rad/s。
  * @note 两个 float 直接按 STM32 小端内存布局复制，不经过 MIT 整数量化；不自动切换模式。
  */
-void Class_DMMotor::SetPositionSpeed(float position_rad, float velocity_rad_s)
+bool Class_DMMotor::SetPositionSpeed(float position_rad, float velocity_rad_s)
 {
+    if (!GetFeedbackSnapshot().ready)
+    {
+        position_rad = feedback.position;
+        velocity_rad_s = 0.0f;
+    }
     const float direction = reverse ? -1.0f : 1.0f;
     position_rad *= direction;
     velocity_rad_s *= direction;
@@ -449,12 +483,16 @@ void Class_DMMotor::SetPositionSpeed(float position_rad, float velocity_rad_s)
     message.len = 8U;
     memcpy(&message.data[0], &position_rad, sizeof(position_rad));
     memcpy(&message.data[4], &velocity_rad_s, sizeof(velocity_rad_s));
-    Publish(message);
+    return Publish(message);
 }
 
 /** @brief 发布速度模式目标：4 字节小端 float，单位 rad/s；不自动切换模式。 */
-void Class_DMMotor::SetSpeed(float speed_rad_s)
+bool Class_DMMotor::SetSpeed(float speed_rad_s)
 {
+    if (!GetFeedbackSnapshot().ready)
+    {
+        speed_rad_s = 0.0f;
+    }
     if (reverse)
     {
         speed_rad_s = -speed_rad_s;
@@ -465,7 +503,7 @@ void Class_DMMotor::SetSpeed(float speed_rad_s)
     message.id = DM_SPEED_MODE_ID_OFFSET + can_id;
     message.len = sizeof(speed_rad_s);
     memcpy(message.data, &speed_rad_s, sizeof(speed_rad_s));
-    Publish(message);
+    return Publish(message);
 }
 
 /**
@@ -475,10 +513,15 @@ void Class_DMMotor::SetSpeed(float speed_rad_s)
  * @param current_limit_ratio 电流上限比例，限制在 0~1 后编码为 0~10000。
  * @note 两个上限为非负幅值，不随方向翻转；本函数不自动切换模式。
  */
-void Class_DMMotor::SetForcePosition(float position_rad,
+bool Class_DMMotor::SetForcePosition(float position_rad,
                                      float velocity_limit_rad_s,
                                      float current_limit_ratio)
 {
+    if (!GetFeedbackSnapshot().ready)
+    {
+        position_rad = feedback.position;
+        velocity_limit_rad_s = current_limit_ratio = 0.0f;
+    }
     const float direction = reverse ? -1.0f : 1.0f;
     position_rad *= direction;
     const uint16_t velocity_limit = (uint16_t)(
@@ -495,7 +538,7 @@ void Class_DMMotor::SetForcePosition(float position_rad,
     message.data[5] = (uint8_t)(velocity_limit >> 8);
     message.data[6] = (uint8_t)current_limit;
     message.data[7] = (uint8_t)(current_limit >> 8);
-    Publish(message);
+    return Publish(message);
 }
 
 /** @brief 复用 MIT 帧实现纯转矩目标：kp/kd 置零，仅保留转矩项，电机需处于 MIT 模式。 */

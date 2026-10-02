@@ -126,7 +126,7 @@ bool UpdateEnableState(bool enabled)
         else if ((HAL_GetTick() - pitch_enable_arm_tick) >= PITCH_ENABLE_DELAY_MS)
         {
             /* 插入队列可能暂满；只有使能帧成功入队后才允许开始 MIT 输出。 */
-            if (pitch_motor.Enable())
+            if (pitch_motor.RequestEnabled(true))
             {
                 pitch_enable_state = EnableState::ENABLED;
                 pitch_enable_retry_tick = HAL_GetTick();
@@ -138,7 +138,7 @@ bool UpdateEnableState(bool enabled)
     default:
         if (!enabled)
         {
-            pitch_motor.Disable();
+            pitch_motor.RequestEnabled(false);
             pitch_enable_state = EnableState::DISABLED;
         }
         else if ((HAL_GetTick() - pitch_enable_retry_tick) >=
@@ -147,7 +147,7 @@ bool UpdateEnableState(bool enabled)
             /* 反馈帧中的协议使能位为准；已使能时补发无副作用。 */
             if (!pitch_motor.IsEnabled())
             {
-                (void)pitch_motor.Enable();
+                (void)pitch_motor.RequestEnabled(true);
             }
             pitch_enable_retry_tick = HAL_GetTick();
         }
@@ -259,7 +259,7 @@ void Pitch_Update(float requested_target_rad, bool target_valid, bool enabled)
         /* 运行中姿态链路丢失时立即撤销使能，恢复后重新等待安全延时。 */
         if (pitch_enable_state == EnableState::ENABLED)
         {
-            pitch_motor.Disable();
+            pitch_motor.RequestEnabled(false);
         }
         pitch_enable_state = EnableState::DISABLED;
         pitch_remote_target_initialized = false;

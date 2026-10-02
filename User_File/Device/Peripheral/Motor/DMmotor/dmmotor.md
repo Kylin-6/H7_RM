@@ -14,7 +14,7 @@
 
 PMAX/VMAX/TMAX 是协议映射范围，不代表电机的额定或峰值能力；输出力矩、速度和控制增益应由应用层按电机和负载单独限制。所有模式的反馈解码均使用这些范围。
 
-三个映射范围参数必须是有限正数。`can_id` 使用 8 位值（`0x00~0xFF`），反馈首字节只以低四位核对节点号；`master_id` 是标准 CAN ID（`0x000~0x7FF`）。同一 CAN 总线上的各电机应使用不同的发送 ID 和反馈 ID，并检查 `Init()` 返回值。
+三个映射范围参数必须是有限正数。`can_id` 使用非零 8 位值（`0x01~0xFF`），反馈首字节只以低四位核对节点号；`master_id` 是标准 CAN ID（`0x000~0x7FF`）。`Init()` 拒绝非法模式、总线、ID 和映射范围。同一 CAN 总线上的各电机应使用不同的发送 ID 和反馈 ID，并检查返回值。
 
 ## 初始化和通用命令
 
@@ -25,13 +25,22 @@ motor.Init(&hfdcan1,
            0x01,
            0x00,
            Enum_DMMotor_Mode::SPEED); // FDCAN、CAN ID、Master ID、模式
-motor.Enable();
-motor.Disable();
+motor.RequestEnabled(true);
+motor.RequestEnabled(false);
 motor.ClearError();
 motor.SetZeroPosition();
 ```
 
-`Enable()`、`Disable()`、`ClearError()` 和 `SetZeroPosition()` 返回命令入队结果：`true` 表示已入队，`false` 表示提交失败，可由调用方重试。入队成功不代表电机已经执行。`SetZeroPosition()` 仅在入队成功后重置本地位置展开状态，失败时保持原状态。
+`RequestEnabled(bool)` 在首次请求时建立期望状态并启动协议维护，之后只处理状态变化；应用在电机 ready 后再写正常目标。
+
+- `false→true`：记录使能请求，立即尝试一次 Enable，不主动发布安全目标；返回命令入队结果。
+- `true→false`：记录失能请求，立即发布当前模式的安全目标，再尝试一次 Disable；两次提交都会执行，返回两者均成功的结果。
+- 首次 `false`：即使本地默认值已是 `false`，仍立即发布安全目标并尝试一次 Disable，避免遗漏启动时的失能要求。
+- 已建立请求后的 `true→true` 和 `false→false`：不提交离散命令、不刷新周期槽。有待提交项时返回 `false`，否则返回 `true`。
+
+安全目标发布和离散命令入队分别记录失败，成功项不会仅因另一项失败而重交。重复相同请求不重试、不掩盖未提交结果；后续由 100 Hz `ServiceAll()` 补交失败项。新的期望状态替换旧请求的待提交项；恢复 ready 后，不再补写未就绪期间失败的安全目标。返回成功不代表电机执行或确认。
+
+100 Hz StatusTask 调用 `ServiceAll()`：在线且无故障时，补交失败的当前 Enable/Disable 命令；即使反馈已符合期望，尚未成功入队的命令也会补交。没有待提交命令时，在线且请求使能、实际失能则再次尝试 Enable；在线且请求失能、实际使能则再次尝试 Disable。失能安全目标发布失败时，即使离线或故障也继续补交；成功后不再重复刷新。离线或故障期间不新增 Enable/Disable，也不会自动 ClearError。已进入 FDCAN 硬件 FIFO 的帧由硬件 Auto Retransmission 负责总线级重发；软件服务仍须依据新鲜反馈判断设备实际状态。`ClearError()` 和 `SetZeroPosition()` 返回命令入队结果；入队成功不代表电机已经执行。`SetZeroPosition()` 仅在入队成功后重置本地位置展开状态。
 
 后续可选参数依次为反转、PMAX、VMAX 和 TMAX：
 
@@ -154,17 +163,16 @@ motor.feedback.rotor_temperature;
 
 MIT 的 `kp`、`kd` 是发给电机内部控制器的控制参数，不属于反馈；当前驱动没有本地 PID 对象。
 直接读取公开 feedback 结构体不保证跨中断一致性；控制计算应使用
-`GetFeedbackSnapshot()` 一次获取运动反馈、online 和 enabled。该接口在短临界区内
-复制，online 按最近一次运动反馈的 100 ms 截止时间计算，不等待 StatusTask。
+`GetFeedbackSnapshot()`。其中 `requested_enabled` 为 Application 请求，`online` 为
+100 ms 内的新鲜合法运动反馈，`actual_enabled` 为反馈 `state == 1`，`fault` 为在线且状态既非失能也非使能，`ready` 为
+请求使能、在线、实际使能且无故障；协议状态仍保存在 `feedback.state` 供诊断。`IsHealthy()` 等价于
+`ready`。失能或反馈失效时，正常控制入口只发布安全目标；MIT 安全目标的
+P/V/Kp/Kd/Torque 全为零。
 
-`SetMIT()`、`SetTorque()` 返回软件周期槽更新结果，false 时由应用处理；不表示设备已执行。
-在线电机发生 Online→Offline 跃迁时，Daemon 回调尝试将一次 `Enable()` 放入该总线的
-离散命令 FIFO。首次入队成功后不继续软件重发；仅当入队失败时标记
-`recover_pending`，由 100 Hz `StatusTask` 在 `CheckAll()` 后调用 `ServiceAll()`，每个
-待恢复实例至少间隔 50 ms 非阻塞重试入队。入队成功、电机重新在线或关闭自动恢复后
-停止重试。这不是“电机一直离线就不断重发 Enable”，也不代表对端已执行使能。
-云台两轴调用 `SetAutoEnableOnOffline(false)`，由 Gimbal 自己的
-`DISABLED/ENABLING/READY/FAULT/CONFIG_ERROR` 状态机负责恢复，不同时运行两套策略。
+所有 `SetXXX()` 控制入口都返回软件周期槽更新结果，不表示设备已执行。
+`RequestEnabled(false)` 在首次请求或 `true→false` 边沿立即尝试覆盖旧周期目标；失败时由 `ServiceAll()` 补交。`ServiceAll()` 在未就绪且请求使能时也覆盖旧周期目标，并根据在线反馈维护设备协议期望状态，
+不会自行决定 Gimbal 的 READY/FAULT。Daemon 只判断反馈活性，不再通过离线回调自动使能。
+清错由上层在合适时机显式请求，驱动不把 fault 自动解释为整车恢复许可。
 
 ## 接入示例
 
@@ -187,7 +195,7 @@ bool motor_ready = dm_motor.Init(
 if (motor_ready)
 {
     osDelay(2000);
-    dm_motor.Enable();
+    dm_motor.RequestEnabled(true);
     dm_motor.SetSpeed(1.0f);
 }
 
@@ -201,11 +209,10 @@ for (;;)
 }
 ```
 
-应用请求停止时，应先停止正常目标更新，再将当前模式的目标输出置零并发送失能命令。例如速度模式：
+应用请求停止时调用电机的失能请求；电机在首次请求或 `true→false` 边沿立即尝试发布安全周期目标并提交一次 Disable，之后低频服务补交失败项，并根据在线反馈纠正失能状态：
 
 ```c
-motor.SetSpeed(0.0f);
-motor.Disable();
+motor.RequestEnabled(false);
 ```
 
 以上调用通过 CAN 发送，不构成独立的硬件急停机制。

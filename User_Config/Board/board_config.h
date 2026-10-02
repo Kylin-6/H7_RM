@@ -15,9 +15,6 @@ struct BoardHardware
     bool flash;
     bool adc;
     bool power;
-    /** BSP_Power 的两路 24V 输出轨；`power` 为 false 时忽略。 */
-    bool power_24v_1;
-    bool power_24v_2;
     bool indicators;
     bool usb_debug;
 };
