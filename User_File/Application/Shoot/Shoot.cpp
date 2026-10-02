@@ -566,6 +566,23 @@ void Shoot_UpdateFeedback(void)
 }
 } // namespace
 
+Struct_Shoot_Diagnostic Shoot_GetDiagnostic()
+{
+    Struct_Shoot_Diagnostic d{};
+    d.initialized = infantry.Shoot_Initialized;
+    d.permitted = app.command.shoot_mode == ShootMode::ON;
+    const auto left = infantry.Friction_Left.GetFeedbackSnapshot();
+    const auto right = infantry.Friction_Right.GetFeedbackSnapshot();
+    const auto loader = infantry.Loader.GetMotionSnapshot();
+    d.left = {d.permitted, left.online, left.feedback.state > 1U,
+              left.requested_enabled, left.ready};
+    d.right = {d.permitted, right.online, right.feedback.state > 1U,
+               right.requested_enabled, right.ready};
+    d.loader = {d.permitted, loader.online, false, loader.requested_enabled, loader.ready};
+    d.jam_failed = infantry.Jam_FSM.Get_Now_Status_Serial() == JAM_FAILED;
+    return d;
+}
+
 extern "C" void Shoot_GetDebug(float *initialized,
                                float *left_feedback,
                                float *right_feedback,

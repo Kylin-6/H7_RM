@@ -55,6 +55,11 @@ Pitch 电机和外环状态，不向外暴露电机指针。独立 `Application/
 `Gimbal_GetStatus()` 用于观察 CONFIG_ERROR / DISABLE / FAULT / ENABLING / READY。
 `GimbalFeedback.enabled` 表示当前控制许可有效且本板唯一 Pitch 电机 ready。
 
+## 故障指示灯
+
+本板 WS2812 的颜色、闪烁次数、故障优先级和排查步骤见
+[WS2812 debug 指南](../../../docs/debug_ws2812.md)。灯效只观察，不修改控制许可。
+
 ## 验证边界
 
 主机回归位于独立测试工作区的 `Tests/InfantryMigration`，编译迁移后的实际应用、DM/DJI

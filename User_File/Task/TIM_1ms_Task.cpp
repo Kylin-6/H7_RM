@@ -16,6 +16,9 @@
  */
 
 #include "user_task.h"
+#if LEGACY_INFANTRY_GIMBAL
+#include "Diagnostics.h"
+#endif
 #include "bsp_key.h"
 #include "bsp_uart.h"
 #include "bsp_w25q64jv.h"
@@ -42,7 +45,11 @@ static const PulseEntry_t TIM_1ms_Callback_Table[] = {
     {1U, BMI088_TIM_1ms_Service_PeriodElapsedCallback},
 #endif
     {1U, UART_TIM_1ms_Recover_PeriodElapsedCallback},
+#if LEGACY_INFANTRY_GIMBAL
+    {10U, Diagnostics_LED_Update},
+#else
     {10U, BSP_WS2812_TIM_10ms_Write_PeriodElapsedCallback},
+#endif
     {50U, BSP_Key_TIM_50ms_Process_PeriodElapsedCallback},
 #if !LEGACY_INFANTRY_GIMBAL || LEGACY_INFANTRY_GIMBAL_YAW
     {128U, BMI088_TIM_128ms_Calculate_PeriodElapsedCallback},

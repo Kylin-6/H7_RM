@@ -205,6 +205,8 @@ elseif(H7_BOARD STREQUAL "GimbalBoard")
         User_Config/Board/board_tasks_gimbal.c
         ${H7_GIMBAL_TASK_DEVICE_SOURCES}
         User_File/Task/Control_Task_Gimbal.cpp
+        User_File/Application/Diagnostics/Diagnostics.cpp
+        User_File/Application/Diagnostics/Diagnostics_Runtime.cpp
         User_File/Application/RobotCmd/RobotCmd.cpp
         User_File/Application/Input/remote_input.cpp
         User_File/Application/Input/input_state.cpp
@@ -288,6 +290,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Application/Gimbal/
         User_File/Application/Chassis/
         User_File/Application/Shoot/
+        User_File/Application/Diagnostics/
         User_File/Application/Input/
         User_File/Application/Balance/
 )

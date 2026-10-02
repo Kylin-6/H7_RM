@@ -7,6 +7,9 @@
 
 namespace MessageCenter
 {
+#if LEGACY_INFANTRY_GIMBAL
+extern Topic<Struct_Robot_Diagnostic> Robot_Diagnostic_Topic;
+#endif
 extern Topic<INS_State> INS_State_Topic;
 extern Topic<GimbalCmd> Gimbal_Command_Topic;
 extern Topic<ChassisCmd> Chassis_Command_Topic;

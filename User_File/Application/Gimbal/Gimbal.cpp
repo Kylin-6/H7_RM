@@ -217,6 +217,23 @@ bool Gimbal_Init(const Struct_Gimbal_Config& config)
     return ctx.initialized;
 }
 
+#if LEGACY_INFANTRY_GIMBAL
+Struct_Gimbal_Diagnostic Gimbal_GetDiagnostic()
+{
+    Struct_Gimbal_Diagnostic d{};
+    const auto m = ctx.pitch_motor.GetFeedbackSnapshot();
+    d.initialized = ctx.initialized;
+    d.ins_valid = ctx.ins_valid && std::isfinite(ctx.ins.pitch_rad) &&
+                  std::isfinite(ctx.ins.gyro_y_rad_s);
+    d.permitted = ctx.command.mode == GimbalMode::IMU;
+    d.waiting = d.permitted && !m.ready;
+    d.pitch = {ctx.arming && HAL_GetTick() - ctx.arming_start_ms >=
+                   ctx.config.pitch_torque.enable_delay_ms,
+               m.online, m.feedback.state > 1U, m.requested_enabled, m.ready};
+    return d;
+}
+#endif
+
 Enum_Gimbal_Status Gimbal_GetStatus(void)
 {
     if (!ctx.initialized) { return Gimbal_Status_CONFIG_ERROR; }

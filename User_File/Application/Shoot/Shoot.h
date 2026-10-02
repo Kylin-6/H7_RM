@@ -7,6 +7,9 @@ bool Shoot_Init(void);
 void Shoot_Update(void);
 
 #if SHOOT && LEGACY_INFANTRY_GIMBAL
+#include "message_types.h"
+/** 仅供 ControlTask 采集。 */
+Struct_Shoot_Diagnostic Shoot_GetDiagnostic();
 struct Struct_Legacy_Loader_Debug
 {
     float encoder;

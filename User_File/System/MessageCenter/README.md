@@ -320,3 +320,7 @@ DM-IMU 桥仅在新欧拉角帧到达时发布 INS；Pitch 差分速度放 `gyro
 输入事件随来源仲裁传递序号，由 RobotCmd 去重并推入唯一 Shoot_Event_Queue。
 健康输入 ON 表示许可；短按释放仍为 ON + STOP + ShootOnce，失联才 OFF 并清队列。
 机构消费与恢复规则见 [老步兵发射](../../Application/Shoot/README.md)。
+
+老步兵 GimbalBoard 的 `Robot_Diagnostic_Topic` 由 ControlTask 每 10 ms 发布，
+TIM_1ms_Task 读取以驱动 WS2812；它只传递诊断快照，不参与安全控制。
+颜色与位图契约见 [debug 指南](../../../docs/debug_ws2812.md)。

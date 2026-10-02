@@ -123,4 +123,35 @@ struct ShootFeedback
     bool online = false;
 };
 
+/** 老步兵诊断快照：仅观察，不赋予设备控制权限。 */
+struct Struct_Motor_Diagnostic
+{
+    bool required = false;
+    bool online = false;
+    bool fault = false;
+    bool requested_enabled = false;
+    bool ready = false;
+};
+struct Struct_Gimbal_Diagnostic
+{
+    Struct_Motor_Diagnostic pitch{};
+    bool initialized = false;
+    bool ins_valid = false;
+    bool permitted = false;
+    bool waiting = false;
+};
+struct Struct_Shoot_Diagnostic
+{
+    Struct_Motor_Diagnostic left{}, right{}, loader{};
+    bool initialized = false;
+    bool permitted = false;
+    bool jam_failed = false;
+};
+struct Struct_Robot_Diagnostic
+{
+    uint32_t fault_mask = 0U;
+    bool permitted = false;
+    bool waiting = false;
+};
+
 #endif

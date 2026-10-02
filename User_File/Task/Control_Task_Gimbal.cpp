@@ -18,6 +18,8 @@
 #include "cmsis_os2.h"
 #if LEGACY_INFANTRY_GIMBAL
 #include "dm_imu_ins.h"
+#include "Diagnostics.h"
+#include "stm32h7xx_hal.h"
 #else
 #include "board_transport.h"
 #include "remote_publisher.h"
@@ -47,6 +49,9 @@ extern "C" void Control_Task(void *)
 #endif
     if (!RobotCmd_Init(gimbal_output.Bind(), chassis_output.Bind(), shoot_output.Bind()))
     {
+#if LEGACY_INFANTRY_GIMBAL
+        Diagnostics_PublishInitFailure();
+#endif
         for (;;) osDelay(1000U);
     }
     (void)RemoteInput_Init();
@@ -71,5 +76,14 @@ extern "C" void Control_Task(void *)
         RobotCmd_Update();
         Gimbal_Update();
         Shoot_Update();
+#if LEGACY_INFANTRY_GIMBAL
+        static uint32_t last_diagnostic_ms = 0U;
+        const uint32_t now_ms = HAL_GetTick();
+        if (now_ms - last_diagnostic_ms >= 10U)
+        {
+            last_diagnostic_ms = now_ms;
+            Diagnostics_Publish();
+        }
+#endif
     }
 }
