@@ -75,12 +75,17 @@ constexpr float SINGLE_DONE_ANGLE_RAD = 2.0f * SHOOT_PI / 180.0f;
 constexpr uint32_t SINGLE_TIMEOUT_MS = 1000U;
 constexpr uint32_t SINGLE_HOLD_MS = 100U;
 constexpr uint32_t POST_SHOT_FRICTION_MS = 300U;
+// 连发退出后停稳再接收单发，按输出轴编码器速度判断（rad/s）。
+constexpr float LOADER_STOP_SPEED_RAD_S = 0.2f;
 
 /* 安全参数，集中在一起便于按实车标定。 */
 constexpr int16_t JAM_CURRENT_THRESHOLD = 3800;
 constexpr uint32_t JAM_CONFIRM_MS = 300U;
+// 回退未到位的超时上限，不作为固定回退时长。
 constexpr uint32_t JAM_HANDLE_MS = 200U;
-constexpr float JAM_BACKOFF_RAD = 15.0f * SHOOT_PI / 180.0f;
+constexpr float JAM_DONE_ANGLE_RAD = 2.0f * SHOOT_PI / 180.0f;
+// 卡弹时从当前位置反向回退半个弹位，输出轴角度 rad。
+constexpr float JAM_BACKOFF_RAD = 0.5f * ONE_BULLET_MOTOR_OUTPUT_RAD;
 constexpr float HEAT_LEFT_TORQUE_THRESHOLD_NM = -0.6f;
 constexpr float HEAT_RIGHT_TORQUE_THRESHOLD_NM = 0.5f;
 constexpr uint32_t HEAT_CONFIRM_MS = 20U;

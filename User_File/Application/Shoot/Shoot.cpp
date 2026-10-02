@@ -49,7 +49,7 @@ void DiscardEvents()
  * - 摩擦轮是速度模式 DM 电机，输入许可下按摩擦轮命令正反转恒速，松扳机后仍延时 300 ms 继续转；
  * - 拨弹盘由「事件单发 / 连续模式」状态机驱动，连发速度来自波轮档位；
  * - 单发用角度环推一颗弹的距离，到位后锁住实际角度抑制回弹；
- * - 堵转按相电流阈值确认 300 ms 后回退 15 度；
+ * - 堵转按相电流阈值确认 300 ms 后回退半个弹位；
  * - 热量按摩擦轮力矩突变点估计单发累积，超过上限后停止拨弹。
  * ========================================================================== */
 
@@ -73,21 +73,22 @@ enum class FireState : uint8_t
     SINGLE,
     BURST,
     POST_SHOT,
+    BRAKING,
 };
 
-/* 卡弹状态序号：作 Class_FSM 的状态编号使用，超时判定用框架的
- * Count_Time 周期计数（1 kHz 调用时单位即 ms），替代手写 tick 差值。 */
+/* 卡弹状态序号；Count_Time 按 HAL tick 差维护，单位 ms。 */
 enum JamState : uint8_t
 {
     JAM_NORMAL = 0,
     JAM_SUSPECT,
     JAM_HANDLING,
+    JAM_FAILED,
 };
 
 // 本板的唯一设备所有者；Task/Input/遥测不能拿到电机指针。
 struct InfantryShootContext
 {
-    Class_FSM<3> Jam_FSM;
+    Class_FSM<4> Jam_FSM;
     Class_DMMotor Friction_Left;
     Class_DMMotor Friction_Right;
     Class_DJIMotor Loader;
@@ -207,7 +208,8 @@ void UpdateHeat(uint32_t now, bool loader_active)
 /**
  * @brief 卡弹状态机（框架 Class_FSM 驱动）。
  *
- * NORMAL --(电流超阈值)--> SUSPECT --(持续 300 ms)--> HANDLING --(回退 200 ms)--> NORMAL；
+ * NORMAL --(电流超阈值)--> SUSPECT --(持续 300 ms)--> HANDLING；
+ * HANDLING 编码器到位后回 NORMAL，200 ms 未到位则进入 FAILED，撤销许可后复位。
  * SUSPECT 期间条件消失直接回 NORMAL。状态驻留时间用 HAL tick 差写入 Count_Time，
  * 由框架 FSM 管理状态切换；真实时间判定与老工程一致，漏拍不会延后保护。
  *
@@ -218,11 +220,40 @@ bool UpdateJam(uint32_t now, bool loader_active)
 {
     switch (infantry.Jam_FSM.Get_Now_Status_Serial())
     {
+    case JAM_FAILED:
+        // 超时故障锁存：持续扳机和队列事件都不能重新往前顶，OFF 才复位。
+        DiscardEvents();
+        infantry.Fire_State = FireState::IDLE;
+        infantry.Single_Control_Started = false;
+        infantry.Single_Holding = false;
+        SetLoaderStopped();
+        return true;
+
     case JAM_HANDLING:
+        // 回退优先于单发控制；暂停其超时，保留原单发目标与到位保持状态。
+        if (infantry.Single_Control_Started && infantry.Fire_State == FireState::SINGLE)
+        {
+            infantry.Single_Start_Tick += now - infantry.Last_Loop_Tick;
+            if (infantry.Single_Holding)
+                infantry.Single_Hold_Start_Tick += now - infantry.Last_Loop_Tick;
+        }
+        if (std::fabs(infantry.Jam_Target_Angle - infantry.loader_feedback.output_total_angle) <=
+            JAM_DONE_ANGLE_RAD)
+        {
+            SetJamState(JAM_NORMAL, now);
+        }
+        else if (infantry.Jam_FSM.Status[JAM_HANDLING].Count_Time >= JAM_HANDLE_MS)
+        {
+            SetJamState(JAM_FAILED, now);
+            DiscardEvents();
+            infantry.Fire_State = FireState::IDLE;
+            infantry.Single_Control_Started = false;
+            infantry.Single_Holding = false;
+            SetLoaderStopped();
+            return true;
+        }
         infantry.Loader.Set_Outer_Loop(DJI_MOTOR_ANGLE_LOOP);
         infantry.Loader_Group.Control(infantry.Jam_Target_Angle);
-        if (infantry.Jam_FSM.Status[JAM_HANDLING].Count_Time >= JAM_HANDLE_MS)
-            SetJamState(JAM_NORMAL, now);
         return true;
 
     case JAM_SUSPECT:
@@ -365,11 +396,23 @@ void Shoot_ApplyCommand(void)
     {
         if (infantry.Fire_State == FireState::BURST)
         {
+            // 连发退出后先用零速度闭环制动，避免惯性转动叠加到下一次单发。
+            infantry.Fire_State = FireState::BRAKING;
+            infantry.Single_Control_Started = false;
+            infantry.Single_Holding = false;
+            infantry.Loader.speed_pid.Set_Integral_Error(0.0f);
+            infantry.Loader.angle_pid.Set_Integral_Error(0.0f);
+        }
+        if (infantry.Fire_State == FireState::BRAKING && LoaderFeedbackFresh() &&
+            std::fabs(infantry.loader_feedback.output_speed) <= LOADER_STOP_SPEED_RAD_S)
+        {
             infantry.Fire_State = FireState::POST_SHOT;
             infantry.Post_Shot_Start_Tick = now;
         }
         ShootEvent event{};
-        if (MessageCenter::Shoot_Event_Queue.Pop(event))
+        if (infantry.Fire_State != FireState::BRAKING &&
+            jam_state != JAM_HANDLING && jam_state != JAM_FAILED &&
+            MessageCenter::Shoot_Event_Queue.Pop(event))
         {
             // 事件仅在电机反馈新鲜时起步；故障期间清除，不恢复后补射。
             if (LoaderFeedbackFresh())
@@ -377,6 +420,9 @@ void Shoot_ApplyCommand(void)
                 if (infantry.Fire_State != FireState::SINGLE)
                 {
                     infantry.Single_Target_Angle = infantry.loader_feedback.output_total_angle;
+                    // 速度环/角度环切换不继承连发积分，首发只追加新的弹位。
+                    infantry.Loader.speed_pid.Set_Integral_Error(0.0f);
+                    infantry.Loader.angle_pid.Set_Integral_Error(0.0f);
                 }
                 const float bullets = event.type == ShootEventType::ShootTriple ? 3.0f : 1.0f;
                 infantry.Single_Target_Angle += bullets * ONE_BULLET_MOTOR_OUTPUT_RAD;
@@ -410,6 +456,9 @@ void Shoot_ApplyCommand(void)
         (void) infantry.Loader_Group.RequestEnabled(false);
         DiscardEvents();
         StopAll();
+        // 设备暂时掉线不能解除已经锁存的回退超时，仍需撤销发射许可。
+        if (jam_state == JAM_FAILED)
+            SetJamState(JAM_FAILED, now);
         UpdateHeat(now, false);
         infantry.Last_Loop_Tick = now;
         return;
@@ -419,6 +468,27 @@ void Shoot_ApplyCommand(void)
                                   infantry.Fire_State != FireState::IDLE;
     infantry.Friction_Left.SetSpeed(firing_requested ? -FRICTION_SPEED_RAD_S : 0.0f);
     infantry.Friction_Right.SetSpeed(firing_requested ? FRICTION_SPEED_RAD_S : 0.0f);
+
+    // 回退期间不先执行原单发/连发控制，否则会改写目标或触发单发超时。
+    if (jam_state == JAM_HANDLING || jam_state == JAM_FAILED)
+    {
+        (void) UpdateJam(now, false);
+        UpdateHeat(now, infantry.Jam_FSM.Get_Now_Status_Serial() != JAM_FAILED);
+        infantry.Last_Loop_Tick = now;
+        return;
+    }
+
+    if (infantry.Fire_State == FireState::BRAKING)
+    {
+        // 制动不依赖摩擦轮转速或热量许可；设备在线门控已经在上方检查。
+        infantry.Loader.speed_pid.Set_K_P(LOADER_SPEED_KP);
+        infantry.Loader.speed_pid.Set_K_I(LOADER_SPEED_KI);
+        infantry.Loader.Set_Outer_Loop(DJI_MOTOR_SPEED_LOOP);
+        infantry.Loader_Group.Control(0.0f);
+        UpdateHeat(now, false);
+        infantry.Last_Loop_Tick = now;
+        return;
+    }
 
     bool loader_active = false;
     if (LoaderFeedbackFresh() && FrictionReady() && infantry.Estimated_Heat < HEAT_LIMIT)
