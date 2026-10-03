@@ -1,5 +1,6 @@
 #include "daemon.h"
 #include "dji_motor.h"
+#include "dmmotor.h"
 #include "sys_imu.h"
 #include "bsp_bmi088.h"
 #include "bsp_uart.h"
@@ -9,6 +10,7 @@
 #include "message_center.h"
 #include "sys_timestamp.h"
 extern "C" {
+#include "dvc_dm_imu.h"
 #include "referee_26.h"
 #include "vtm_26.h"
 #include "crc_ref.h"
@@ -116,6 +118,66 @@ static void DJI(bool registration_failure)
     bytes[0] = 0; rx.cb(rx.bus, rx.id, bytes, 8, rx.ctx);
     CHECK(group.Control(123) && motor.IsHealthy());
 }
+static void DM()
+{
+    static Class_DMMotor motor;
+    CHECK(motor.Init(&hfdcan1, 0x09, 0x19, Enum_DMMotor_Mode::MIT));
+    auto rx = receivers.back();
+    Time(0);
+    CHECK(!motor.IsOnline() && !motor.GetFeedbackSnapshot().online);
+    // 合法反馈：state=1（已使能），节点低 4 位 = 0x09。
+    uint8_t valid[8] = {0x19, 0, 0, 0x80, 0, 0, 30, 0};
+    rx.cb(&hfdcan2, rx.id, valid, 8, rx.ctx);      // 错误总线不 Feed。
+    rx.cb(rx.bus, rx.id + 1, valid, 8, rx.ctx);    // 错误 master_id 不 Feed。
+    rx.cb(rx.bus, rx.id, valid, 7, rx.ctx);        // 错误长度不 Feed。
+    uint8_t wrong_node[8] = {0x11, 0, 0, 0x80, 0, 0, 30, 0};
+    rx.cb(rx.bus, rx.id, wrong_node, 8, rx.ctx);   // 节点不匹配不 Feed。
+    CHECK(!motor.IsOnline() && !motor.GetDaemon().IsOnline());
+    rx.cb(rx.bus, rx.id, valid, 8, rx.ctx);
+    CHECK(motor.IsOnline() && motor.GetDaemon().IsOnline());
+    const auto snap = motor.GetFeedbackSnapshot();
+    // snapshot.online 与 Daemon 是同一权威结果，不再有独立超时计算。
+    CHECK(snap.online && snap.online == motor.GetDaemon().IsOnline());
+    CHECK(snap.actual_enabled && !snap.fault);
+    CHECK(!snap.ready && !snap.requested_enabled); // 尚未请求使能，ready 不成立。
+    Time(99); CHECK(motor.IsOnline() && motor.GetFeedbackSnapshot().online);
+    Time(100); // 100 ms 门限超时，StatusTask 未运行也立即离线。
+    CHECK(!motor.IsOnline() && !motor.GetDaemon().IsOnline());
+    CHECK(!motor.GetFeedbackSnapshot().online && !motor.GetFeedbackSnapshot().ready);
+    rx.cb(rx.bus, rx.id, valid, 8, rx.ctx);
+    CHECK(motor.IsOnline() && motor.GetFeedbackSnapshot().online);
+}
+static void DmImu()
+{
+    CHECK(DM_IMU_Init(&hfdcan3, 0x66, 0x33));
+    CHECK(!DM_IMU_IsOnline());
+    auto rx = receivers.back();
+    Time(0);
+    uint8_t euler[8] = {0x03, 0, 0, 0, 0, 0, 0, 0};
+    uint8_t gyro[8] = {0x02, 0, 0, 0, 0, 0, 0, 0};
+    rx.cb(rx.bus, rx.id, euler, 7, rx.ctx);  // 错误长度不 Feed。
+    rx.cb(rx.bus, rx.id, gyro, 8, rx.ctx);   // 角速度帧不是链路活性来源。
+    CHECK(!DM_IMU_IsOnline());
+    rx.cb(rx.bus, rx.id, euler, 8, rx.ctx);  // 合法欧拉角帧 Feed。
+    CHECK(DM_IMU_IsOnline());
+    const auto snap = DM_IMU_GetEulerSnapshot();
+    CHECK(snap.valid && snap.sequence == 1 && snap.timestamp_ms == 0);
+    float p = 99.0f, y = 99.0f, r = 99.0f;
+    CHECK(DM_IMU_GetEuler(&p, &y, &r));      // 数据 freshness 有效。
+    Time(99); CHECK(DM_IMU_IsOnline() && DM_IMU_GetPitch(&p));
+    Time(100); // 100 ms 超时：Daemon 离线。
+    CHECK(!DM_IMU_IsOnline());
+    // freshness 门限（<=100 ms）与 Daemon 门限（>=100 ms）边界独立：
+    // 旧数据此刻仍标记可用，但下一毫秒即失效。
+    CHECK(DM_IMU_GetEuler(&p, &y, &r));
+    Time(101);
+    CHECK(!DM_IMU_GetEuler(&p, &y, &r));     // 数据 freshness 失效。
+    rx.cb(rx.bus, rx.id, euler, 7, rx.ctx);  // 非法帧不能续期。
+    rx.cb(rx.bus, rx.id, gyro, 8, rx.ctx);
+    CHECK(!DM_IMU_IsOnline());
+    rx.cb(rx.bus, rx.id, euler, 8, rx.ctx);
+    CHECK(DM_IMU_IsOnline());
+}
 static std::array<uint8_t,25> SbusFrame(uint8_t flags = 0)
 {
     std::array<uint8_t,25> f{}; f[0]=0x0f; f[23]=flags;
@@ -215,6 +277,8 @@ int main(int argc,char **argv)
     else if (!std::strcmp(argv[1],"capacity")) FillRegistry();
     else if (!std::strcmp(argv[1],"dji")) DJI(false);
     else if (!std::strcmp(argv[1],"dji_registration")) DJI(true);
+    else if (!std::strcmp(argv[1],"dm")) DM();
+    else if (!std::strcmp(argv[1],"dm_imu")) DmImu();
     else if (!std::strcmp(argv[1],"sbus_input")) SbusInput();
     else if (!std::strcmp(argv[1],"ins")) INS();
     else if (!std::strcmp(argv[1],"referee")) Referee();
