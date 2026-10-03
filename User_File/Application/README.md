@@ -38,7 +38,7 @@ Application 不应：
 | --- | --- | --- |
 | `RobotCmd` | 命令唯一所有者和发布者；输入互锁失效时立即发布安全目标 | Output、ShootEvent FIFO、反馈 Topic getter |
 | `Gimbal` | 云台模式、目标角/速度、达妙控制和反馈 | 两轴 Class_DMMotor、Yaw PID、INS Topic |
-| `Chassis` | 四舵轮运动学、最短转向和电机目标 | 8 个 DJI 电机及电机组 |
+| `Chassis` | 四舵轮运动学（框架 AGV）或老步兵麦轮运动学 + Yaw 轴 MIT 速度环 | 8 个 DJI 电机及电机组 / 4 路底盘 DM 电机 + 1 路 Yaw DM 电机 |
 | `Shoot` | 摩擦轮、拨弹连续模式和离散射击动作 | 3 个 DJI 电机、ShootEvent FIFO |
 | `Input` | UART5 S.BUS 适配、固定来源输入状态与仲裁 | RemoteInput、InputState |
 
@@ -50,6 +50,9 @@ Chassis 与 Shoot 的机械参数和 PID 初值分别放在 `Chassis_Config.h`�
 单板固件的硬件路径由 `H7_APP_GIMBAL`、`H7_APP_CHASSIS`、`H7_APP_SHOOT` 控制，默认均关闭；
 双板固件由 CMake 在构建期分别选择应用和任务源码。板内命令通过 `LocalPublisher` 进入
 Message Center，云台板的底盘命令通过 `RemotePublisher` 进入固定 CAN Transport。
+老步兵底盘板（`LEGACY_INFANTRY_CHASSIS`，即 ChassisBoard 角色）不使用框架板间
+Transport：三个命令输出都是本地发布，其中 Yaw 速度目标由本板 Chassis 消费，
+Shoot 命令只存在于消息端点（发射通道经 0x065 原始通道转发给云台板）。
 
 ## 3. Control_Task 生命周期
 
@@ -60,20 +63,25 @@ SingleBoard: RobotCmd_Init → RemoteInput_Init → Gimbal_Init(启用时) → C
              RemoteInput_Update → RobotCmd_Update → Gimbal_Update → Chassis_Update → Shoot_Update
 GimbalBoard: BoardTransport_Init → RobotCmd_Init → RemoteInput_Init → Gimbal_Init → Shoot_Init
              BoardTransport_Poll → RemoteInput_Update → RobotCmd_Update → Gimbal_Update → Shoot_Update
-ChassisBoard: BoardTransport_Init → Chassis_Init
-              BoardTransport_Poll → Chassis_Update
+ChassisBoard（老步兵底盘板）: RobotCmd_Init（三个本地输出）→ Chassis_Init → RemoteInput_Init
+                            RemoteInput_Update → RobotCmd_Update → Chassis_Update
 ```
 
 RobotCmd 初始化失败时控制任务停在延时循环；不会继续初始化电机应用。RobotCmd 在
 消费者之前发布命令；反馈 getter 在调用时直接读取各 Application 的 Topic。
 Gimbal/Chassis 板间轮询复用该任务，不创建额外控制任务。
 
+框架舵轮底盘的板装配（`BoardTransport_Init → Chassis_Init`、
+`BoardTransport_Poll → Chassis_Update`）保留在 `Control_Task_Chassis.cpp` 的
+`#else` 段，但当前 ChassisBoard 角色固定为老步兵底盘板，默认预设不再编译该路径。
+
 ## 4. RobotCmd：命令唯一入口
 
 RobotCmd 不直接访问电机、CAN 或 IMU。输入链现在是：
 
 ```text
-UART5 S.BUS → RemoteInput_Update → InputState(Remote)
+UART5 S.BUS → RemoteInput_Update → InputState(Remote)（底盘板 / 单板）
+底盘板 0x065 转发 → RemoteInput_Update（云台板）→ InputState(Remote)
 VTM / Keyboard / Vision → InputState_Submit*（接入接口，当前未绑定设备）
 InputState → SourceArbitration_Resolve → RobotCmd_Update → Output
 ```
@@ -106,6 +114,14 @@ CH1–CH4 回中后解锁。CH2/CH1 映射底盘前后/左右，CH7 为速度档
 CH5 跟随、CH3/CH4 云台与 CH6 发射暂未接入。旧步兵的 30/50 非 SI 参数不移植，
 目前调试上限为 0.5 m/s 和 1 rad/s，实车使用前须确认方向、机械零位与限幅。
 失联时清除未执行的发射事件，并立即发布 Gimbal `DISABLED`、Chassis `ZERO_FORCE`、Shoot `OFF`。
+
+老步兵底盘板（`LEGACY_INFANTRY_CHASSIS`）走老工程通道约定，不套用上面的单板模板：
+CH5 跟随开关、CH2/CH1 平移、CH10 旋转、CH7 速度档、CH4 Yaw 摇杆；三轴抽象速度按
+`Chassis_Config.h` 的边界比例归一化到 `INPUT_MAX_*` 后再提交，由 Chassis 侧还原。
+平移方向用 Yaw 轴反馈旋转到操作者坐标系，跟随开关抬起时角速度由 Yaw 偏差生成；
+Yaw 反馈不可用时不做旋转也不跟随，避免老工程修过的方向翻转故障。同时把
+CH6/CH9/CH3（火控开关 / 发射速度 / Pitch）经 FDCAN2 的 0x065 转发给云台板，
+0x070/0x075 一并按 2 ms 刷新，详见 [底盘应用说明](Chassis/README.md)。
 
 RobotCmd 独立初始化时的默认值如下；ControlTask 随后初始化 UART5 输入互锁，
 在 S.BUS 解锁前把云台覆盖为 `DISABLED`：
@@ -151,7 +167,33 @@ Yaw 使用 INS 角度/速度串级闭环，通过达妙 MIT 纯转矩指令输�
 
 ## 6. Chassis
 
-当前底盘模型为四舵轮 AGV：
+同一份 `Chassis.cpp` 用互斥的编译开关承载两套底盘实现：老步兵底盘板
+（`LEGACY_INFANTRY_CHASSIS`）与框架四舵轮 AGV（`CHASSIS`）；两者都不启用时只保留
+消息端点。老步兵底盘板的机构参数、控制律与验证状态见
+[底盘应用说明](Chassis/README.md)。
+
+### 6.1 老步兵底盘板：四路 DM 麦轮 + Yaw 轴
+
+1. 输入层给出底盘三轴速度与 Yaw 速度目标（抽象速度量纲，见下）。
+2. Chassis 按 2 ms 分频还原量纲，并用非对称速率规划平滑三轴目标。
+3. 三轴速度按麦轮组合式分解为四轮目标，整轮限幅后以速度模式下发 DM 电机。
+4. Yaw 轴按摇杆速度减去底盘自转角速度前馈，经速率规划后以 MIT 模式下发
+   （位置增益 0，阻尼随摇杆推进变化，力矩前馈由规划加速度换算）。
+
+`ZERO_FORCE`、底盘命令 Topic 过期（100 ms）或遥控失联时四轮与 Yaw 全部请求失能；
+`GimbalCmd.mode` 为 `IMU` 才允许 Yaw 输出，`LOCK`/`DISABLED` 与安全撤销一样保持失能。
+Yaw 命令按框架云台命令语义只判最新值、不判时效（摇杆保持不动时 RobotCmd 不重复发布），
+安全撤销由 RobotCmd 在失联时发布 `DISABLED` 完成。使能请求是边沿语义，掉线补发由框架
+`Class_DMMotor` 与 StatusTask 负责，应用不手写重发。
+
+老步兵的底盘三轴速度仍是实车验证过的抽象量纲（与麦轮预混后的 DM 轮速同量纲），没有
+可信的 m/s 标定，因此不伪造 SI 换算：`Chassis_Config.h` 给出抽象上限与
+`*_ToSi`/`*_FromSi` 成对比例，Input 侧归一化、Chassis 侧还原，是明确的边界约定。
+反馈字段按同一约定回写规划值（本板不测量真实车体速度），`online` 为四轮在线，
+`enabled` 为四轮 ready 且当前不是 `ZERO_FORCE`。Yaw 轴状态按 `GimbalFeedback`
+发布，供 Input 做坐标旋转与跟随判断。
+
+### 6.2 框架底盘：四舵轮 AGV
 
 1. 将底盘 `vx/vy/wz` 分解为四个轮模块的平移速度向量。
 2. 由 `atan2` 得到目标舵向。
@@ -169,6 +211,7 @@ Yaw 使用 INS 角度/速度串级闭环，通过达妙 MIT 纯转矩指令输�
 `NO_FOLLOW`、`FOLLOW_GIMBAL_YAW`、`ROTATE` 枚举已定义，当前没有彼此独立的控制分支。
 舵向使用 `output_total_angle`，上电绝对零位不能仅由增量编码器确定；实车需要可靠的
 绝对编码器、寻零或已知上电姿态。车体 `vx/vy/wz` 的物理正方向尚待接线和坐标标定。
+该实现当前只在显式打开 `H7_APP_CHASSIS` 时编译，不是默认 ChassisBoard 固件。
 
 现有轮速环、舵向角度环和舵向速度环增益没有可靠的实车单位/整定记录。它们目前
 只作为初始占位值，启用电机前必须按 rad/rad/s 反馈重新整定；不能把旧的混合单位
@@ -262,6 +305,15 @@ void Example_Update(void);
 - INS 坐标系、角度符号和零位。
 
 ### Chassis
+
+老步兵底盘板：
+
+- 四路底盘 DM 电机的总线、节点 ID、反馈 ID、方向与在线状态。
+- Yaw DM 电机的总线、节点 ID、MIT 量程与力矩方向、摇杆速度上限。
+- 三轴抽象速度上限与麦轮单轮限幅；机械安装下 Yaw 角对应的底盘正前方。
+- 云台跟随增益；失联时四轮与 Yaw 是否确实失能。
+
+框架四舵轮 AGV：
 
 - 八个电机的总线、ID、方向和在线状态。
 - 轮径、半长、半宽和四个舵向零位。

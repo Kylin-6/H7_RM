@@ -173,7 +173,7 @@ EricTool 的 USB/UART 解析均只读取回调传入的缓冲区及有效长度�
 
 业务类型和唯一静态通道统一定义在 [MessageCenter](User_File/System/MessageCenter)。`INS_State_Topic` 由 BMI088 链路发布，云台读取最新姿态；RobotCmd 通过 Output 发布 Gimbal、Chassis、Shoot 连续命令并汇总反馈，底盘命令在云台板由固定 Transport 送往底盘板 Topic。单发和三连发通过固定容量 `ShootEvent` FIFO 传递。完整 API、并发语义、通道所有权、示例和验证清单见 [Message Center 专篇](User_File/System/MessageCenter/README.md)。
 
-所有正常工作时应持续收到反馈、心跳或数据流的模块优先注册静态 Daemon，只在收到合法数据时 `Feed()`。当前已接入 DM、DJI、S.BUS、有效 INS 输出、双板 Transport 及可选 Referee/VTM；`StatusTask` 每 10 ms（100 Hz）统一 `CheckAll()`，有 DM 电机时再调用原有 `Class_DMMotor::ServiceAll()`。Daemon 只负责 liveness，不负责整车停机、清错、重启、安全策略或消息路由。管理器保持 32 个固定槽位，无动态分配；当前三板最坏注册数为 17/8/11。在线查询不替代 Topic ReadFresh 或电机反馈的微秒 freshness，详见 [Daemon 说明](User_File/System/Daemon/README.md)。
+所有正常工作时应持续收到反馈、心跳或数据流的模块优先注册静态 Daemon，只在收到合法数据时 `Feed()`。当前已接入 DM、DJI、S.BUS、有效 INS 输出、双板 Transport 及可选 Referee/VTM；`StatusTask` 每 10 ms（100 Hz）统一 `CheckAll()`，有 DM 电机时再调用原有 `Class_DMMotor::ServiceAll()`。Daemon 只负责 liveness，不负责整车停机、清错、重启、安全策略或消息路由。管理器保持 32 个固定槽位，无动态分配；当前三板最坏注册数为 17/8/10。在线查询不替代 Topic ReadFresh 或电机反馈的微秒 freshness，详见 [Daemon 说明](User_File/System/Daemon/README.md)。
 
 ### Application
 
@@ -186,6 +186,9 @@ Control_Task 调度顺序、RobotCmd 所有权、Gimbal/Chassis/Shoot 行为和�
 构建目标在编译期确定应用与任务：`SingleBoard` 保留全部应用源码，但 Gimbal、Chassis、Shoot 硬件控制默认关闭；`GimbalBoard` 运行 RobotCmd、Gimbal、Shoot；`ChassisBoard` 运行 Chassis。BoardConfig 只绑定本板硬件，TransportConfig 固定板间总线和报文号。运行时不使用 Router 或动态 Topic 路由。
 
 单板 RobotCmd 的三个 Output 都是 LocalPublisher；云台板的底盘 Output 是 RemotePublisher。`ChassisCmd` 经 CAN 标准 ID `0x141` 到达底盘板本地 Topic，`ChassisFeedback` 经 `0x222` 返回云台板本地 Topic。两者是 8 字节 Classic CAN 最新值，接收任务按实际 RX 时间和序号校验，底盘命令超过 100 ms 变为 `ZERO_FORCE`。INS、Gimbal、Shoot 的 1 kHz 板内路径不经过 Transport。协议和接线见 [双板 Transport](User_File/System/Transport/README.md)。
+
+老步兵的 ChassisBoard 固件不使用框架 Transport：本板是四路 DM 麦轮加一路 Yaw DM 电机的老步兵底盘板，三个 Output 都是 LocalPublisher，遥控关键通道经 FDCAN2 的
+`0x065` 转发给云台板，另有 `0x070`（Yaw 角度）与 `0x075`（机器人状态）保持与老工程逐帧一致。参数、控制律与未验证项见 [底盘应用说明](User_File/Application/Chassis/README.md)。
 
 ## 可靠性与降级边界
 

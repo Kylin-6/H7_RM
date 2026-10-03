@@ -160,11 +160,11 @@ bool available = queue.Pop(event);
 
 | 通道 | 发布者 | 消费者 | 语义 |
 | --- | --- | --- | --- |
-| `INS_State_Topic` | `System_IMU_Publish_State` | Gimbal | 最新姿态与角速度 |
-| `Gimbal_Command_Topic` | RobotCmd | Gimbal | 最新云台控制目标 |
+| `INS_State_Topic` | `System_IMU_Publish_State` | Gimbal；老步兵底盘板 Chassis（Yaw 角速度前馈） | 最新姿态与角速度 |
+| `Gimbal_Command_Topic` | RobotCmd | Gimbal；老步兵底盘板 Chassis（Yaw 轴） | 最新云台控制目标 |
 | `Chassis_Command_Topic` | 单板 RobotCmd；底盘板 Transport 接收入口 | Chassis | 最新底盘速度目标 |
-| `Shoot_Command_Topic` | RobotCmd | Shoot | 最新发射连续状态 |
-| `Gimbal_Feedback_Topic` | Gimbal | RobotCmd | 最新云台反馈 |
+| `Shoot_Command_Topic` | RobotCmd | Shoot；老步兵底盘板仅保留消息端点 | 最新发射连续状态 |
+| `Gimbal_Feedback_Topic` | Gimbal；老步兵底盘板 Chassis（本板 Yaw 轴） | RobotCmd；老步兵底盘板 Input（坐标旋转与跟随） | 最新云台反馈 |
 | `Chassis_Feedback_Topic` | 底盘板 Chassis；云台板 Transport 接收入口 | RobotCmd；底盘板 Transport | 最新底盘反馈 |
 | `Shoot_Feedback_Topic` | Shoot | RobotCmd | 最新发射反馈 |
 | `Shoot_Event_Queue` | RobotCmd | Shoot | 单发/三连发 FIFO，容量 8 |

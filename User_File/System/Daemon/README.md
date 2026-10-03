@@ -39,8 +39,8 @@ Referee/VTM 的 C 解析器通过模块内的薄 C 接口访问静态 C++ Daemon
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | SingleBoard | 2 | 11 | 1 | 1 | 0 | 1 | 1 | 17 |
 | GimbalBoard | 2 | 3 | 1 | 1 | 1 | 0 | 0 | 8 |
-| ChassisBoard | 0 | 8 | 0 | 0 | 1 | 1 | 1 | 11 |
+| ChassisBoard | 5 | 0 | 1 | 1 | 1 | 1 | 1 | 10 |
 
-SingleBoard 默认关闭三个硬件应用；Referee/VTM 默认未初始化，因此实际注册数通常更少。GimbalBoard 不编入 Referee/VTM，ChassisBoard 不配置 INS/S.BUS。
+SingleBoard 默认关闭三个硬件应用；Referee/VTM 默认未初始化，因此实际注册数通常更少。GimbalBoard 不编入 Referee/VTM。ChassisBoard 是老步兵底盘板：四路底盘 DM 电机加一路 Yaw DM 电机、S.BUS 遥控与 BMI088 INS 都注册守护；框架 Transport 与 Referee/VTM 仍编入但默认不注册。
 
 CAN 接收注册器目前总容量为 16，DM/DJI/Transport 共享这个上限；加上当前其他四个独立软件数据源，扩展电机数量时的成功注册上界仍最多 20。DaemonManager 保持 MAX_DAEMONS=32；未来增加模块时重新核算，并对注册失败作显式处理。

@@ -6,6 +6,28 @@
 旧日期条目记录当时的构建和测试快照，其中的数量及“尚未完成”不表示当前状态；
 当前能力以根 README 和对应模块文档为准。
 
+## 2026-10-03
+
+### 合入主线框架
+
+- 老步兵测试分支合入 RoboMaster_H7（9b00782）。两分支共同祖先停在 5 月，绝大多数冲突是 add/add；除老步兵既有板级决定外一律取主线版本：输入适配由 `Application/Communication` 迁到 `Application/Input`，板级硬件与任务装配交给 `User_Config/Board` 的 BoardConfig 与 `board_tasks_*`。
+- 保留实车决定：FDCAN1 硬件重传 ENABLE（DM 电机），FDCAN2/3 DISABLE（板间帧走周期最新值通道），`fdcan.c` 与 `H7_BSP.ioc` 同步。
+
+### 老步兵底盘板（ChassisBoard）
+
+- ChassisBoard 角色改为老步兵底盘板（`LEGACY_INFANTRY_CHASSIS`）：四路 DM 麦轮、一路挂在本板的 Yaw DM 电机、UART5 S.BUS 遥控，并经 FDCAN2 向云台板下发 0x065/0x070/0x075。总线与设备开关在 `chassis_board_config.cpp`，任务装配在 `board_tasks_chassis.c`（新增 TIM_1ms 与 BMI088 任务）。
+- 底盘与 Yaw 接入框架组件：`Class_DMMotor`（速度模式 / MIT）承载控制与使能生命周期，`Class_Slope` 执行三轴与 Yaw 的速率斜坡，非对称速率策略留在应用层；使能补发交给框架驱动与 StatusTask，删除老工程手写重发。
+- Yaw 轴 MIT 速度环保持老工程控制律：摇杆速度减去 BMI088 的底盘角速度前馈，加速度上限随摇杆插值，阻尼随推进/反向变化，力矩前馈由规划加速度换算；位置增益恒为 0。
+- 输入层新增底盘板通道约定（CH5 跟随、CH2/CH1 平移、CH10 旋转、CH7 档位、CH4 Yaw），平移按 Yaw 反馈旋转、跟随由偏差生成角速度；未解锁或失联时提交空输入并转发零通道。武装指示灯由输入层直接写 WS2812（红/蓝 + 跳变即时刷新）。
+- 三轴速度仍是实车抽象量纲：`Chassis_Config.h` 给出抽象上限与 `*_ToSi`/`*_FromSi` 成对比例，Input 归一化、Chassis 还原，不伪造 m/s 标定。Yaw 轴状态按 `GimbalFeedback` 发布，底盘反馈按同一约定回写规划值。
+- 删除只服务于老步兵单板模式的死代码：`Application/Communication/`、`Middleware/Algorithm/SpeedPlanning/`；`Device/Peripheral/GimbalBoard` 保留为板间下行帧编码器，通道索引与火控极性移到输入层（线上字节布局不变），0x070 编码补 int16 值域夹取。
+
+### 验证与未完成
+
+- SingleBoard / GimbalBoard / ChassisBoard 三树构建通过，无新增告警。根 README、Application/MessageCenter/Daemon/Transport/Remote 与快速上手文档已同步；架构图是分层视图，本次不涉及层次变化。
+- 未做实机验证：电机 ID 与方向、Yaw 阻尼与力矩方向、麦轮正方向、云台跟随方向与增益、板间帧收发、失联失能时序；也未与老工程做逐周期数值对拍。
+- 与老工程 `rm/demo`（及云台板老工程 `H7_RM` 的 0x065 解码端）逐项核对：总线、节点/反馈 ID、控制模式与协议量程、麦轮组合、速率限制常量、遥控通道与整形参数、Yaw 控制律、使能/控制帧编码、0x065/0x070/0x075 布局全部一致；有意偏差与新增的“四轮反馈必须正常”依赖记录在[底盘应用说明](User_File/Application/Chassis/README.md)。
+
 ## 2026-09-28
 
 ### 当前代码已实现

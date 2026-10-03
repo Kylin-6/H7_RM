@@ -53,7 +53,7 @@ S.BUS（UART5，Device 解析完整帧）
 InputState 是固定输入状态，命令 Topic 是跨模块通道，两者职责不同。
 ControlTask 以 1 kHz 调度，但 RobotCmd 的底盘命令每 10 ms 刷新；调度频率不等于消息发布频率。
 设备反馈反向回到 Application，机构再发布 Feedback Topic 给 RobotCmd。
-双板时底盘命令经过固定 Transport，进入底盘板本地 Topic，见 [Transport](User_File/System/Transport/README.md)。
+双板时底盘命令经过固定 Transport，进入底盘板本地 Topic，见 [Transport](User_File/System/Transport/README.md)；老步兵底盘板（ChassisBoard）例外，它用 FDCAN2 的 0x065 转发遥控、三个 Output 都是本地发布，见 [底盘应用说明](User_File/Application/Chassis/README.md)。
 
 ## 5. 姿态是怎么走的
 

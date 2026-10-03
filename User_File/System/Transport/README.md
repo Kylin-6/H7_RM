@@ -27,6 +27,8 @@ cmake --preset ChassisBoard && cmake --build --preset ChassisBoard
 
 两块板的板间 CAN 收发器应连接到同一条 Classic CAN 总线，并核对双方波特率、终端电阻和共地。`BoardConfig` 管外设接线；`TransportConfig` 管固定消息方向和 CAN ID；CMake 选择应用、设备和任务源码。
 
+老步兵底盘板（`LEGACY_INFANTRY_CHASSIS`）不使用上面的框架 Transport：本板四路 DM 麦轮与 Yaw DM 电机同在 FDCAN1，板间链路改用 FDCAN2 的 0x065/0x070/0x075 下行帧，0x141/0x222 的收发实现仍编译但不注册，见 [底盘应用说明](../../Application/Chassis/README.md)。
+
 ## 线上格式
 
 `Gimbal(1) -> Chassis(2)` 的 `ChassisCmd(1)`，标准 ID 为
