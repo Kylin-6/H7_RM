@@ -164,7 +164,7 @@ motor.feedback.rotor_temperature;
 MIT 的 `kp`、`kd` 是发给电机内部控制器的控制参数，不属于反馈；当前驱动没有本地 PID 对象。
 直接读取公开 feedback 结构体不保证跨中断一致性；控制计算应使用
 `GetFeedbackSnapshot()`。其中 `requested_enabled` 为 Application 请求，`online` 为
-100 ms 内的新鲜合法运动反馈，`actual_enabled` 为反馈 `state == 1`，`fault` 为在线且状态既非失能也非使能，`ready` 为
+feedback_daemon 的在线判定（100 ms 门限内的合法运动反馈 liveness），`actual_enabled` 为反馈 `state == 1`，`fault` 为在线且状态既非失能也非使能，`ready` 为
 请求使能、在线、实际使能且无故障；协议状态仍保存在 `feedback.state` 供诊断。`IsHealthy()` 等价于
 `ready`。失能或反馈失效时，正常控制入口只发布安全目标；MIT 安全目标的
 P/V/Kp/Kd/Torque 全为零。

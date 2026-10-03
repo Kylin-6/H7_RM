@@ -4,6 +4,8 @@
 
 `Daemon` 只回答数据源是否活跃、离线多久和发生了什么跃迁，不负责停机、清错、重启设备、消息路由或业务降级。Application 通过 Device 的可用性和业务数据新鲜度决定控制策略，不持有 Daemon 指针。
 
+职责分层固定为：**Daemon = 周期数据源唯一的 liveness / Online / Offline 来源；Device = 对外暴露 online 与 fault / ready 等只读状态；Application/Diagnostics = 把这些状态映射为故障码与灯效；WS2812 = 只负责显示故障码。** Diagnostics 通过 Chassis 诊断快照和 Input/Device 状态读取 Daemon 结论，不直接持有或遍历 DaemonManager，也不自行实现 `last_rx + timeout` 的设备掉线判断。控制 freshness（`Topic::ReadFresh`、timestamp age）回答"这份数据是否可用于当前控制周期"，与 Online 相互独立：Online 时旧数据仍可因过期被拒绝，严格 freshness 也可以先于 Daemon 超时失效。
+
 ## 时间与跃迁
 
 - 复用系统绝对时间戳，内部使用自然回绕的 uint32_t 毫秒计数。新对象初始 Offline，收到第一份合法数据后才 Online。

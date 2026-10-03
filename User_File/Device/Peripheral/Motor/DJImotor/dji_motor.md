@@ -93,16 +93,16 @@ if (motor.Init(config))
 失败时应重试请求，不能将调用返回等同于电机已经停转。`Enable()`/`Disable()` 仅作旧调用方薄包装。
 
 DJI 无硬件 Enable/Disable 应答。`GetMotionSnapshot()` 中的 `requested_enabled` 是本地输出许可，
-`online` 是未超时的合法反馈，`ready` 是初始化、许可与在线同时成立；不提供虚构的
+`online` 唯一来自 `feedback_daemon.IsOnline()`（合法反馈的 liveness 判定），`ready` 是初始化、许可与在线同时成立；不提供虚构的
 `actual_enabled`。
 
 对象首次收到合法反馈前，以及超过 `feedback_timeout_ms` 没有反馈后，`Control()`
-都会保持该槽为零并清除 PID 积分。超时判断复用
-`SYS_Timestamp.Get_Now_Microsecond()`，以 64 位整数微秒计算；使用前应初始化系统时间服务。
+都会保持该槽为零并清除 PID 积分。在线判断统一走 `feedback_daemon`（毫秒门限由
+`SetTimeoutMs` 配置，时间源自 `SYS_Timestamp`）；使用前应初始化系统时间服务。
 
 每个静态电机实例同时拥有 `feedback_daemon`，Init 按 `feedback_timeout_ms` 配置非零门限并注册；注册失败返回 false，不允许该实例输出。只有总线、CAN ID、DLC=8 和 encoder<8192 全部合法且反馈解码完成后才 Feed，错误帧不延长在线时间。StatusTask 以 100 Hz 统一检查跃迁，默认无离线 callback。
 
-`IsOnline()` 与 `GetMotionSnapshot().online` 使用最近合法反馈的微秒时间戳即时判断，保留原来的 `age <= feedback_timeout_us` 边界；Control/Send 不等待 StatusTask。删除原来的可写 `online` 缓存，查询改用接口。只读 `GetDaemon()` 用于离线时长/跃迁诊断，其毫秒门限为 `age < timeout_ms`；它不替代控制快照，不执行停机策略。`IsEnabled()` 为本地输出许可，`IsDataValid()` 等价于初始化且反馈新鲜，`IsHealthy()` 要求 Enabled 与 DataValid。详见 [Daemon](../../../../System/Daemon/README.md)。
+`IsOnline()` 与 `GetMotionSnapshot().online` 统一返回 `feedback_daemon.IsOnline()` 的即时 liveness 结果，门限即 Init 配置的 `feedback_timeout_ms`；Control/Send 不等待 StatusTask。`timestamp_us` 保留最近合法反馈的微秒时间戳，用于反馈年龄等实时 freshness，不参与在线判断。只读 `GetDaemon()` 用于离线时长/跃迁诊断，其毫秒门限为 `age < timeout_ms`；它不替代控制快照，不执行停机策略。`IsEnabled()` 为本地输出许可，`IsDataValid()` 等价于初始化且反馈在线，`IsHealthy()` 要求 Enabled 与 DataValid。详见 [Daemon](../../../../System/Daemon/README.md)。
 
 ## 反馈量和单位
 
@@ -137,7 +137,7 @@ gimbal.Control_Degree(yaw_deg, pitch_deg); // 位置环：deg；速度环：deg/
 - `feedback.output_speed_degree_per_second`：输出侧速度，单位 °/s。
 - `feedback.current_raw`：协议返回的原始实际转矩电流值，不声明为安培。
 - `feedback.temperature`：M3508 和 GM6020 的电机温度；C610 对应字节为空，因此保持 0。
-- `GetMotionSnapshot().online`：读取当时的反馈 freshness，无第二份 online 缓存。
+- `GetMotionSnapshot().online`：读取当时的 Daemon 在线结果，无第二份 online 计算；`timestamp_us` 用于 freshness / 反馈年龄。
 - `last_feedback_timestamp_us`：最近反馈的 64 位系统微秒时间戳；任务中读取时使用
   `Get_Last_Feedback_Timestamp_Us()`，由接口保护 32 位 MCU 上的完整快照。
 

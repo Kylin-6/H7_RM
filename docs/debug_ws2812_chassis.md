@@ -2,6 +2,20 @@
 
 适用于 ChassisBoard / LEGACY_INFANTRY_CHASSIS。参考老步兵云台状态灯：单颗 SPI6 WS2812，亮度 15%；只观察，不改变控制许可、设备输出或故障恢复。
 
+## 在线状态来源与 freshness
+
+各周期数据源的 Online / Offline（liveness）唯一由 Device 内的 Daemon 判定
+（详见 `User_File/System/Daemon/README.md`）：四轮与 Yaw 为各自 DMMotor Daemon，
+遥控为 SBUS Daemon，INS 为 System_IMU Daemon。Diagnostics 只消费这些
+Device / Application 诊断快照并映射为故障码（遥控位经
+`RemoteInput_IsLinkOnline()` 读取 SBUS Daemon 结论），不自行计算
+`last_rx + timeout`，WS2812 只负责显示。
+
+与 Online 相互独立保留的数据 freshness（"这份数据是否可用于当前控制"）：
+INS Topic `ReadFresh`（控制侧 10 ms 门限）、S.BUS 50 ms 帧新鲜度与失控位
+互锁、电机微秒反馈时间戳和使能观察超时。因此可能出现"Daemon 仍在线但旧
+姿态已被控制拒绝"，或"严格 freshness 先于 Daemon 超时失效"。
+
 ## 看灯判断
 
 故障每次亮 150 ms、灭 150 ms，一组结束后额外灭 900 ms，再重复。
@@ -10,11 +24,11 @@
 | 灯色 | 闪烁次数与含义 |
 | --- | --- |
 | 白 | 1：系统致命初始化失败；2：底盘、遥控或命令入口初始化失败；3：控制诊断超过 50 ms 未更新或从未发布 |
-| 黄 | 1：遥控输入无有效新鲜数据；2～5：第 1～4 路轮电机请求使能连续 1 s 未就绪 |
-| 品红 | 1：BMI088 INS 姿态无新鲜数据（沿用控制侧 10 ms 门限） |
+| 黄 | 1：S.BUS 遥控链路离线（SBUS Daemon）；2～5：第 1～4 路轮电机请求使能连续 1 s 未就绪 |
+| 品红 | 1：BMI088 INS 姿态无新鲜数据（沿用控制侧 10 ms 门限；链路活性见 INS Daemon） |
 | 红 | 1～4：对应轮电机最近反馈 state > 1 |
-| 橙 | 1～4：对应轮电机请求工作但反馈离线 |
-| 青 | 1：Yaw 请求工作但离线；2：Yaw 最近反馈 state > 1；3：Yaw 请求使能连续 1 s 未就绪 |
+| 橙 | 1～4：对应轮电机请求工作但反馈离线（DMMotor Daemon） |
+| 青 | 1：Yaw 请求工作但离线（DMMotor Daemon）；2：Yaw 最近反馈 state > 1；3：Yaw 请求使能连续 1 s 未就绪 |
 | 绿常亮 | 有控制许可，INS 与所需电机正常；不表示轮子一定在转 |
 | 蓝慢闪 | 启动或使能等待，亮、灭各 500 ms |
 | 蓝常亮 | 主动撤销许可，且无其他显示异常 |
