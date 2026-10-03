@@ -34,11 +34,16 @@ extern "C" void Control_Task(void *)
     static LocalPublisher<ShootCmd> shoot_output(MessageCenter::Shoot_Command_Topic);
     if (!RobotCmd_Init(gimbal_output.Bind(), chassis_output.Bind(), shoot_output.Bind()))
     {
+        Chassis_DiagnosticInitFailure();
         for (;;) osDelay(1000U);
     }
-    (void)Chassis_Init();
+    const bool chassis_ready = Chassis_Init();
     /* 遥控接收依赖 UART BSP 与 init_finished，放在设备初始化之后。 */
-    (void)RemoteInput_Init();
+    const bool remote_ready = RemoteInput_Init();
+    if (!chassis_ready || !remote_ready)
+    {
+        Chassis_DiagnosticInitFailure();
+    }
 
     for (;;)
     {

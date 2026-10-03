@@ -123,4 +123,12 @@ struct ShootFeedback
     bool online = false;
 };
 
+/** 老步兵底盘灯效观察快照；ControlTask 写，TIM_1ms_Task 读，不参与控制许可。 */
+struct Struct_Chassis_Diagnostic
+{
+    uint32_t fault_mask = 0U;
+    bool permitted = false;
+    bool waiting = false;
+};
+
 #endif

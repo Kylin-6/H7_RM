@@ -24,7 +24,6 @@
 #include "RobotCmd.h"
 #include "alg_basic.h"
 #include "board_config.h"
-#include "bsp_ws2812.h"
 #include "gimbal_board.h"
 #include "sbus.h"
 #include "usart.h"
@@ -136,24 +135,6 @@ void RotateVelocityByGimbal(float angle_rad, float *velocity_x, float *velocity_
 }
 
 /**
- * @brief 武装状态指示灯：红灯失能 / 未解锁，蓝灯已解锁。
- * @details 框架 Set_RGB 只改颜色缓存，刷新依赖 10 ms 分发；状态跳变补一次即时发送，
- *          避免解锁/锁定指示最多延迟一个分发周期。
- */
-void IndicateArmed(bool is_armed)
-{
-    if (is_armed)
-    {
-        BSP_WS2812.Set_RGB(0x00U, 0x00U, 0xFFU);
-    }
-    else
-    {
-        BSP_WS2812.Set_RGB(0xFFU, 0x00U, 0x00U);
-    }
-    BSP_WS2812.TIM_10ms_Write_PeriodElapsedCallback();
-}
-
-/**
  * @brief 刷新底盘板到云台板的三个下行帧。
  * @param frame 健康且已解锁时的 SBUS 帧；链路失效或未解锁时传 nullptr，转发零通道，
  *              避免云台板继续使用最后一帧旧摇杆值。
@@ -199,7 +180,6 @@ bool RemoteInput_Init(void)
     /* 输入仲裁状态一并复位：上电即处于 Remote 失联安全态。 */
     InputState_Reset();
     InputState_SetTime(last_healthy_ms);
-    IndicateArmed(false);
 
     /* S.BUS 固定 UART5；板间下行帧走 BoardConfig 指定的板间链路总线（FDCAN2）。 */
     const bool sbus_ready = SBUS_Init(&huart5);
@@ -235,14 +215,12 @@ void RemoteInput_Update(void)
         if (armed)
         {
             armed = false;
-            IndicateArmed(false);
         }
     }
     if (!armed && ever_healthy && now - last_unhealthy_ms >= kRecoveryMs &&
         now - last_healthy_ms <= kFrameFreshMs)
     {
         armed = true;
-        IndicateArmed(true);
     }
 
     /* 板间下行帧按 2 ms 刷新，与老工程 GimbalTask 周期一致，避免压满 FDCAN2。 */

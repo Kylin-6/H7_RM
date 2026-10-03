@@ -3,6 +3,7 @@
 namespace MessageCenter
 {
 Topic<INS_State> INS_State_Topic;
+Topic<Struct_Chassis_Diagnostic> Chassis_Diagnostic_Topic;
 Topic<GimbalCmd> Gimbal_Command_Topic;
 Topic<ChassisCmd> Chassis_Command_Topic;
 Topic<ShootCmd> Shoot_Command_Topic;

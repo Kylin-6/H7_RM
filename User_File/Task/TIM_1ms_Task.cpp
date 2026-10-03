@@ -20,6 +20,9 @@
 #include "bsp_uart.h"
 #include "bsp_w25q64jv.h"
 #include <cstddef>
+#if LEGACY_INFANTRY_CHASSIS
+#include "Chassis.h"
+#endif
 
 /**
  * @brief W25Q64JV 自动轮询超时检测回调 (1ms)
@@ -38,7 +41,11 @@ static const PulseEntry_t TIM_1ms_Callback_Table[] = {
     {1U, BSP_Key_TIM_1ms_Process_PeriodElapsedCallback},
     {1U, BMI088_TIM_1ms_Service_PeriodElapsedCallback},
     {1U, UART_TIM_1ms_Recover_PeriodElapsedCallback},
+#if LEGACY_INFANTRY_CHASSIS
+    {10U, Chassis_LED_Update},
+#else
     {10U, BSP_WS2812_TIM_10ms_Write_PeriodElapsedCallback},
+#endif
     {50U, BSP_Key_TIM_50ms_Process_PeriodElapsedCallback},
     {128U, BMI088_TIM_128ms_Calculate_PeriodElapsedCallback},
 };

@@ -23,6 +23,9 @@
 static constexpr uint64_t CHASSIS_COMMAND_MAX_AGE_US = 100000U;
 
 #if LEGACY_INFANTRY_CHASSIS
+#include "Init.h"
+#include "input_state.h"
+#include "bsp_ws2812.h"
 #include "alg_slope.h"
 #include "dmmotor.h"
 #include <cmath>
@@ -140,6 +143,7 @@ struct LegacyChassisContext
 };
 
 LegacyChassisContext ctx;
+bool diagnostic_init_failed = false;
 
 /**
  * @brief 麦轮逆运动学：三轴速度直接代数组合成四轮目标。
@@ -221,6 +225,44 @@ void Legacy_ControlYaw(float chassis_yaw_rate_rad_s)
     /* 位置目标 0、位置增益 0：速度由电机内部闭环，阻尼与外力矩由本层给。 */
     (void)ctx.yaw_motor.SetMIT(0.0f, ctx.yaw_speed, kLegacyChassisConfig.yaw_mit_kp,
                               ctx.yaw_kd, ctx.yaw_torque_feedforward);
+}
+
+/** 仅在 ControlTask 采集；每路使能观察计时独立，不干预重试。 */
+void Legacy_PublishDiagnostic(bool ins_valid)
+{
+    static bool pending[5]{};
+    static uint32_t started_ms[5]{};
+    const uint32_t now = HAL_GetTick();
+    Struct_Chassis_Diagnostic d{};
+    const auto input = InputState_Read();
+    if (!input.remote.valid || now - input.remote.received_ms > 50U)
+        d.fault_mask |= 1U << 3;
+    if (!ins_valid)
+        d.fault_mask |= 1U << 4;
+    if (!ctx.initialized || diagnostic_init_failed)
+        d.fault_mask |= 1U << 1;
+    d.permitted = ctx.command.mode != ChassisMode::ZERO_FORCE ||
+                  ctx.yaw_command.mode == GimbalMode::IMU;
+    for (uint8_t i = 0U; i < 5U; ++i)
+    {
+        const auto m = i < 4U ? ctx.wheel_motor[i].GetFeedbackSnapshot()
+                             : ctx.yaw_motor.GetFeedbackSnapshot();
+        if (m.requested_enabled && !m.ready)
+        {
+            if (!pending[i]) started_ms[i] = now;
+            pending[i] = true;
+            d.waiting = true;
+        }
+        else pending[i] = false;
+        // 最近故障状态即使过期也保留，收到非故障状态才清除。
+        if (m.feedback.state > 1U)
+            d.fault_mask |= 1U << (i < 4U ? 5U + i : 17U);
+        if (m.requested_enabled && !m.online)
+            d.fault_mask |= 1U << (i < 4U ? 9U + i : 18U);
+        if (pending[i] && now - started_ms[i] >= 1000U)
+            d.fault_mask |= 1U << (i < 4U ? 13U + i : 19U);
+    }
+    MessageCenter::Chassis_Diagnostic_Topic.Publish(d);
 }
 
 /** 100 Hz 发布底盘反馈与 Yaw 轴反馈；未就绪或失效状态如实上报。 */
@@ -411,6 +453,65 @@ ChassisContext ctx;
 } // namespace
 
 #endif /* 无底盘硬件路径 */
+
+#if LEGACY_INFANTRY_CHASSIS
+void Chassis_DiagnosticInitFailure(void)
+{
+    diagnostic_init_failed = true;
+    Struct_Chassis_Diagnostic d{};
+    d.fault_mask = 1U << 1;
+    MessageCenter::Chassis_Diagnostic_Topic.Publish(d);
+}
+
+void Chassis_LED_Update(void)
+{
+    if (!BoardConfig_Get().indicators) return;
+    const uint32_t now = HAL_GetTick();
+    const auto snapshot = MessageCenter::Chassis_Diagnostic_Topic.ReadWithMeta();
+    const auto d = snapshot.data;
+    const uint64_t now_us = SYS_Timestamp_Get_Microsecond();
+    uint32_t mask = d.fault_mask;
+    if (System_Init_GetState() == SYSTEM_INIT_FATAL) mask |= 1U;
+    if (!snapshot.valid || now_us < snapshot.timestamp_us ||
+        now_us - snapshot.timestamp_us > 50000U) mask |= 1U << 2;
+    // 开机宽限只显示初始化失败，其他异常暂用蓝色慢闪。
+    const uint32_t visible = now < 3000U ? mask & 3U : mask;
+    uint8_t red = 0U, green = 0U, blue = 255U, pulses = 0U;
+    uint32_t selected = 0U;
+    bool slow = now < 3000U || d.waiting;
+    // 类别优先级：系统、应用、控制、遥控、INS、轮故障、轮使能、轮离线、Yaw。
+    constexpr uint8_t priority[] = {0, 1, 2, 3, 4, 5, 6, 7, 8,
+                                    13, 14, 15, 16, 9, 10, 11, 12, 17, 19, 18};
+    for (uint8_t bit : priority)
+    {
+        if (!(visible & (1U << bit))) continue;
+        selected = 1U << bit;
+        slow = false;
+        if (bit <= 2U) { red = green = blue = 255U; pulses = bit + 1U; }
+        else if (bit == 3U) { red = green = 255U; blue = 0U; pulses = 1U; }
+        else if (bit == 4U) { red = 255U; blue = 255U; pulses = 1U; }
+        else if (bit <= 8U) { red = 255U; blue = 0U; pulses = bit - 4U; }
+        else if (bit <= 12U) { red = 255U; green = 128U; blue = 0U; pulses = bit - 8U; }
+        else if (bit <= 16U) { red = green = 255U; blue = 0U; pulses = bit - 11U; }
+        else { green = blue = 255U; pulses = bit == 17U ? 2U : (bit == 18U ? 1U : 3U); }
+        break;
+    }
+    if (!selected && !slow && d.permitted) { green = 255U; blue = 0U; }
+    static uint32_t previous = 0xFFFFFFFFU, start_ms = 0U;
+    const uint32_t key = selected | (slow ? 1U << 20 : 0U) |
+                         (!selected && !slow && d.permitted ? 1U << 21 : 0U);
+    if (key != previous) { previous = key; start_ms = now; }
+    const uint32_t elapsed = now - start_ms;
+    const uint32_t burst_ms = pulses * 300U;
+    const uint32_t phase = pulses ? elapsed % (burst_ms + 900U) : 0U;
+    const bool on = pulses ? phase < burst_ms && phase % 300U < 150U
+                           : (!slow || elapsed % 1000U < 500U);
+    BSP_WS2812.Set_RGB(on ? red * 15U / 100U : 0U,
+                       on ? green * 15U / 100U : 0U,
+                       on ? blue * 15U / 100U : 0U);
+    BSP_WS2812_TIM_10ms_Write_PeriodElapsedCallback();
+}
+#endif
 
 bool Chassis_Init(void)
 {
@@ -626,6 +727,7 @@ void Chassis_Update(void)
     {
         ctx.feedback_divider = 0U;
         Legacy_PublishFeedback(ins_valid);
+        Legacy_PublishDiagnostic(ins_valid);
     }
 #elif CHASSIS
     if (ctx.initialized)
