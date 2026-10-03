@@ -233,7 +233,7 @@ bool Class_BMI088::Init()
     SPI_Manage_Object = &SPI2_Manage_Object;
     Init_Finished_Flag = false;
 
-    const bool accel_initialized = BMI088_Accel.Init(true);
+    const bool accel_initialized = BMI088_Accel.Init(false);
     const bool gyro_initialized = BMI088_Gyro.Init();
     if (!accel_initialized || !gyro_initialized)
     {
