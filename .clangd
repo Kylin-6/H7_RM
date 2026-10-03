@@ -3,7 +3,7 @@ CompileFlags:
     - -ferror-limit=0
     - -Wno-implicit-int
     - -Wno-unknown-pragmas
-  CompilationDatabase: build/Debug
+  CompilationDatabase: build/ChassisBoard
 Diagnostics:
   Suppress:
     - unused-includes
