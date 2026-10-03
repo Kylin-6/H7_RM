@@ -74,11 +74,11 @@ struct LegacyInfantryChassisConfig
     float planning_threshold = 0.1f;
 
     /** 四路底盘 DM 电机（速度模式）节点 ID 与主控接收 ID。 */
-    uint8_t motor_id[4] = {0x50U, 0x51U, 0x52U, 0x53U};
+    uint8_t motor_id[4] = {0x01U, 0x02U, 0x03U, 0x04U};
     uint16_t motor_master_id[4] = {0x60U, 0x61U, 0x62U, 0x63U};
-    /** 底盘电机协议量程：位置 ±3.14 rad、速度 ±200 rad/s、转矩 ±10 N·m（DM3519）。 */
-    float motor_position_max_rad = 3.14f;
-    float motor_velocity_max_rad_s = 200.0f;
+    /** 与电机端 PMAX/VMAX/TMAX 一致：位置 ±12.5 rad、速度 ±30 rad/s、转矩 ±10 N·m。 */
+    float motor_position_max_rad = 12.5f;
+    float motor_velocity_max_rad_s = 30.0f;
     float motor_torque_max_nm = 10.0f;
 
     /** Yaw 轴 DM 电机（MIT 模式）节点 ID 与主控接收 ID。 */
