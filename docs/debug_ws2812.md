@@ -4,6 +4,19 @@
 单颗板载 WS2812 按优先级显示故障，所有异常同时保存在诊断位图中。
 指示灯只观察，不修改电机控制、供电、安全互锁或故障复位条件。
 
+## 在线状态来源与 freshness
+
+各周期数据源的 Online / Offline（liveness）唯一由 Device 内的 Daemon 判定
+（详见 `User_File/System/Daemon/README.md`）：Pitch / 摩擦轮为 DMMotor Daemon，
+拨弹盘为 DJImotor Daemon，DM-IMU 为欧拉角链路 Daemon，0x065 遥控转发为
+ChassisBoard Daemon。Diagnostics 只消费这些 Device / Application 诊断快照并映射
+为故障码，不自行计算 `last_rx + timeout`，WS2812 只负责显示。
+
+与 Online 相互独立保留的数据 freshness（"这份数据是否可用于当前控制"）：
+INS Topic `ReadFresh`、DM-IMU 桥 100 ms 姿态时效、0x065 通道 100 ms 接收时间戳、
+电机微秒反馈时间戳和 Shoot / Gimbal 自有业务超时。因此可能出现
+"Daemon 仍在线但旧姿态已被 Gimbal 拒绝"或"严格 freshness 先于 Daemon 超时失效"。
+
 ## 硬件与固件
 
 | 设备 | 当前连接与参数 |
@@ -34,15 +47,15 @@
 | 白 | 1：系统初始化致命失败 | `System_Init_GetFailureMask()`；TIM4 / TIM5 等初始化结果 |
 | 白 | 2：Gimbal / Shoot 或命令入口初始化失败 | 应用诊断 initialized、设备注册、BoardConfig 和配置量程 |
 | 白 | 3：控制诊断超过 50 ms 未更新或从未发布 | ControlTask 是否运行、1 ms 线程标志、任务栈与阻塞情况 |
-| 黄 | 1：0x065 遥控转发无有效新鲜数据 | 底盘是否上电并转发、FDCAN2 接线、波特率和接收 ID |
-| 品红 | 1：DM-IMU 无新鲜有效姿态 | FDCAN3、IMU 供电、0x66 请求与 0x33 欧拉角反馈、INS 时间戳 |
-| 红 | 1：Pitch 反馈离线 | 外部供电、FDCAN1、节点 0x09、反馈 0x019、MIT 模式 |
+| 黄 | 1：0x065 遥控转发链路离线（ChassisBoard Daemon） | 底盘是否上电并转发、FDCAN2 接线、波特率和接收 ID |
+| 品红 | 1：DM-IMU 无新鲜有效姿态（链路见 DM-IMU Daemon，时效见 INS freshness） | FDCAN3、IMU 供电、0x66 请求与 0x33 欧拉角反馈、INS 时间戳 |
+| 红 | 1：Pitch 反馈离线（DMMotor Daemon） | 外部供电、FDCAN1、节点 0x09、反馈 0x019、MIT 模式 |
 | 红 | 2：Pitch 电机上报故障 | 达妙反馈 state；按电机实际故障码检查温度、电压和负载 |
 | 红 | 3：请求使能后连续 1 s 未确认 ready | Enable 是否发送、电机模式、反馈 state；这只是观察超时，不改变重试策略 |
-| 青 | 1：拨弹盘反馈离线 | C610 外部供电、FDCAN2、ID 1 / 0x201、反馈新鲜度 |
+| 青 | 1：拨弹盘反馈离线（DJImotor Daemon） | C610 外部供电、FDCAN2、ID 1 / 0x201、反馈新鲜度 |
 | 青 | 2：卡弹回退超时锁存 | 拨弹盘机械阻塞、编码器实际回退角、方向和电流；不可持续顶弹 |
-| 橙 | 1：左摩擦轮离线 | FDCAN1、供电、节点 0x07 / 反馈 0x027 |
-| 橙 | 2：右摩擦轮离线 | FDCAN1、供电、节点 0x08 / 反馈 0x028 |
+| 橙 | 1：左摩擦轮离线（DMMotor Daemon） | FDCAN1、供电、节点 0x07 / 反馈 0x027 |
+| 橙 | 2：右摩擦轮离线（DMMotor Daemon） | FDCAN1、供电、节点 0x08 / 反馈 0x028 |
 | 橙 | 3：左摩擦轮上报故障 | 左轮反馈 state、温度、电压和机械负载 |
 | 橙 | 4：右摩擦轮上报故障 | 右轮反馈 state、温度、电压和机械负载 |
 | 绿常亮 | 许可有效、姿态及所需设备状态正常 | 仍需遥控给目标，绿灯不表示电机一定正在转动 |

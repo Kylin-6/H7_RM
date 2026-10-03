@@ -4,7 +4,7 @@
 #include "Shoot.h"
 #include "board_config.h"
 #include "bsp_ws2812.h"
-#include "input_state.h"
+#include "remote_input.h"
 #include "message_center.h"
 #include "stm32h7xx_hal.h"
 
@@ -24,8 +24,9 @@ void Diagnostics_Publish()
     const uint32_t now = HAL_GetTick();
     const auto g = Gimbal_GetDiagnostic();
     const auto s = Shoot_GetDiagnostic();
-    const auto input = InputState_Read();
-    const bool remote_valid = input.remote.valid && now - input.remote.received_ms <= 100U;
+    /* DIAG_REMOTE 只消费 0x065 链路 Daemon 的在线结果，不再自行做
+     * received_ms + timeout 计算；控制输入时效由 RemoteInput/仲裁负责。 */
+    const bool remote_valid = RemoteInput_IsLinkOnline();
     // 连续请求期间只观察超时，不重发或修改使能请求。
     if (g.pitch.requested_enabled && !g.pitch.ready)
     {
