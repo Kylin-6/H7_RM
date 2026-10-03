@@ -7,10 +7,16 @@ bool Chassis_Init(void);
 void Chassis_Update(void);
 
 #if LEGACY_INFANTRY_CHASSIS
-/** ControlTask 初始化失败时发布故障，之后不覆盖。 */
-void Chassis_DiagnosticInitFailure(void);
-/** TIM_1ms_Task 的 10 ms 入口：唯一灯色写入者及 SPI 刷新入口。 */
-void Chassis_LED_Update(void);
+#include "dmmotor.h"
+struct Struct_Chassis_Diagnostic_Input
+{
+    bool initialized = false;
+    bool ins_valid = false;
+    bool permitted = false;
+    Struct_DMMotor_Snapshot motor[5]{}; ///< 四轮按配置顺序，最后一路为 Yaw。
+};
+/** 仅供 ControlTask 在 Chassis_Update 后读取，不从其他任务读取应用 Context。 */
+Struct_Chassis_Diagnostic_Input Chassis_GetDiagnostic(void);
 #endif
 
 #endif

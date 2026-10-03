@@ -231,7 +231,9 @@ else()
         User_File/Application/Input/remote_input.cpp
         User_File/Application/Input/input_state.cpp
         User_File/Application/Input/source_arbitration.cpp
-        User_File/Application/Chassis/Chassis.cpp)
+        User_File/Application/Chassis/Chassis.cpp
+        User_File/Application/Diagnostics/Diagnostics.cpp
+        User_File/Application/Diagnostics/Diagnostics_Runtime.cpp)
 endif()
 
 # Add include paths
@@ -294,6 +296,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Application/RobotCmd/
         User_File/Application/Gimbal/
         User_File/Application/Chassis/
+        User_File/Application/Diagnostics/
         User_File/Application/Shoot/
         User_File/Application/Input/
         User_File/Application/Balance/

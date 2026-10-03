@@ -12,6 +12,7 @@
 #include "Init.h"
 #include "cmsis_os2.h"
 #if LEGACY_INFANTRY_CHASSIS
+#include "Diagnostics.h"
 #include "RobotCmd.h"
 #include "message_center.h"
 #include "output.h"
@@ -34,7 +35,7 @@ extern "C" void Control_Task(void *)
     static LocalPublisher<ShootCmd> shoot_output(MessageCenter::Shoot_Command_Topic);
     if (!RobotCmd_Init(gimbal_output.Bind(), chassis_output.Bind(), shoot_output.Bind()))
     {
-        Chassis_DiagnosticInitFailure();
+        Diagnostics_PublishInitFailure();
         for (;;) osDelay(1000U);
     }
     const bool chassis_ready = Chassis_Init();
@@ -42,9 +43,10 @@ extern "C" void Control_Task(void *)
     const bool remote_ready = RemoteInput_Init();
     if (!chassis_ready || !remote_ready)
     {
-        Chassis_DiagnosticInitFailure();
+        Diagnostics_PublishInitFailure();
     }
 
+    uint8_t diagnostic_divider = 0U;
     for (;;)
     {
         osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
@@ -52,6 +54,11 @@ extern "C" void Control_Task(void *)
         RemoteInput_Update();
         RobotCmd_Update();
         Chassis_Update();
+        if (++diagnostic_divider >= 10U)
+        {
+            diagnostic_divider = 0U;
+            Diagnostics_Publish();
+        }
     }
 #else
     BoardTransport_Init();

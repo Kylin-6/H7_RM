@@ -148,4 +148,4 @@ RobotCmd 会把命令撤销为 `DISABLED`。
 
 ## WS2812 状态灯
 
-灯色、故障优先级、闪烁次数和验证范围见 [底盘 WS2812 指南](../../../docs/debug_ws2812_chassis.md)。ControlTask 发布观察快照，TIM_1ms_Task 唯一设置颜色并刷新 SPI6；灯效不修改控制许可。
+灯色、故障优先级、闪烁次数和验证范围见 [底盘 WS2812 指南](../../../docs/debug_ws2812_chassis.md)。Application/Diagnostics 负责诊断和灯效，Chassis 仅提供状态；ControlTask 调用诊断发布，TIM_1ms_Task 调用灯效刷新；灯效不修改控制许可。

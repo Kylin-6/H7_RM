@@ -25,11 +25,13 @@
 
 ## 诊断与刷新
 
-ControlTask 在 Chassis_Update 中每 10 ms 发布 `MessageCenter::Chassis_Diagnostic_Topic`，含 `fault_mask / permitted / waiting`。TIM_1ms_Task 的既有 10 ms 回调读取一致快照、选择灯效并刷新 SPI6，输入模块不再写灯色。`BoardConfig.indicators=false` 时不设置和发送灯效。
+ControlTask 在 Chassis_Update 后每 10 ms 调用 `Diagnostics_Publish()`，发布 `MessageCenter::Chassis_Diagnostic_Topic`，含 `fault_mask / permitted / waiting`。TIM_1ms_Task 的既有 10 ms 回调调用 `Diagnostics_LED_Update()`，读取一致快照、选择灯效并刷新 SPI6，输入模块不再写灯色。`BoardConfig.indicators=false` 时不设置和发送灯效。
 
 故障位图：bit 1 应用初始化，bit 3 遥控，bit 4 INS，bit 5～8 四轮故障，bit 9～12 四轮离线，bit 13～16 四轮使能超时，bit 17 Yaw 故障，bit 18 Yaw 离线，bit 19 Yaw 使能超时。系统致命失败 bit 0 与控制快照过期 bit 2 由灯效读取时叠加。低优先级异常保留在快照，不因未显示而清除。
 
 灯效保持单任务颜色设置和发送；SPI 提交失败由原驱动下一次重试。CPU、定时器任务或 SPI6 停止时，灯可能保持最后颜色或熄灭，不能替代硬件看门狗。仅控制任务停止而定时器任务仍工作时，可显示白色三闪。
+
+模块结构与老步兵云台一致：`Application/Diagnostics/Diagnostics.cpp` 负责诊断组合、优先级和节拍纯计算，`Diagnostics_Runtime.cpp` 负责采集、发布及灯色刷新；`Chassis_GetDiagnostic()` 仅在 ControlTask 提供设备状态。`Diagnostics_LED_State` 由定时器任务保留完整故障位图和当前灯效，供调试器观察。
 
 ## 验证范围
 
