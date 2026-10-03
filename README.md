@@ -296,6 +296,11 @@ cmake --build --preset Release
 
 [CMakePresets.json](CMakePresets.json) 保留 Debug/Release 配置；[CMakeUserPresets.json](CMakeUserPresets.json) 提供 SingleBoard/GimbalBoard/ChassisBoard。Debug 使用 `-Og -g3`，Release 使用 `-Os -g0`。
 
+各板型产物统一命名 `H7_BSP.elf` 与 `H7_BSP.map`，靠构建目录区分：
+`build/SingleBoard/`、`build/GimbalBoard/`、`build/ChassisBoard/`（Debug/Release 为 `build/Debug`、`build/Release`）。
+IDE 构建分析器、`.vscode` 烧录任务与 `User_Config/flash_h7_bsp.ps1` 因此不必随板型改路径，
+烧录前只需确认选中的是哪个构建目录。
+
 ### 主机回归
 
 项目自有测试统一保存在 `RoboMaster_Test` 分支；`RoboMaster_H7` 不包含 `Tests/`。

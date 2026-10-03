@@ -337,3 +337,10 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # Add user defined libraries
     "${CMSIS_DSP_LIBRARY}"
 )
+
+# 各板型固件统一保留 H7_BSP 文件名（目录按板型隔离），IDE 构建分析器、
+# probe-rs / OpenOCD 烧录脚本不必随板型改可执行文件路径。
+# 映射文件同名 H7_BSP.map，由 cmake/gcc-arm-none-eabi.cmake 与 starm-clang.cmake 指定。
+set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
+    OUTPUT_NAME "H7_BSP"
+)
