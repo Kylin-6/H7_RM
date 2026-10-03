@@ -417,6 +417,8 @@ Struct_Chassis_Diagnostic_Input Chassis_GetDiagnostic(void)
 {
     Struct_Chassis_Diagnostic_Input d{};
     d.initialized = ctx.initialized;
+    // Fresh = 这份姿态是否可用于当前控制周期；设备 Online（liveness）由
+    // 各 Device 内的 Daemon 判定并经 motor[i].online / IsOnline() 暴露。
     INS_State ins{};
     d.ins_valid = MessageCenter::INS_State_Topic.ReadFresh(ins, LEGACY_INS_MAX_AGE_US);
     d.permitted = ctx.command.mode != ChassisMode::ZERO_FORCE ||

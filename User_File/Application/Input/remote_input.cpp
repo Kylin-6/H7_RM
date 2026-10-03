@@ -333,6 +333,13 @@ void RemoteInput_Update(void)
     InputState_SubmitRemote(remote);
 }
 
+bool RemoteInput_IsLinkOnline(void)
+{
+    /* 直接返回 SBUS Device 内部 Daemon 的 liveness 结果，不自行计算超时；
+     * 健康互锁（50 ms 帧新鲜度、失控位、200 ms 回中解锁）保持独立。 */
+    return initialized && SBUS_IsOnline();
+}
+
 #else /* 单板安全模板 */
 
 #include "sbus.h"
@@ -448,6 +455,12 @@ void RemoteInput_Update(void)
     remote.received_ms = frame.timestamp_ms;
     remote.valid = true;
     InputState_SubmitRemote(remote);
+}
+
+bool RemoteInput_IsLinkOnline(void)
+{
+    /* S.BUS Device Daemon 的 liveness 结果；帧新鲜度互锁保持独立。 */
+    return receiver_ready && SBUS_IsOnline();
 }
 
 #endif /* LEGACY_INFANTRY_CHASSIS */

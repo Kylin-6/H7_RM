@@ -24,4 +24,12 @@ bool RemoteInput_Init(void);
 /** ControlTask 先调用本函数，再运行 RobotCmd_Update。 */
 void RemoteInput_Update(void);
 
+/**
+ * @brief 读取 S.BUS 遥控链路的在线状态（SBUS Device 内部 Daemon 结果）。
+ * @return true 表示链路 liveness 在线；未初始化时返回 false。
+ * @note 供诊断层读取 Daemon 结论，不重复实现超时计算；输入健康互锁
+ *       （50 ms 帧新鲜度、失控位、回中解锁）仍由 RemoteInput_Update 独立判断。
+ */
+bool RemoteInput_IsLinkOnline(void);
+
 #endif // RM_REMOTE_INPUT_H
