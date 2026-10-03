@@ -5,6 +5,8 @@
 
 #include "gimbal_board.h"
 
+#include "alg_basic.h"
+
 bool Class_GimbalBoard::Init(FDCAN_HandleTypeDef* motor_hfdcan)
 {
     if (motor_hfdcan == nullptr)
@@ -37,47 +39,49 @@ bool Class_GimbalBoard::Transmit(uint32_t id, const uint8_t data[8])
     return CAN_Tx_Perform(&message);
 }
 
-bool Class_GimbalBoard::SendRemoteChannels(
-    const int16_t sbus_channels[GIMBAL_BOARD_CHANNEL_COUNT])
+bool Class_GimbalBoard::SendRemoteChannels(int16_t fire_switch,
+                                           int16_t shoot_speed,
+                                           int16_t pitch)
 {
     uint8_t data[8] = {0};
 
-    /* 火控（发射）开关 -> data[0..1]；极性由 GIMBAL_BOARD_FIRE_SWITCH_INVERT 决定。 */
-    int16_t fire_switch = sbus_channels[GIMBAL_BOARD_CHANNEL_FIRE_SWITCH];
-#if GIMBAL_BOARD_FIRE_SWITCH_INVERT
-    fire_switch = (int16_t)(-fire_switch);
-#endif
+    /* 火控（发射）开关 -> data[0..1] */
     data[0] = (uint8_t)((uint16_t)fire_switch >> 8);
     data[1] = (uint8_t)fire_switch;
     /* 发射速度 -> data[2..3] */
-    const int16_t shoot_speed = sbus_channels[GIMBAL_BOARD_CHANNEL_SHOOT_SPEED];
     data[2] = (uint8_t)((uint16_t)shoot_speed >> 8);
     data[3] = (uint8_t)shoot_speed;
     /* Pitch 轴 -> data[4..5] */
-    const int16_t pitch = sbus_channels[GIMBAL_BOARD_CHANNEL_PITCH];
     data[4] = (uint8_t)((uint16_t)pitch >> 8);
     data[5] = (uint8_t)pitch;
 
     return Transmit(GIMBAL_BOARD_ID_REMOTE_CHANNELS, data);
 }
 
+namespace
+{
+/** 0x070 线上编码：int16 = (yaw_deg - 180) * 100，单位 0.01°。
+ *  rad → degree 只在本协议 Encode 边界发生一次；编码前夹到 int16 值域，
+ *  避免超出预期机械范围时静默回绕成错误的另一侧角度。 */
+int16_t EncodeYawHundredthDegree(float yaw_rad)
+{
+    constexpr float RAD_TO_DEG = 57.29577951F;
+    constexpr float INT16_MIN_VALUE = -32768.0F;
+    constexpr float INT16_MAX_VALUE = 32767.0F;
+
+    const float scaled = (yaw_rad * RAD_TO_DEG - GIMBAL_BOARD_YAW_OFFSET_DEG) *
+                         GIMBAL_BOARD_YAW_SCALE;
+    return (int16_t)Basic_Math_Constrain(scaled, INT16_MIN_VALUE, INT16_MAX_VALUE);
+}
+} // namespace
+
 bool Class_GimbalBoard::SendChassisYaw(float dm_yaw_rad, float ground_yaw_rad)
 {
     uint8_t data[8] = {0};
 
-    /*
-     * 0x070 的线上单位契约是“度”（int16 = (yaw_deg - 180) * 100，YAW_SCALE
-     * 的单位是 0.01°）。rad → degree 只允许在协议 Encode 边界发生一次；
-     * 不再把弧度值直接减角度偏移。DM 云台机械安装角为 180°，正常工作范围
-     * [90°, 270°]，(yaw_deg - 180) * 100 在 int16 范围内。
-     */
-    constexpr float GIMBAL_BOARD_RAD_TO_DEG = 57.29577951F;
-    const int16_t yaw_int =
-        (int16_t)((dm_yaw_rad * GIMBAL_BOARD_RAD_TO_DEG - GIMBAL_BOARD_YAW_OFFSET_DEG) *
-                  GIMBAL_BOARD_YAW_SCALE);
-    const int16_t ground_yaw_int =
-        (int16_t)((ground_yaw_rad * GIMBAL_BOARD_RAD_TO_DEG - GIMBAL_BOARD_YAW_OFFSET_DEG) *
-                  GIMBAL_BOARD_YAW_SCALE);
+    /* DM 云台机械安装角为 180°，正常工作时两个字段都落在 int16 值域内。 */
+    const int16_t yaw_int = EncodeYawHundredthDegree(dm_yaw_rad);
+    const int16_t ground_yaw_int = EncodeYawHundredthDegree(ground_yaw_rad);
 
     data[0] = (uint8_t)((uint16_t)yaw_int >> 8);
     data[1] = (uint8_t)((uint16_t)yaw_int);

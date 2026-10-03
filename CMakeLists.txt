@@ -182,6 +182,13 @@ set(H7_CHASSIS_DEVICE_SOURCES
     User_File/Device/Peripheral/Referee/referee_26.c
     User_File/Device/Peripheral/Referee/referee_UI_26.c
     User_File/Device/Peripheral/Referee/vtm_26.c)
+# 老步兵底盘板专用设备与任务：SBUS 遥控、达妙电机、BMI088 姿态、板间下行帧。
+set(H7_LEGACY_CHASSIS_DEVICE_SOURCES
+    User_File/Task/TIM_1ms_Task.cpp
+    User_File/Task/BMI088_Task.cpp
+    User_File/Device/Peripheral/Motor/DMmotor/dmmotor.cpp
+    User_File/Device/Peripheral/Remote/sbus.cpp
+    User_File/Device/Peripheral/GimbalBoard/gimbal_board.cpp)
 
 if(H7_BOARD STREQUAL "SingleBoard")
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
@@ -217,8 +224,13 @@ else()
         User_Config/Board/chassis_board_config.cpp
         User_Config/Board/board_tasks_chassis.c
         ${H7_CHASSIS_DEVICE_SOURCES}
+        ${H7_LEGACY_CHASSIS_DEVICE_SOURCES}
         User_File/System/Transport/transport_chassis.cpp
         User_File/Task/Control_Task_Chassis.cpp
+        User_File/Application/RobotCmd/RobotCmd.cpp
+        User_File/Application/Input/remote_input.cpp
+        User_File/Application/Input/input_state.cpp
+        User_File/Application/Input/source_arbitration.cpp
         User_File/Application/Chassis/Chassis.cpp)
 endif()
 
@@ -277,6 +289,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Middleware/Algorithm/CRC/
         User_File/Device/Peripheral/Remote/
         User_File/Device/Peripheral/Referee/
+        User_File/Device/Peripheral/GimbalBoard/
         User_File/Application/
         User_File/Application/RobotCmd/
         User_File/Application/Gimbal/
@@ -300,13 +313,18 @@ elseif(H7_BOARD STREQUAL "ChassisBoard")
 endif()
 
 # Add project symbols (macros)
+# 老步兵底盘板（ChassisBoard）不使用框架板间 Transport：遥控经 FDCAN2 的
+# 0x065/0x070/0x075 下行帧送往云台板，底盘四轮与 Yaw 轴都是达妙电机。
+# LEGACY_INFANTRY_CHASSIS 随板卡角色取值，SingleBoard/GimbalBoard 不受影响。
+# 三个板型都有 DM 电机（云台 / 发射 / 底盘与 Yaw），StatusTask 统一维护协议状态。
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
     BALANCE=1
     GIMBAL=$<BOOL:${H7_APP_GIMBAL}>
     CHASSIS=$<BOOL:${H7_APP_CHASSIS}>
     SHOOT=$<BOOL:${H7_APP_SHOOT}>
-    H7_HAS_DM_MOTOR=$<NOT:$<STREQUAL:${H7_BOARD},ChassisBoard>>
+    H7_HAS_DM_MOTOR=1
+    LEGACY_INFANTRY_CHASSIS=$<STREQUAL:${H7_BOARD},ChassisBoard>
 )
 
 # Remove wrong libob.a library dependency when using cpp files

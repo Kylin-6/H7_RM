@@ -17,6 +17,8 @@ struct BoardHardware
     bool power;
     bool indicators;
     bool usb_debug;
+    /** 老步兵遥控转发链路总线：底盘板下发 0x065/0x070/0x075，云台板接收 0x065。 */
+    FDCAN_HandleTypeDef *remote_forward_bus = nullptr;
 };
 
 const BoardHardware &BoardConfig_Get(void);
