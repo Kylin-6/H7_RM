@@ -67,31 +67,28 @@ void Class_WS2812::Init(const uint8_t &__Red, const uint8_t &__Green, const uint
  */
 void Class_WS2812::TIM_10ms_Write_PeriodElapsedCallback()
 {
-    uint8_t tmp_buffer[25] = {};
-    const uint32_t primask = __get_PRIMASK();
-    __disable_irq();
-    const Struct_WS2812_Color display_color = Override_Enabled ? Override_Color : Color;
-    __set_PRIMASK(primask);
-
+    const Struct_WS2812_Color color = Color;
     if (Has_Written_Color &&
-        display_color.Red == Last_Written_Color.Red &&
-        display_color.Green == Last_Written_Color.Green &&
-        display_color.Blue == Last_Written_Color.Blue)
+        color.Red == Last_Written_Color.Red &&
+        color.Green == Last_Written_Color.Green &&
+        color.Blue == Last_Written_Color.Blue)
     {
         return;
     }
 
+    uint8_t tmp_buffer[25] = {};
+
     for (uint8_t i = 0; i < 8; i++)
     {
-        tmp_buffer[7 - i] = (display_color.Green & (1 << i)) ? LEVEL_1 : LEVEL_0;
-        tmp_buffer[15 - i] = (display_color.Red & (1 << i)) ? LEVEL_1 : LEVEL_0;
-        tmp_buffer[23 - i] = (display_color.Blue & (1 << i)) ? LEVEL_1 : LEVEL_0;
+        tmp_buffer[7 - i] = (color.Green & (1 << i)) ? LEVEL_1 : LEVEL_0;
+        tmp_buffer[15 - i] = (color.Red & (1 << i)) ? LEVEL_1 : LEVEL_0;
+        tmp_buffer[23 - i] = (color.Blue & (1 << i)) ? LEVEL_1 : LEVEL_0;
     }
 
     if (SPI_Transmit_Data(SPI_Manage_Object->SPI_Handler, nullptr, 0, GPIO_PIN_SET,
                           tmp_buffer, sizeof(tmp_buffer)) == HAL_OK)
     {
-        Last_Written_Color = display_color;
+        Last_Written_Color = color;
         Has_Written_Color = true;
     }
 }

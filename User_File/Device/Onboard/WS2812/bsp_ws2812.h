@@ -50,10 +50,6 @@ public:
 
     inline void Set_Color(const Struct_WS2812_Color &__Color, const float &__Brightness = 1.0f);
 
-    inline void Set_Override_Color(const Struct_WS2812_Color &__Color);
-
-    inline void Clear_Override_Color();
-
     void TIM_10ms_Write_PeriodElapsedCallback();
 
 protected:
@@ -79,9 +75,6 @@ protected:
     Struct_WS2812_Color Color;
     Struct_WS2812_Color Last_Written_Color;
     bool Has_Written_Color = false;
-
-    Struct_WS2812_Color Override_Color = {0, 0, 0};
-    bool Override_Enabled = false;
 
     // 读写变量
 
@@ -163,23 +156,6 @@ inline void Class_WS2812::Set_Color(const Struct_WS2812_Color &__Color, const fl
     Color.Red = (uint8_t)((float) (__Color.Red) * __Brightness);
     Color.Green = (uint8_t)((float) (__Color.Green) * __Brightness);
     Color.Blue = (uint8_t)((float) (__Color.Blue) * __Brightness);
-}
-
-inline void Class_WS2812::Set_Override_Color(const Struct_WS2812_Color &__Color)
-{
-    const uint32_t primask = __get_PRIMASK();
-    __disable_irq();
-    Override_Color = __Color;
-    Override_Enabled = true;
-    __set_PRIMASK(primask);
-}
-
-inline void Class_WS2812::Clear_Override_Color()
-{
-    const uint32_t primask = __get_PRIMASK();
-    __disable_irq();
-    Override_Enabled = false;
-    __set_PRIMASK(primask);
 }
 
 #endif

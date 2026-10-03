@@ -193,7 +193,8 @@ Gimbal_Update（Control_Task，1 kHz）
 ### 6.2 RobotCmd 与 Application
 
 ```text
-S.BUS / VTM / Keyboard / Vision
+S.BUS → RemoteInput（当前只映射底盘）
+VTM / Keyboard / Vision → InputState_Submit*（接口预留，未绑定设备）
   └─ InputState → 固定 SourceArbitration
           ↓ Remote 安全许可与来源时效检查
      RobotCmd_Update
@@ -224,7 +225,7 @@ Topic 和 EventQueue 使用 Cortex-M PRIMASK：
 当前可能访问消息中心的上下文包括：
 
 - BMI088 高优先级任务发布 INS。
-- Control_Task 发布命令、读取命令与遥测反馈、处理 ShootEvent。
+- Control_Task 发布命令、读取命令与反馈、处理 ShootEvent。
 - 后续 ISR/回调可以使用基础设施，但消息必须足够小，且调用路径不得阻塞。
 
 PRIMASK 会短暂屏蔽所有可屏蔽中断；Topic 的数据由发布任务写、订阅任务读，

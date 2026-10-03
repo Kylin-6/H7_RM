@@ -8,15 +8,13 @@
  */
 
 #include "Chassis.h"
-#include "Com.h"
 #include "Gimbal.h"
 #include "RobotCmd.h"
-#include "Com.h"
+#include "remote_input.h"
 #include "Shoot.h"
 #include "Init.h"
 #include "message_center.h"
 #include "output.h"
-#include "sys_imu.h"
 #include "user_task.h"
 
 extern "C" void Control_Task(void* argument)
@@ -39,24 +37,21 @@ extern "C" void Control_Task(void* argument)
     {
         for (;;) osDelay(1000U);
     }
-#if GIMBAL || LEGACY_INFANTRY
+    (void)RemoteInput_Init();
+#if GIMBAL
     Gimbal_Init();
 #endif
     (void)Chassis_Init();
     (void)Shoot_Init();
-    /* 遥控接收依赖 UART BSP 与 init_finished，放在各 Device 初始化之后。 */
-    (void)Communication_Init();
     // Balance_init();
 
     for (;;)
     {
         /* 由 1 ms 定时回调唤醒；阻塞等待期间不占用 CPU。 */
         osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
-        /* 输入侧先把遥控整形为 InputState，再由命令所有者统一仲裁发布。 */
-        Communication_Update();
+        RemoteInput_Update();
         /* 命令所有者先发布最新目标，再由各 Application 消费并执行。 */
         RobotCmd_Update();
-        System_IMU_Publish_Wit_Fallback();
         Gimbal_Update();
         Chassis_Update();
         Shoot_Update();

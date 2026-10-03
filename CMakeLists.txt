@@ -62,10 +62,6 @@ message(STATUS
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
 
-# 编译各阶段之间用管道传递，不在 /tmp 写大型临时汇编文件。
-# 部分开发机的 /tmp 是 10 MiB tmpfs，大文件编译会直接报 No space left on device。
-add_compile_options(-pipe)
-
 include_directories(
     ${CMAKE_SOURCE_DIR}/SystemView/SEGGER
     ${CMAKE_SOURCE_DIR}/SystemView/FreeRTOS
@@ -181,6 +177,7 @@ set(H7_GIMBAL_TASK_DEVICE_SOURCES
     User_File/Device/Peripheral/Remote/remote_control.c
     User_File/Device/Peripheral/Remote/sbus.cpp)
 set(H7_CHASSIS_DEVICE_SOURCES
+    User_File/Device/Peripheral/Referee/referee_daemon.cpp
     User_File/Device/Peripheral/Referee/crc_ref.c
     User_File/Device/Peripheral/Referee/referee_26.c
     User_File/Device/Peripheral/Referee/referee_UI_26.c
@@ -196,9 +193,9 @@ if(H7_BOARD STREQUAL "SingleBoard")
         ${H7_CHASSIS_DEVICE_SOURCES}
         User_File/Task/Control_Task.cpp
         User_File/Application/RobotCmd/RobotCmd.cpp
-        User_File/Application/Communication/Com.cpp
-        User_File/Application/Communication/input_state.cpp
-        User_File/Application/Communication/source_arbitration.cpp
+        User_File/Application/Input/remote_input.cpp
+        User_File/Application/Input/input_state.cpp
+        User_File/Application/Input/source_arbitration.cpp
         User_File/Application/Gimbal/Gimbal.cpp
         User_File/Application/Chassis/Chassis.cpp
         User_File/Application/Shoot/Shoot.cpp)
@@ -210,9 +207,9 @@ elseif(H7_BOARD STREQUAL "GimbalBoard")
         User_File/System/Transport/transport_gimbal.cpp
         User_File/Task/Control_Task_Gimbal.cpp
         User_File/Application/RobotCmd/RobotCmd.cpp
-        User_File/Application/Communication/Com.cpp
-        User_File/Application/Communication/input_state.cpp
-        User_File/Application/Communication/source_arbitration.cpp
+        User_File/Application/Input/remote_input.cpp
+        User_File/Application/Input/input_state.cpp
+        User_File/Application/Input/source_arbitration.cpp
         User_File/Application/Gimbal/Gimbal.cpp
         User_File/Application/Shoot/Shoot.cpp)
 else()
@@ -245,7 +242,6 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Middleware/Algorithm/Quaternion
         User_File/Middleware/Algorithm/Queue
         User_File/Middleware/Algorithm/Slope
-        User_File/Middleware/Algorithm/SpeedPlanning
         User_File/Middleware/Algorithm/Trajectory
         User_File/Middleware/Algorithm/SMC
         User_File/Middleware/BSP/ADC
@@ -281,27 +277,19 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Middleware/Algorithm/CRC/
         User_File/Device/Peripheral/Remote/
         User_File/Device/Peripheral/Referee/
-        User_File/Device/Peripheral/GimbalBoard/
         User_File/Application/
         User_File/Application/RobotCmd/
         User_File/Application/Gimbal/
         User_File/Application/Chassis/
         User_File/Application/Shoot/
-        User_File/Application/Communication/
+        User_File/Application/Input/
         User_File/Application/Balance/
 )
 
 option(H7_APP_GIMBAL "Build the Gimbal hardware-control path" OFF)
 option(H7_APP_CHASSIS "Build the Chassis hardware-control path" OFF)
 option(H7_APP_SHOOT "Build the Shoot hardware-control path" OFF)
-option(H7_LEGACY_INFANTRY
-    "Build the legacy infantry (old soldier) robot path: DM wheel chassis, DM MIT yaw gimbal, SBUS remote" OFF)
-
-if(H7_LEGACY_INFANTRY AND (H7_APP_GIMBAL OR H7_APP_CHASSIS OR H7_APP_SHOOT))
-    message(FATAL_ERROR
-        "H7_LEGACY_INFANTRY is mutually exclusive with "
-        "H7_APP_GIMBAL / H7_APP_CHASSIS / H7_APP_SHOOT")
-elseif(H7_BOARD STREQUAL "GimbalBoard")
+if(H7_BOARD STREQUAL "GimbalBoard")
     set(H7_APP_GIMBAL ON)
     set(H7_APP_CHASSIS OFF)
     set(H7_APP_SHOOT ON)
@@ -311,14 +299,6 @@ elseif(H7_BOARD STREQUAL "ChassisBoard")
     set(H7_APP_SHOOT OFF)
 endif()
 
-# 老步兵配置：DM 底盘速度规划、云台板链路与板间通信，追加在 SingleBoard 装配之上。
-if(H7_LEGACY_INFANTRY)
-    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-        User_File/Application/Communication/Com.cpp
-        User_File/Middleware/Algorithm/SpeedPlanning/SpeedPlanning.c
-        User_File/Device/Peripheral/GimbalBoard/gimbal_board.cpp)
-endif()
-
 # Add project symbols (macros)
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
@@ -326,7 +306,6 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     GIMBAL=$<BOOL:${H7_APP_GIMBAL}>
     CHASSIS=$<BOOL:${H7_APP_CHASSIS}>
     SHOOT=$<BOOL:${H7_APP_SHOOT}>
-    LEGACY_INFANTRY=$<BOOL:${H7_LEGACY_INFANTRY}>
     H7_HAS_DM_MOTOR=$<NOT:$<STREQUAL:${H7_BOARD},ChassisBoard>>
 )
 
@@ -339,15 +318,4 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 
     # Add user defined libraries
     "${CMSIS_DSP_LIBRARY}"
-)
-
-# 生成烧录用 bin/hex，保证与 elf 同步更新
-find_program(ARM_OBJCOPY arm-none-eabi-objcopy)
-if(NOT ARM_OBJCOPY)
-    message(FATAL_ERROR "arm-none-eabi-objcopy not found")
-endif()
-add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
-    COMMAND ${ARM_OBJCOPY} -O binary  $<TARGET_FILE:${CMAKE_PROJECT_NAME}> $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${CMAKE_PROJECT_NAME}.bin
-    COMMAND ${ARM_OBJCOPY} -O ihex   $<TARGET_FILE:${CMAKE_PROJECT_NAME}> $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${CMAKE_PROJECT_NAME}.hex
-    COMMENT "Generating ${CMAKE_PROJECT_NAME}.bin / .hex"
 )
