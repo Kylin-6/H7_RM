@@ -26,6 +26,12 @@ bool Class_ChassisBoard::Init(FDCAN_HandleTypeDef *motor_hfdcan)
     {
         return initialized;
     }
+    /* 链路 Daemon 注册失败即初始化失败，避免出现无法诊断在线状态的接收端。 */
+    if (!link_daemon.SetTimeoutMs(CHASSIS_BOARD_CHANNEL_TIMEOUT_MS) ||
+        !DaemonManager::Register(link_daemon))
+    {
+        return false;
+    }
     if (!BSP_CAN_RegisterCallback(CHASSIS_BOARD_ID_REMOTE_CHANNELS,
                                   motor_hfdcan,
                                   RxCallback,
@@ -54,6 +60,7 @@ bool Class_ChassisBoard::ReadChannels(Struct_ChassisBoard_Channels &channels) co
     const bool valid = initialized && received;
     __DMB();
     __set_PRIMASK(interrupt_state);
+    /* 这是数据 freshness（本帧通道是否仍可用于控制），与 Daemon 的链路在线判断独立。 */
     if (!valid || HAL_GetTick() - snapshot.timestamp_ms > CHASSIS_BOARD_CHANNEL_TIMEOUT_MS)
     {
         return false;
@@ -79,8 +86,8 @@ bool Class_ChassisBoard::GetPitch(int16_t *value)
 
 bool Class_ChassisBoard::IsOnline() const
 {
-    return received &&
-           (HAL_GetTick() - last_rx_ms) <= CHASSIS_BOARD_CHANNEL_TIMEOUT_MS;
+    /* liveness 唯一来源：link_daemon，与 last_rx_ms freshness 判断分离。 */
+    return link_daemon.IsOnline();
 }
 
 void Class_ChassisBoard::RxCallback(FDCAN_HandleTypeDef *callback_hfdcan,
@@ -114,6 +121,8 @@ void Class_ChassisBoard::OnRemoteChannels(const uint8_t *data, uint32_t len)
     pitch_channel = DecodeI16BigEndian(&data[4]);
     last_rx_ms = HAL_GetTick();
     received = true;
+    /* 总线、ID、长度校验和三通道解码全部完成后才喂狗，非法帧不能续期。 */
+    link_daemon.Feed();
 }
 
 bool Class_ChassisBoard::ReadChannel(const volatile int16_t &source,

@@ -37,6 +37,8 @@ extern "C" bool DM_IMU_InsBridge_Init(void)
 
 extern "C" bool DM_IMU_InsBridge_IsFresh(void)
 {
+    /* 这是姿态数据 freshness（INS 是否还能用于控制）；传感器链路 liveness
+     * 唯一见 DM_IMU_IsOnline() 的 Daemon 结果，两者独立维护。 */
     const auto sample = DM_IMU_GetEulerSnapshot();
     return initialized && sample.valid &&
            HAL_GetTick() - sample.timestamp_ms <= kInsTimeoutMs;

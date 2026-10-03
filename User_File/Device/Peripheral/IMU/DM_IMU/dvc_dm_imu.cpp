@@ -10,6 +10,7 @@
 
 #include "dvc_dm_imu.h"
 
+#include "daemon.h"
 #include "stm32h7xx_hal.h"
 
 #include <stddef.h>
@@ -36,6 +37,14 @@ constexpr float kGyroSpanRadS = 69.76f;
 constexpr float kUint16Max = 65535.0f;
 /** 超过该时间没有收到新姿态即判定 DM-IMU 离线。 */
 constexpr uint32_t kPitchTimeoutMs = 100U;
+
+/**
+ * 传感器链路 liveness 唯一来源：只有合法欧拉角帧解码成功才 Feed，由
+ * StatusTask 周期 Check。dm_imu_last_rx_ms + kPitchTimeoutMs 保留为数据
+ * freshness（该帧姿态是否还能用于控制），不重复表达在线结论。
+ */
+Daemon dm_imu_daemon{kPitchTimeoutMs};
+bool dm_imu_daemon_registered;
 
 FDCAN_HandleTypeDef *dm_imu_can;
 uint32_t dm_imu_can_id;
@@ -91,6 +100,8 @@ void DM_IMU_RxCallback(FDCAN_HandleTypeDef *hfdcan,
         dm_imu_last_rx_ms = HAL_GetTick();
         dm_imu_pitch_sequence = dm_imu_pitch_sequence + 1U;
         dm_imu_pitch_valid = true;
+        /* 只有完整合法欧拉角帧刷新链路在线；角速度帧与非法帧不能续期。 */
+        dm_imu_daemon.Feed();
     }
     else if (data[0] == kGyroRegister)
     {
@@ -149,6 +160,17 @@ extern "C" bool DM_IMU_Init(FDCAN_HandleTypeDef *hfdcan,
     dm_imu_gyro_valid = false;
     dm_imu_gyro_sequence = 0U;
 
+    /* 链路守护器只在首次初始化注册；重复 Init 不改已配置门限。 */
+    if (!dm_imu_daemon_registered)
+    {
+        if (!dm_imu_daemon.SetTimeoutMs(kPitchTimeoutMs) ||
+            !DaemonManager::Register(dm_imu_daemon))
+        {
+            return false;
+        }
+        dm_imu_daemon_registered = true;
+    }
+
     return BSP_CAN_RegisterCallback(mst_id,
                                     hfdcan,
                                     DM_IMU_RxCallback,
@@ -173,6 +195,8 @@ extern "C" bool DM_IMU_GetPitch(float *pitch_deg)
     }
 
     *pitch_deg = dm_imu_pitch_deg;
+    /* 这是数据 freshness（姿态是否可用于当前控制），不是链路在线判断；
+     * liveness 唯一见 DM_IMU_IsOnline() / dm_imu_daemon。 */
     return dm_imu_pitch_valid &&
            (HAL_GetTick() - dm_imu_last_rx_ms) <= kPitchTimeoutMs;
 }
@@ -236,6 +260,11 @@ extern "C" bool DM_IMU_GetGyro(float *x_rad_s, float *y_rad_s, float *z_rad_s)
     *y_rad_s = dm_imu_gyro_rad_s[1];
     *z_rad_s = dm_imu_gyro_rad_s[2];
     return dm_imu_gyro_valid;
+}
+
+extern "C" bool DM_IMU_IsOnline(void)
+{
+    return dm_imu_daemon.IsOnline();
 }
 
 extern "C" uint32_t DM_IMU_GetLastRxMs(void)

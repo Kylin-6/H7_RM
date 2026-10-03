@@ -136,6 +136,8 @@ void RemoteInput_Update(void)
     InputState_SetTime(now_ms);
 
     // 三个通道必须来自同一帧，不能在独立 getter 之间被 CAN ISR 更新。
+    // ReadChannels 的 100 ms 判断是数据 freshness（本帧是否仍可用于控制），
+    // 与 ChassisBoard Daemon 的链路在线结论相互独立，二者都保留。
     Struct_ChassisBoard_Channels channels{};
     const bool channels_valid = chassis_board.ReadChannels(channels);
     const int16_t fire = channels.fire;
@@ -207,6 +209,12 @@ void RemoteInput_Update(void)
     remote_input.received_ms = now_ms;
     remote_input.valid = true;
     InputState_SubmitRemote(remote_input);
+}
+
+bool RemoteInput_IsLinkOnline(void)
+{
+    /* 直接返回 ChassisBoard 内部 Daemon 的 liveness 结果，不自行计算超时。 */
+    return remote_input_initialized && chassis_board.IsOnline();
 }
 
 bool RemoteInput_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch)
@@ -349,6 +357,12 @@ void RemoteInput_Update(void)
     remote.received_ms = frame.timestamp_ms;
     remote.valid = true;
     InputState_SubmitRemote(remote);
+}
+
+bool RemoteInput_IsLinkOnline(void)
+{
+    /* S.BUS 输入路径不使用 0x065 板间链路；S.BUS 活性见 SBUS_IsOnline()。 */
+    return false;
 }
 
 bool RemoteInput_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch)

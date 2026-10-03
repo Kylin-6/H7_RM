@@ -240,9 +240,9 @@ Struct_DMMotor_Snapshot Class_DMMotor::GetFeedbackSnapshot() const
     __DMB();
     Struct_DMMotor_Snapshot snapshot;
     snapshot.feedback = feedback;
-    const uint64_t now = SYS_Timestamp.Get_Now_Microsecond();
-    snapshot.online = feedback_initialized && now >= last_feedback_us &&
-                      now - last_feedback_us < 100000U;
+    /* online 唯一来自 feedback_daemon 的 liveness 判定；last_feedback_us 仅用于
+     * 反馈年龄等实时 freshness 与调试，不再参与在线判断。 */
+    snapshot.online = feedback_daemon.IsOnline();
     snapshot.requested_enabled = requested_enabled;
     snapshot.actual_enabled = snapshot.feedback.state == 1U;
     snapshot.fault = snapshot.online && snapshot.feedback.state > 1U;

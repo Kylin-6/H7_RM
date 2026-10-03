@@ -245,7 +245,6 @@ bool Class_DJIMotor::Init(const Struct_DJIMotor_Init_Config &config)
     command_limit = resolved_limit;
     gear_ratio = config.gear_ratio > 0.0f && !Basic_Math_Is_Invalid_Float(config.gear_ratio)
                      ? config.gear_ratio : DJI_Motor_Get_Default_Gear_Ratio(config.motor_type);
-    feedback_timeout_us = (uint64_t)config.feedback_timeout_ms * 1000;
     has_temperature = config.motor_type != Enum_DJIMotor_Type::M2006;
     PID_Init(&current_pid, &config.current_pid);
     PID_Init(&speed_pid, &config.speed_pid);
@@ -429,9 +428,9 @@ Struct_DJIMotor_Motion_Snapshot Class_DJIMotor::GetMotionSnapshot() const
     snapshot.output_total_angle = feedback.output_total_angle;
     snapshot.output_speed = feedback.output_speed;
     snapshot.timestamp_us = last_feedback_timestamp_us;
-    const uint64_t now_us = SYS_Timestamp.Get_Now_Microsecond();
-    snapshot.online = initialized && feedback_initialized && now_us >= snapshot.timestamp_us &&
-                      now_us - snapshot.timestamp_us <= feedback_timeout_us;
+    /* online 唯一来自 feedback_daemon 的 liveness 判定；timestamp_us 仅用于
+     * 实时 freshness / 反馈年龄，不再参与在线判断。 */
+    snapshot.online = initialized && feedback_daemon.IsOnline();
     snapshot.requested_enabled = requested_enabled;
     snapshot.ready = initialized && snapshot.requested_enabled && snapshot.online;
     __DMB();

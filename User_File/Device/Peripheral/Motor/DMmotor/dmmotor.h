@@ -32,11 +32,11 @@ struct Struct_DMMotor_Feedback
     float rotor_temperature = 0.0f; ///< 转子温度，摄氏度。
 };
 
-/** 同一时刻取得的运动反馈与状态；online 按最近反馈时间判定，不等待 StatusTask。 */
+/** 同一时刻取得的运动反馈与状态；online 来自 feedback_daemon 的 liveness 判定。 */
 struct Struct_DMMotor_Snapshot
 {
     Struct_DMMotor_Feedback feedback{};
-    bool online = false;
+    bool online = false; ///< 唯一来源 feedback_daemon.IsOnline()，反馈年龄见 last_feedback_us。
     bool requested_enabled = false;
     bool actual_enabled = false;
     bool fault = false; ///< 新鲜反馈报告非失能、非使能的协议故障状态。

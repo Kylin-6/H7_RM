@@ -109,6 +109,14 @@ bool DM_IMU_GetEuler(float *pitch_deg, float *yaw_deg, float *roll_deg);
 bool DM_IMU_GetGyro(float *x_rad_s, float *y_rad_s, float *z_rad_s);
 
 /**
+ * @brief 查询欧拉角链路在线状态（唯一 liveness 来源）。
+ * @return true 表示 100 ms 内收到过合法欧拉角帧，由内部 Daemon 判定。
+ * @note 角度接口返回 false 表达的是数据 freshness（是否可用于当前控制）；
+ *       链路在线判断统一使用本接口，不再单独维护超时计算。
+ */
+bool DM_IMU_IsOnline(void);
+
+/**
  * @brief 查询最近一次收到任意合法数据帧的时间。
  * @return HAL tick 毫秒值；从未收到时为 0。
  */

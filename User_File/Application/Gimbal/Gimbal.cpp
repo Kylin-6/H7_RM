@@ -252,6 +252,8 @@ Enum_Gimbal_Status Gimbal_GetStatus(void)
 void Gimbal_Update(void)
 {
 #if GIMBAL
+    // Fresh = 这份姿态是否可用于当前控制周期；设备 Online（liveness）由
+    // 各 Device 内的 Daemon 判定，两个概念独立，不做重复的掉线计算。
     ctx.ins_valid = MessageCenter::INS_State_Topic.ReadFresh(ctx.ins, ctx.config.ins_max_age_us);
     const auto message = MessageCenter::Gimbal_Command_Topic.ReadWithMeta();
     ctx.command = message.valid ? message.data : GimbalCmd{};

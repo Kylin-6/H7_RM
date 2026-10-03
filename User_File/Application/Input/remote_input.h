@@ -27,6 +27,14 @@ bool RemoteInput_Init(void);
 void RemoteInput_Update(void);
 
 /**
+ * @brief 读取 0x065 板间遥控链路的在线状态（ChassisBoard 内部 Daemon 结果）。
+ * @return true 表示链路 liveness 在线；非 legacy 配置（S.BUS 输入）恒返回 false。
+ * @note 供诊断层读取 Daemon 结论，不重复实现超时计算；控制输入的时效仍由
+ *       RemoteInput_Update 内的通道 freshness 独立判断。
+ */
+bool RemoteInput_IsLinkOnline(void);
+
+/**
  * @brief 读取最近一帧的三个原始通道值（未滤波、未映射）。
  * @param fire  输出火控开关通道；可为 nullptr。
  * @param dial  输出拨弹盘（波轮）通道；可为 nullptr。

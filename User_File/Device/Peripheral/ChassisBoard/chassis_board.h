@@ -21,6 +21,7 @@
 #define CHASSIS_BOARD_H
 
 #include "bsp_can.h"
+#include "daemon.h"
 #include "fdcan.h"
 
 #include <stdbool.h>
@@ -28,7 +29,7 @@
 
 /** 板间链路帧 ID：遥控关键通道。 */
 #define CHASSIS_BOARD_ID_REMOTE_CHANNELS (0x065U)
-/** 通道数据有效期，单位 ms；超过后视为链路失效。 */
+/** 链路 Daemon 超时与通道数据 freshness 共用门限，单位 ms。 */
 #define CHASSIS_BOARD_CHANNEL_TIMEOUT_MS (100U)
 
 /** 同一 0x065 帧的完整通道快照；时间戳为接收时间，单位 ms。 */
@@ -37,7 +38,7 @@ struct Struct_ChassisBoard_Channels
     int16_t fire = 0;
     int16_t dial = 0;
     int16_t pitch = 0;
-    uint32_t timestamp_ms = 0U;
+    uint32_t timestamp_ms = 0U; ///< 接收时间；用于输入 freshness 与调试，不参与在线判断。
 };
 
 class Class_ChassisBoard
@@ -66,7 +67,9 @@ public:
 
     /**
      * @brief 判断板间链路是否在线。
-     * @return true 表示最近 100 ms 内收到过 0x065。
+     * @return true 表示最近 100 ms 内收到过完整合法的 0x065（内部 Daemon 判定）。
+     * @note 这是链路 liveness 的唯一来源；单帧通道是否仍可用于控制
+     *       由 ReadChannels/ReadChannel 按接收时间戳 freshness 独立判断。
      */
     bool IsOnline() const;
 
@@ -86,11 +89,13 @@ private:
 
     FDCAN_HandleTypeDef *hfdcan = nullptr;
     bool initialized = false;
+    /** 链路 liveness 唯一来源；只有完成完整三通道解码的 0x065 帧 Feed。 */
+    Daemon link_daemon{CHASSIS_BOARD_CHANNEL_TIMEOUT_MS};
 
     volatile int16_t fire_channel = 0;
     volatile int16_t dial_channel = 0;
     volatile int16_t pitch_channel = 0;
-    volatile uint32_t last_rx_ms = 0U;
+    volatile uint32_t last_rx_ms = 0U; ///< 接收时间戳，用于 freshness 与调试。
     volatile bool received = false;
 };
 

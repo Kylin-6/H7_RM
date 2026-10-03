@@ -125,8 +125,8 @@ struct Struct_DJIMotor_Motion_Snapshot
 {
     float output_total_angle = 0.0f;
     float output_speed = 0.0f;
-    uint64_t timestamp_us = 0U;
-    bool online = false;
+    uint64_t timestamp_us = 0U; ///< 最近合法反馈的微秒时间戳，用于反馈年龄等实时 freshness。
+    bool online = false; ///< 唯一来源 feedback_daemon.IsOnline()。
     bool requested_enabled = false;
     bool ready = false;
 };
@@ -146,7 +146,7 @@ public:
     void Set_Outer_Loop(Enum_DJIMotor_Loop loop);
     bool Set_Feedback_Source(Enum_DJIMotor_Loop loop, Enum_DJIMotor_Feedback source,
                              const float *feedback = nullptr);
-    bool IsOnline();      ///< 微秒级即时反馈新鲜度，不依赖 StatusTask。
+    bool IsOnline();      ///< feedback_daemon 的即时 liveness 判定，不依赖 StatusTask。
     bool IsEnabled() const; ///< 驱动已初始化且本地输出开关已使能。
     bool IsDataValid();   ///< 驱动已初始化且反馈在线。
     bool IsHealthy();     ///< Enabled 与 DataValid 同时成立。
@@ -189,7 +189,6 @@ protected:
     float reference = 0.0f;
     float command_limit = 0.0f;
     float gear_ratio = 1.0f;
-    uint64_t feedback_timeout_us = 20000;
     bool has_temperature = false;
     bool reverse = false;
     bool requested_enabled = false;
