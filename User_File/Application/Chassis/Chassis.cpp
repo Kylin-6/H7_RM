@@ -14,6 +14,7 @@
 #include "message_center.h"
 
 #include "alg_slope.h"
+#include "alg_trajectory.h"
 #include "dmmotor.h"
 
 #include <cmath>
@@ -107,7 +108,7 @@ struct LegacyChassisContext
     Class_Slope x_slope;
     Class_Slope y_slope;
     Class_Slope w_slope;
-    Class_Slope yaw_slope;
+    Class_Trajectory yaw_trajectory;
     ChassisCmd command{};
     GimbalCmd yaw_command{};
     ChassisFeedback feedback{};
@@ -167,17 +168,22 @@ void ControlYaw(float chassis_yaw_rate_rad_s)
 
     const float stick_ratio =
         std::fabs(stick_speed) / kInfantryChassisConfig.yaw_speed_max_rad_s;
-    const float acceleration_limit =
-        kInfantryChassisConfig.yaw_accel_limit_min +
-        (kInfantryChassisConfig.yaw_accel_limit_max -
-         kInfantryChassisConfig.yaw_accel_limit_min) *
-            stick_ratio;
-
     const float speed_previous = ctx.yaw_speed;
-    ctx.yaw_speed = PlanAxis(ctx.yaw_slope, target_speed, acceleration_limit,
-                                    kInfantryChassisConfig.yaw_decel_limit,
-                                    kInfantryChassisConfig.yaw_release_limit,
-                                    kInfantryChassisConfig.yaw_reverse_limit);
+    if (std::fabs(target_speed) <= kInfantryChassisConfig.planning_threshold)
+    {
+        target_speed = 0.0f;
+    }
+    if (!ctx.yaw_trajectory.Set_Target_Velocity(target_speed) ||
+        ctx.yaw_trajectory.TIM_Calculate_PeriodElapsedCallback() == TRAJECTORY_ERROR)
+    {
+        (void)ctx.yaw_trajectory.Reset(0.0f);
+        ctx.yaw_speed = 0.0f;
+        ctx.yaw_torque_feedforward = 0.0f;
+        (void)ctx.yaw_motor.SetMIT(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
+        (void)ctx.yaw_motor.RequestEnabled(false);
+        return;
+    }
+    ctx.yaw_speed = ctx.yaw_trajectory.Get_Velocity();
 
     float kd_target = kInfantryChassisConfig.yaw_mit_kd_center +
                       (kInfantryChassisConfig.yaw_mit_kd_moving -
@@ -302,7 +308,11 @@ bool Chassis_Init(void)
     ctx.x_slope.Init(0.0f, 0.0f, Slope_First_TARGET);
     ctx.y_slope.Init(0.0f, 0.0f, Slope_First_TARGET);
     ctx.w_slope.Init(0.0f, 0.0f, Slope_First_TARGET);
-    ctx.yaw_slope.Init(0.0f, 0.0f, Slope_First_TARGET);
+    initialized = ctx.yaw_trajectory.Init(
+                      kInfantryChassisConfig.yaw_total_speed_max_rad_s,
+                      kInfantryChassisConfig.yaw_trajectory_accel_max,
+                      kInfantryChassisConfig.yaw_trajectory_jerk_max,
+                      kInfantryChassisConfig.control_dt_s) && initialized;
 
     /* 上电默认失能：先落 Yaw 安全目标，再对全部已配置电机请求失能；
      * 即使部分电机注册失败也尝试停住它们。 */
@@ -413,9 +423,8 @@ void Chassis_Update(void)
             else
             {
                 /* 失能期间清掉 Yaw 规划与 MIT 状态，恢复时从零速、中心阻尼起步。 */
-                ctx.yaw_speed = PlanToZero(
-                    ctx.yaw_slope, kInfantryChassisConfig.yaw_release_limit,
-                    kInfantryChassisConfig.yaw_reverse_limit);
+                (void)ctx.yaw_trajectory.Reset(0.0f);
+                ctx.yaw_speed = 0.0f;
                 ctx.yaw_kd = kInfantryChassisConfig.yaw_mit_kd_center;
                 ctx.yaw_torque_feedforward = 0.0f;
             }

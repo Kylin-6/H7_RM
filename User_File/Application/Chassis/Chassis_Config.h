@@ -62,6 +62,9 @@ struct InfantryChassisConfig
     float yaw_speed_max_rad_s = 8.0f;
     /** 底盘自转补偿后的 Yaw 总速度上限，rad/s。 */
     float yaw_total_speed_max_rad_s = 15.0f;
+    /** Yaw S 曲线试验参数：加速度 rad/s²、jerk rad/s³。 */
+    float yaw_trajectory_accel_max = 150.0f;
+    float yaw_trajectory_jerk_max = 15000.0f;
     /** 机体系 Z 轴角速度前馈增益，用于抑制底盘自转耦合。 */
     float yaw_rate_feedforward_gain = 1.0f;
     /** Yaw 速率限制：加速度上限随摇杆比例在 min/max 之间线性插值。 */

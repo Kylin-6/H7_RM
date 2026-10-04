@@ -52,11 +52,19 @@ RobotCmd 会把命令撤销为 `DISABLED`。
   `w0 = y + x + w`、`w1 = y - x + w`、`w2 = -y - x + w`、`w3 = x - y + w` → 单轮限幅 →
   `SetSpeed()`。组合式不做轮距与半径换算，与老工程一致。
 - Yaw：摇杆速度（±8 rad/s）减去底盘自转角速度前馈（BMI088 的 `gyro_z`，10 ms 新鲜
-  度）→ 总速度限幅（±15 rad/s）→ 非对称速率规划（加速度上限随摇杆比例在 60~150 之间插值）→ 自适应阻尼与
+  度）→ 总速度限幅（±15 rad/s）→ 框架 `Class_Trajectory` 速度 S 曲线 → 自适应阻尼与
   力矩前馈（逐周期限速）→ `SetMIT(0, speed, 0, kd, torque_ff)`。
-- 三轴与 Yaw 的速率规划用框架 `Class_Slope` 执行斜坡，非对称速率策略（反向先刹停、
+- 底盘三轴的速率规划用框架 `Class_Slope` 执行斜坡，非对称速率策略（反向先刹停、
   松手按释放减速度、加速/减速分别限幅、零速吸附）留在应用层，数值与老工程
   `SpeedPlanning_UpdateRateLimited` 逐项对应。
+
+Yaw S 曲线为响应优先试验版：速度上限 15 rad/s、对称加速度上限 150 rad/s²、
+jerk 上限 15000 rad/s³，周期 2 ms，运动中改目标从当前规划状态接续。
+此路径替代旧 Yaw 非对称斜坡，旧 `yaw_accel_limit_*`、`yaw_decel_limit`、
+`yaw_release_limit`、`yaw_reverse_limit` 参数暂不参与试验控制；底盘三轴不变。
+失能时重置 Yaw 规划为零，规划失败时提交安全目标并请求失能。
+主机使用框架规划器验证：0→8 rad/s 约 64 ms、8→-8 约 118 ms、8→0 约 64 ms；
+快速改目标及速度/加速度/jerk 边界检查通过。时间为规划输出结果，未测实机响应或 MCU 执行耗时。
 
 ### 量纲约定
 
