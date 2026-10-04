@@ -549,6 +549,32 @@ bool Class_DJIMotor::Check_Feedback_Timeout()
     return false;
 }
 
+/** @brief 独立清零未就绪电机并覆盖共享周期帧；失败在下次服务重试。 */
+void Class_DJIMotor::ServiceAll()
+{
+    for (uint8_t index = 0; index < DJI_MOTOR_MAX_GROUPS; ++index)
+    {
+        // 与 ControlTask 的组帧、积分更新及发布互斥，避免恢复后覆盖新输出。
+        const uint32_t interrupt_state = DJI_Motor_Enter_Critical();
+        Struct_DJIMotor_Tx_Group *sender = &DJI_Motor_Tx_Groups[index];
+        bool safe_output = false;
+        for (uint8_t slot = 0; slot < 4; ++slot)
+        {
+            if (sender->slot_owner[slot] != nullptr &&
+                !sender->slot_owner[slot]->Check_Feedback_Timeout())
+            {
+                safe_output = true;
+            }
+        }
+        if (safe_output)
+        {
+            // 只清除不安全成员，在线成员的槽位保持原值；不改变 App 请求许可。
+            (void)CAN_Tx_Perform(&sender->message);
+        }
+        DJI_Motor_Exit_Critical(interrupt_state);
+    }
+}
+
 /**
  * @brief 执行配置允许的串级 PID，将最终指令写入本电机的物理槽位。
  * @note 调用周期应与 PID 的 D_T 一致；本函数只组帧，随后由逻辑组 Send 发布到 CAN 周期槽。

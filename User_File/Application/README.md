@@ -29,8 +29,13 @@ Application 不应：
 - 解析底层 CAN/UART/SPI 协议帧。
 - 创建另一套消息总线或用字符串查找 Topic。
 - 把设备在线检测迁入应用消息中心。
-- 维护电机协议重试、退避或 CAN 发送细节；用电机快照决定何时计算机构目标。
+- 维护电机协议重试、退避或 CAN 发送细节。
+- 每周期逐个判断电机掉线并手动清零；基础 fail-safe 属于 Device，快照用于反馈及必要的功能策略。
 - 在多个模块中争用同一电机或同一命令所有权。
+
+安全职责为：合法反馈由 Device 校验并 Feed，Daemon 判断在线状态，Device 自动安全化输出，
+App 决定功能许可、目标和恢复策略。StatusTask 在 CheckAll 后调用电机 ServiceAll，
+设备基础保护不依赖 App 持续调用控制接口。完整时序见 [Daemon 文档](../System/Daemon/README.md#安全职责与调度)。
 
 ## 2. 当前目录
 
@@ -46,8 +51,12 @@ Chassis 与 Shoot 的机械参数和 PID 初值分别放在 `Chassis_Config.h`�
 运行状态和设备实例由各自 `.cpp` 内的私有 Context 持有。BoardConfig 只提供总线等硬件
 资源，不存机构参数。Gimbal 的配置保存在 `Gimbal_Config.h`，状态根据当前命令、INS 和电机快照计算。
 `Input` 保存 Remote 输入适配、输入状态和来源仲裁；设备协议仍由 Device/BSP 处理。
+接口、通道映射与来源接入例程见 [Input 开发指南](Input/README.md)。
 
-单板固件的硬件路径由 `H7_APP_GIMBAL`、`H7_APP_CHASSIS`、`H7_APP_SHOOT` 控制，默认均关闭；
+单板固件的 Gimbal、Chassis、Shoot App 由 `H7_APP_GIMBAL`、`H7_APP_CHASSIS`、`H7_APP_SHOOT` 控制，默认均关闭。
+关闭时 CMake 排除对应源码，任务不包含其头文件、不调用入口，也不发布对应应用反馈；INS 独立发布。
+RobotCmd 初始化由任务显式传入 Shoot 是否编入，未编入时拒绝射击事件；静态 Topic 与连续命令发布契约保留。
+本地应用关闭且无远端发布者时，对应反馈 getter 返回 false，保持调用者对象不变。
 双板固件由 CMake 在构建期分别选择应用和任务源码。板内命令通过 `LocalPublisher` 进入
 Message Center，云台板的底盘命令通过 `RemotePublisher` 进入固定 CAN Transport。
 
@@ -73,6 +82,8 @@ RobotCmd 初始化失败时控制任务停在延时循环；不会继续初始�
 Gimbal/Chassis 板间轮询复用该任务，不创建额外控制任务。
 
 ## 4. RobotCmd：命令唯一入口
+
+接口契约、发布时序与逐函数代码见 [RobotCmd 开发指南](RobotCmd/README.md)。
 
 RobotCmd 不直接访问电机、CAN 或 IMU。输入链现在是：
 
@@ -112,6 +123,8 @@ CH1–CH4 回中后解锁。CH2/CH1 映射底盘前后/左右，CH7 为速度档
 CH5 跟随、CH3/CH4 云台与 CH6 发射暂未接入。旧步兵的 30/50 非 SI 参数不移植，
 目前调试上限为 0.5 m/s 和 1 rad/s，实车使用前须确认方向、机械零位与限幅。
 失联时清除未执行的发射事件，并立即发布 Gimbal `DISABLED`、Chassis `ZERO_FORCE`、Shoot `OFF`。
+失去输入许可和获许可时切换来源两处共用私有 `RobotCmd_DiscardShootEvents()`；
+清理仍发生在新来源目标装载之前，命令发布频率与来源仲裁顺序不变。
 
 RobotCmd 独立初始化时的默认值如下；ControlTask 随后初始化 UART5 输入互锁，
 在 S.BUS 解锁前把云台覆盖为 `DISABLED`：
@@ -134,6 +147,8 @@ INS 桥仅发布新欧拉角帧，避免失联后重复刷新 Topic 的时效。
 反馈按 100 Hz 发布，`enabled` 仅反映本板 Pitch 电机的当前许可与 ready 状态。
 
 ## 6. Chassis
+
+底盘移植、框架接口及按函数代码例程见 [四舵轮底盘指南](Chassis/README.md)。
 
 当前底盘模型为四舵轮 AGV：
 
@@ -196,7 +211,7 @@ STOP 模式每周期最多消费一个事件：首次事件从当前反馈角建
 每次成功 Push 只代表一个逻辑动作请求；事件按目标角累加，不等待前一发物理完成。
 上述 DJI 例程没有摩擦轮就绪、卡弹回退或热量限制；老步兵路径保留这些机构逻辑，见发射说明。
 
-调用者必须检查 `RobotCmd_PushShootEvent()` 返回值。返回 false 表示队列已满，本次动作
+调用者必须检查 `RobotCmd_PushShootEvent()` 返回值。返回 false 表示 Shoot 未编入、输入未获许可或队列已满，本次动作
 没有被接受。
 
 ## 8. Message Center 使用规则
@@ -265,8 +280,7 @@ void Example_Update(void);
 ## 12. 开源适配
 
 Application 边界、四舵轮运动学和基础发射控制参考 Meta-Embedded-NG，并适配为本工程
-的 C++ Device、CMSIS-RTOS v2、静态 Message Center 和 CAN 提交语义。许可信息见
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+的 C++ Device、CMSIS-RTOS v2、静态 Message Center 和 CAN 提交语义。
 
 ## 13. 相关文档
 

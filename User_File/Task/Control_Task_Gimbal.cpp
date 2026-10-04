@@ -47,7 +47,7 @@ extern "C" void Control_Task(void *)
     static RemotePublisher<ChassisCmd> chassis_output;
     static LocalPublisher<ShootCmd> shoot_output(MessageCenter::Shoot_Command_Topic);
 #endif
-    if (!RobotCmd_Init(gimbal_output.Bind(), chassis_output.Bind(), shoot_output.Bind()))
+    if (!RobotCmd_Init(gimbal_output.Bind(), chassis_output.Bind(), shoot_output.Bind(), true))
     {
 #if LEGACY_INFANTRY_GIMBAL
         Diagnostics_PublishInitFailure();
