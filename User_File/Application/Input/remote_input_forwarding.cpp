@@ -37,7 +37,7 @@ constexpr unsigned kChannelFollowSwitch = 4U;
 constexpr unsigned kChannelTranslateX = 1U;
 /** 左右方向摇杆。 */
 constexpr unsigned kChannelTranslateY = 0U;
-/** 旋转摇杆：>= 0 时交给跟随逻辑，否则为手动旋转。 */
+/** 旋转摇杆：>= +350 时交给跟随逻辑，否则为手动旋转。 */
 constexpr unsigned kChannelRotation = 9U;
 /** 三档速度限幅通道。 */
 constexpr unsigned kChannelSpeedGear = 6U;
@@ -56,12 +56,12 @@ constexpr unsigned kChannelPitch = 2U;
 constexpr float kChannelMax = 784.0f;
 constexpr float kTranslateXDeadband = 0.04f;
 constexpr float kTranslateYDeadband = 0.04f;
-constexpr float kRotationDeadband = 0.04f;
+constexpr int16_t kRotationTrigger = 350;
 constexpr float kTranslateXExpo = 0.35f;
 constexpr float kTranslateYExpo = 0.35f;
 constexpr float kRotationExpo = 0.30f;
 constexpr float kYawDeadband = 0.03f;
-constexpr float kYawExpo = 0.55f;
+constexpr float kYawExpo = 0.40f;
 /** 跟随开关判决门限。 */
 constexpr int16_t kFollowSwitchThreshold = 0;
 /** 火控开关极性：实车开关方向与云台板约定相反，转发前取反。 */
@@ -250,10 +250,14 @@ void RemoteInput_Update(void)
         -ShapeStick(frame.channels[kChannelTranslateY], kTranslateYDeadband,
                     kTranslateYExpo) *
         speed_limit_y;
-    float velocity_w =
-        ShapeStick(frame.channels[kChannelRotation], kRotationDeadband,
-                   kRotationExpo) *
-        rotation_limit;
+    /* +350 为零速边界，向负满杆连续增加自转速度，保持原来的旋转方向。 */
+    const float rotation_stick = Basic_Math_Constrain(
+        (static_cast<float>(kRotationTrigger) - frame.channels[kChannelRotation]) /
+            (kChannelMax + kRotationTrigger),
+        0.0f, 1.0f);
+    float velocity_w = -((1.0f - kRotationExpo) * rotation_stick +
+                         kRotationExpo * rotation_stick * rotation_stick * rotation_stick) *
+                       rotation_limit;
 
     /* Yaw 轴是真实 rad/s 语义，直接提交；符号与老工程一致（摇杆正方向对应负输出）。 */
     GimbalCmd gimbal_command{};
@@ -279,11 +283,11 @@ void RemoteInput_Update(void)
     }
 
     /*
-     * 旋转摇杆非负时放弃手动旋转：开关 1 抬起交由底盘跟随云台，否则原地不转；
-     * 摇杆回拉（< 0）时保留上面的手动旋转值。
+     * 旋转通道 >= +350 时交由跟随开关决定跟随或不转；
+     * 通道 < +350 时保留上面的手动旋转值。
      */
     ChassisCmd chassis_command{};
-    if (frame.channels[kChannelRotation] >= 0)
+    if (frame.channels[kChannelRotation] >= kRotationTrigger)
     {
         if (frame.channels[kChannelFollowSwitch] > kFollowSwitchThreshold)
         {
@@ -335,4 +339,3 @@ bool RemoteInput_IsLinkOnline(void)
      * 健康互锁（50 ms 帧新鲜度、失控位、200 ms 回中解锁）保持独立。 */
     return initialized && SBUS_IsOnline();
 }
-

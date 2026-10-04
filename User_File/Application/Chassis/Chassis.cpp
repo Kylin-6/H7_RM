@@ -162,8 +162,8 @@ void ControlYaw(float chassis_yaw_rate_rad_s)
                          kInfantryChassisConfig.yaw_rate_feedforward_gain *
                              chassis_yaw_rate_rad_s;
     target_speed = Basic_Math_Constrain(target_speed,
-                                        -kInfantryChassisConfig.yaw_speed_max_rad_s,
-                                        kInfantryChassisConfig.yaw_speed_max_rad_s);
+                                        -kInfantryChassisConfig.yaw_total_speed_max_rad_s,
+                                        kInfantryChassisConfig.yaw_total_speed_max_rad_s);
 
     const float stick_ratio =
         std::fabs(stick_speed) / kInfantryChassisConfig.yaw_speed_max_rad_s;
