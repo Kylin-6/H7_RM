@@ -41,6 +41,10 @@ struct InfantryChassisConfig
     float w_decel_limit = 350.0f;
     float w_release_limit = 250.0f;
     float w_reverse_limit = 600.0f;
+    /** 三轴 S 曲线 jerk 上限，单位 抽象速度/s²；约 10 ms 建立最大加速度。 */
+    float x_jerk_limit = 18000.0f;
+    float y_jerk_limit = 18000.0f;
+    float w_jerk_limit = 35000.0f;
     /** 零速吸附门限，同量纲。 */
     float planning_threshold = 0.1f;
 
@@ -64,7 +68,7 @@ struct InfantryChassisConfig
     float yaw_total_speed_max_rad_s = 15.0f;
     /** Yaw S 曲线试验参数：加速度 rad/s²、jerk rad/s³。 */
     float yaw_trajectory_accel_max = 150.0f;
-    float yaw_trajectory_jerk_max = 15000.0f;
+    float yaw_trajectory_jerk_max = 7500.0f;
     /** 机体系 Z 轴角速度前馈增益，用于抑制底盘自转耦合。 */
     float yaw_rate_feedforward_gain = 1.0f;
     /** Yaw 速率限制：加速度上限随摇杆比例在 min/max 之间线性插值。 */

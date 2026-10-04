@@ -13,7 +13,6 @@
 #include "board_config.h"
 #include "message_center.h"
 
-#include "alg_slope.h"
 #include "alg_trajectory.h"
 #include "dmmotor.h"
 
@@ -41,59 +40,18 @@ float MoveTowards(float current, float target, float maximum_delta)
     return current + (delta > 0.0f ? maximum_delta : -maximum_delta);
 }
 
-/**
- * @brief 单轴速率受限规划。
- * @details 非对称速率策略（反向先刹停、松手按释放减速度、加速/减速分别限幅）留在本层，
- *          斜坡本身由框架 Class_Slope 执行，数值与老工程
- *          SpeedPlanning_UpdateRateLimited 逐项对应。
- */
-float PlanAxis(Class_Slope &slope, float target, float acceleration_limit,
-                      float deceleration_limit, float release_limit,
-                      float reversal_limit)
+/** 单轴 S 曲线速度规划；失败时由调用者安全化四轮输出。 */
+bool PlanAxis(Class_Trajectory &trajectory, float target, float *speed)
 {
-    /* 零速吸附：小于门限的目标直接归零，避免电机长期爬极小的速度。 */
-    float planned_target =
+    const float planned_target =
         std::fabs(target) <= kInfantryChassisConfig.planning_threshold ? 0.0f : target;
-    const float current = slope.Get_Out();
-
-    float rate_limit;
-    if (current * planned_target < 0.0f)
+    if (!trajectory.Set_Target_Velocity(planned_target) ||
+        trajectory.TIM_Calculate_PeriodElapsedCallback() == TRAJECTORY_ERROR)
     {
-        /* 反向：先按反向减速度刹停，下一周期再反向加速。 */
-        planned_target = 0.0f;
-        rate_limit = reversal_limit;
+        return false;
     }
-    else if (planned_target == 0.0f)
-    {
-        rate_limit = release_limit;
-    }
-    else if (std::fabs(planned_target) > std::fabs(current))
-    {
-        rate_limit = acceleration_limit;
-    }
-    else
-    {
-        rate_limit = deceleration_limit;
-    }
-
-    const float step =
-        std::fmax(rate_limit, 0.0f) * kInfantryChassisConfig.control_dt_s;
-    slope.Set_Increase_Value(step);
-    slope.Set_Decrease_Value(step);
-    slope.Set_Target(planned_target);
-    slope.TIM_Calculate_PeriodElapsedCallback();
-    return slope.Get_Out();
-}
-
-/**
- * @brief 失能路径：把已规划速度按释放减速度拉回零。
- * @details 目标为 0 时速率策略只用到释放减速度，加速/减速上限不参与判断；本函数只维护
- *          规划状态与反馈，不产生任何电机输出，重新使能时从零速平滑起步。
- */
-float PlanToZero(Class_Slope &slope, float release_limit, float reversal_limit)
-{
-    return PlanAxis(slope, 0.0f, release_limit, release_limit, release_limit,
-                           reversal_limit);
+    *speed = trajectory.Get_Velocity();
+    return true;
 }
 
 struct LegacyChassisContext
@@ -105,9 +63,9 @@ struct LegacyChassisContext
         MessageCenter::Gimbal_Feedback_Topic};
     Class_DMMotor wheel_motor[MOTOR_COUNT];
     Class_DMMotor yaw_motor;
-    Class_Slope x_slope;
-    Class_Slope y_slope;
-    Class_Slope w_slope;
+    Class_Trajectory x_trajectory;
+    Class_Trajectory y_trajectory;
+    Class_Trajectory w_trajectory;
     Class_Trajectory yaw_trajectory;
     ChassisCmd command{};
     GimbalCmd yaw_command{};
@@ -304,10 +262,22 @@ bool Chassis_Init(void)
                       kInfantryChassisConfig.yaw_torque_max_nm) &&
                   initialized;
 
-    /* 三个受控轴都从零速起步；Class_Slope 用目标值优先，逐周期速率由规划层给。 */
-    ctx.x_slope.Init(0.0f, 0.0f, Slope_First_TARGET);
-    ctx.y_slope.Init(0.0f, 0.0f, Slope_First_TARGET);
-    ctx.w_slope.Init(0.0f, 0.0f, Slope_First_TARGET);
+    /* 三轴 S 曲线从零速起步；限幅沿用各轴现有速度与加速度上限。 */
+    initialized = ctx.x_trajectory.Init(
+                      kInfantryChassisConfig.velocity_x_max,
+                      kInfantryChassisConfig.x_accel_limit,
+                      kInfantryChassisConfig.x_jerk_limit,
+                      kInfantryChassisConfig.control_dt_s) && initialized;
+    initialized = ctx.y_trajectory.Init(
+                      kInfantryChassisConfig.velocity_y_max,
+                      kInfantryChassisConfig.y_accel_limit,
+                      kInfantryChassisConfig.y_jerk_limit,
+                      kInfantryChassisConfig.control_dt_s) && initialized;
+    initialized = ctx.w_trajectory.Init(
+                      kInfantryChassisConfig.angular_velocity_max,
+                      kInfantryChassisConfig.w_accel_limit,
+                      kInfantryChassisConfig.w_jerk_limit,
+                      kInfantryChassisConfig.control_dt_s) && initialized;
     initialized = ctx.yaw_trajectory.Init(
                       kInfantryChassisConfig.yaw_total_speed_max_rad_s,
                       kInfantryChassisConfig.yaw_trajectory_accel_max,
@@ -376,43 +346,39 @@ void Chassis_Update(void)
             if (wheels_enabled)
             {
                 /* 先把 SI 仲裁边界的目标还原为老步兵抽象速度量纲。 */
-                ctx.planned_x = PlanAxis(
-                    ctx.x_slope,
-                    Chassis_TranslateX_FromSi(ctx.command.velocity_x_m_s),
-                    kInfantryChassisConfig.x_accel_limit,
-                    kInfantryChassisConfig.x_decel_limit,
-                    kInfantryChassisConfig.x_release_limit,
-                    kInfantryChassisConfig.x_reverse_limit);
-                ctx.planned_y = PlanAxis(
-                    ctx.y_slope,
-                    Chassis_TranslateY_FromSi(ctx.command.velocity_y_m_s),
-                    kInfantryChassisConfig.y_accel_limit,
-                    kInfantryChassisConfig.y_decel_limit,
-                    kInfantryChassisConfig.y_release_limit,
-                    kInfantryChassisConfig.y_reverse_limit);
-                ctx.planned_w = PlanAxis(
-                    ctx.w_slope,
-                    Chassis_Rotation_FromSi(
-                        ctx.command.angular_velocity_rad_s),
-                    kInfantryChassisConfig.w_accel_limit,
-                    kInfantryChassisConfig.w_decel_limit,
-                    kInfantryChassisConfig.w_release_limit,
-                    kInfantryChassisConfig.w_reverse_limit);
-
-                ControlWheels(ctx.planned_x, ctx.planned_y, ctx.planned_w);
+                const bool x_valid = PlanAxis(
+                    ctx.x_trajectory,
+                    Chassis_TranslateX_FromSi(ctx.command.velocity_x_m_s), &ctx.planned_x);
+                const bool y_valid = PlanAxis(
+                    ctx.y_trajectory,
+                    Chassis_TranslateY_FromSi(ctx.command.velocity_y_m_s), &ctx.planned_y);
+                const bool w_valid = PlanAxis(
+                    ctx.w_trajectory,
+                    Chassis_Rotation_FromSi(ctx.command.angular_velocity_rad_s), &ctx.planned_w);
+                if (x_valid && y_valid && w_valid)
+                {
+                    ControlWheels(ctx.planned_x, ctx.planned_y, ctx.planned_w);
+                }
+                else
+                {
+                    ControlWheels(0.0f, 0.0f, 0.0f);
+                    for (uint8_t index = 0U; index < MOTOR_COUNT; ++index)
+                    {
+                        (void)ctx.wheel_motor[index].RequestEnabled(false);
+                    }
+                    (void)ctx.x_trajectory.Reset(0.0f);
+                    (void)ctx.y_trajectory.Reset(0.0f);
+                    (void)ctx.w_trajectory.Reset(0.0f);
+                    ctx.planned_x = ctx.planned_y = ctx.planned_w = 0.0f;
+                }
             }
             else
             {
-                /* 失能期间让三轴规划按释放减速度回零，重新使能时从零速平滑起步。 */
-                ctx.planned_x = PlanToZero(
-                    ctx.x_slope, kInfantryChassisConfig.x_release_limit,
-                    kInfantryChassisConfig.x_reverse_limit);
-                ctx.planned_y = PlanToZero(
-                    ctx.y_slope, kInfantryChassisConfig.y_release_limit,
-                    kInfantryChassisConfig.y_reverse_limit);
-                ctx.planned_w = PlanToZero(
-                    ctx.w_slope, kInfantryChassisConfig.w_release_limit,
-                    kInfantryChassisConfig.w_reverse_limit);
+                /* 失能时清零规划状态，恢复后从零速起步。 */
+                (void)ctx.x_trajectory.Reset(0.0f);
+                (void)ctx.y_trajectory.Reset(0.0f);
+                (void)ctx.w_trajectory.Reset(0.0f);
+                ctx.planned_x = ctx.planned_y = ctx.planned_w = 0.0f;
             }
 
             if (yaw_enabled)

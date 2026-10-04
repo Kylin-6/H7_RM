@@ -61,7 +61,7 @@ constexpr float kTranslateXExpo = 0.35f;
 constexpr float kTranslateYExpo = 0.35f;
 constexpr float kRotationExpo = 0.30f;
 constexpr float kYawDeadband = 0.03f;
-constexpr float kYawExpo = 0.40f;
+constexpr float kYawExpo = 0.30f;
 /** 跟随开关判决门限。 */
 constexpr int16_t kFollowSwitchThreshold = 0;
 /** 火控开关极性：实车开关方向与云台板约定相反，转发前取反。 */
