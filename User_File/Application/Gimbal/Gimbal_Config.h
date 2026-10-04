@@ -74,10 +74,8 @@ inline Struct_Gimbal_Config Gimbal_Default_Config()
     config.pitch.torque_max = 10.0f;
     // 电机正方向与 DM-IMU Pitch 正方向相反，只在最终力矩边界取负。
     config.pitch_torque.torque_sign = -1.0f;
-#if LEGACY_INFANTRY_GIMBAL
     // DM-IMU 桥已差分并滤波；不二次低通、不更换已标定的反馈源。
     config.pitch_torque.imu_velocity_filter_tau_s = 0.0f;
-#endif
     return config;
 }
 

@@ -1,6 +1,6 @@
 # 老步兵云台 WS2812 debug 指南
 
-本指南对应 GimbalBoard / LEGACY_INFANTRY_GIMBAL 的单 Pitch 实车配置。
+本指南对应 GimbalBoard 的单 Pitch 实车配置。
 单颗板载 WS2812 按优先级显示故障，所有异常同时保存在诊断位图中。
 指示灯只观察，不修改电机控制、供电、安全互锁或故障复位条件。
 
@@ -116,7 +116,7 @@ ControlTask 在应用更新后每 10 ms 发布一次快照；TIM_1ms_Task 的已
 读取快照、选择灯效、设置 RGB、执行原 SPI6 刷新。同一任务负责颜色设置和发送，
 不新增线程，不直接读取其他任务的应用 Context。
 
-只有 LEGACY_INFANTRY_GIMBAL 且 BoardConfig.indicators=true 才运行本灯效。
+GimbalBoard 构建（Diagnostics 模块编入）且 BoardConfig.indicators=true 才运行本灯效。
 SPI 提交失败沿用驱动下一周期重试。CPU 死机、定时器任务停顿、LED / SPI6 故障时，
 灯可能停留在最后颜色或熄灭，不能把绿灯当作硬件看门狗，也不能靠此灯检测整个 CPU 死机。
 

@@ -126,13 +126,9 @@ extern "C" void System_Init(void)
     }
     if (hardware.power)
     {
-#if LEGACY_INFANTRY_GIMBAL
-        /* 老步兵云台板实车决定：只开板载 5V，两路 24V 保持关闭（电机用外部供电），
+        /* 两路 24V 轨由板型配置决定（老步兵云台板只开板载 5V，电机用外部供电）；
          * 未经硬件确认不得改变电源开关状态。 */
-        BSP_Power.Init(false, false, true);
-#else
-        BSP_Power.Init(true, true, true);
-#endif
+        BSP_Power.Init(hardware.power_dc24, hardware.power_dc24, true);
     }
     if (hardware.usb_debug)
     {

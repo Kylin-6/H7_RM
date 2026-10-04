@@ -60,9 +60,9 @@ RobotCmd 初始化由任务显式传入 Shoot 是否编入，未编入时拒绝�
 双板固件由 CMake 在构建期分别选择应用和任务源码。板内命令通过 `LocalPublisher` 进入
 Message Center，云台板的底盘命令通过 `RemotePublisher` 进入固定 CAN Transport。
 
-老步兵云台板单一构建（`LEGACY_INFANTRY_GIMBAL=1`，Gimbal + Shoot 启用、Chassis 关闭）：
-关闭的模块仍保留消息端点和反馈结构，但不会访问对应电机硬件；Remote 输入由
-`Input/remote_input` 的 legacy 段从底盘板 0x065 转发读取，而非本板 S.BUS。
+老步兵云台板单一构建（Gimbal + Shoot 启用、Chassis 关闭）：关闭的模块仍保留消息
+端点和反馈结构，但不会访问对应电机硬件；Remote 输入由
+`Input/remote_input_forwarded` 从底盘板 0x065 转发读取，而非本板 S.BUS。
 
 ## 3. Control_Task 生命周期
 

@@ -15,7 +15,7 @@
 #include "usb_device.h"
 #include "user_task.h"
 
-#if LEGACY_INFANTRY_GIMBAL && SHOOT
+#if SHOOT
 #include "remote_input.h"
 #include "Shoot.h"
 #include "bsp_uart.h"
@@ -26,7 +26,7 @@
 
 /* Private macros ------------------------------------------------------------*/
 
-#if LEGACY_INFANTRY_GIMBAL && SHOOT
+#if SHOOT
 /** JustFloat 发送周期，单位 ms。115200 波特率下 100 B 帧约占 8.7 ms。 */
 #define SHOOT_TELEMETRY_PERIOD_MS (10U)
 /** JustFloat 通道数：原 16 路诊断 + 8 路 M2006/C610 排查数据。 */
@@ -61,13 +61,13 @@ extern "C" void Transport_Task(void *argument)
     EricTool_USB.Set_Data(3, (int) &Debug_IMU_Data.Euler_Yaw_rad,
                          (int) &Debug_IMU_Data.Euler_Pitch_rad,
                          (int) &Debug_IMU_Data.Euler_Roll_rad);
-#if LEGACY_INFANTRY_GIMBAL && SHOOT
+#if SHOOT
     uint32_t uart_last_wake_time = osKernelGetTickCount();
 #endif
     for (;;)
     {
         EricTool_USB.TIM_1ms_Write_PeriodElapsedCallback();
-#if LEGACY_INFANTRY_GIMBAL && SHOOT
+#if SHOOT
         /* 云台板原工程用 USART1 JustFloat 观察板间通道与发射诊断，这里保持 100 Hz。 */
         {
             // 静态缓冲避免占用线程栈；小端序下 float 数组可直接按字节发送。

@@ -3,11 +3,11 @@
 const BoardHardware &BoardConfig_Get(void)
 {
     /*
-     * 老步兵云台板（LEGACY_INFANTRY_GIMBAL）：
+     * 老步兵云台板：
      * 1. Yaw 轴由底盘板主控（双板分工），云台板不接 Yaw 电机；
      *    Pitch 由单轴 Gimbal 的 IMU 力矩闭环控制。
-     * 2. 电源开关由 Init 内的 LEGACY_INFANTRY_GIMBAL 分支固定为只开 5V，
-     *    两路 24V 保持关闭，电机使用既有外部供电；未经硬件确认不得改变。
+     * 2. 只开板载 5V，两路 24V 保持关闭（power_dc24=false），
+     *    电机使用既有外部供电；未经硬件确认不得改变。
      * 3. 板上未安装 W25Q64JV，BMI088 硬件故障（姿态来自 FDCAN3 的 DM-IMU），
      *    ADC 采样链路不可用，均不初始化。
      * 4. DM3519 摩擦轮在 FDCAN1，M2006 拨弹盘在 FDCAN2。
@@ -27,6 +27,7 @@ const BoardHardware &BoardConfig_Get(void)
         &hfdcan3, // external_imu_bus：DM-IMU
         &hfdcan2, // shoot_loader_bus：M2006
         &hfdcan2, // remote_forward_bus：0x065
+        false,    // power_dc24：两路 24V 保持关闭
     };
     return hardware;
 }

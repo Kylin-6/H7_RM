@@ -21,6 +21,8 @@ struct BoardHardware
     FDCAN_HandleTypeDef* external_imu_bus = nullptr;
     FDCAN_HandleTypeDef* shoot_loader_bus = nullptr;
     FDCAN_HandleTypeDef* remote_forward_bus = nullptr;
+    // 两路 24V 输出轨的使能；默认开启。老步兵云台板固定关闭（电机用外部供电）。
+    bool power_dc24 = true;
 };
 
 const BoardHardware &BoardConfig_Get(void);

@@ -206,11 +206,7 @@ if(H7_BOARD STREQUAL "SingleBoard")
         User_File/Application/RobotCmd/RobotCmd.cpp
         User_File/Application/Input/remote_input.cpp
         User_File/Application/Input/input_state.cpp
-        User_File/Application/Input/source_arbitration.cpp
-        # SingleBoard 安全模板：三个 App 源以宏=0 参与编译检查，不进入链接逻辑。
-        User_File/Application/Gimbal/Gimbal.cpp
-        User_File/Application/Chassis/Chassis.cpp
-        User_File/Application/Shoot/Shoot.cpp)
+        User_File/Application/Input/source_arbitration.cpp)
 elseif(H7_BOARD STREQUAL "GimbalBoard")
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         User_Config/Board/gimbal_board_config.cpp
@@ -220,7 +216,7 @@ elseif(H7_BOARD STREQUAL "GimbalBoard")
         User_File/Application/Diagnostics/Diagnostics.cpp
         User_File/Application/Diagnostics/Diagnostics_Runtime.cpp
         User_File/Application/RobotCmd/RobotCmd.cpp
-        User_File/Application/Input/remote_input.cpp
+        User_File/Application/Input/remote_input_forwarded.cpp
         User_File/Application/Input/input_state.cpp
         User_File/Application/Input/source_arbitration.cpp
         # 老步兵云台板设备适配：DM-IMU（BMI088 损坏）、
@@ -320,11 +316,10 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add project symbols (macros)
 
 # 老步兵云台板双板分工（架构决定，不要打开）：
-# - Yaw 轴由底盘板主控负责，云台板固件固定不编译 Yaw 轴
-#   （LEGACY_INFANTRY_GIMBAL_YAW=0），不要因 BMI088 修复而改变。
-# - 遥控通道由底盘板经 FDCAN2 的 0x065 帧转发，由 Input/remote_input 适配接收。
-# LEGACY_INFANTRY_GIMBAL 仅在 GimbalBoard 角色下为 1：Debug/Release 的 SingleBoard
-# 安全模板走纯框架路径，避免 legacy 段引用的 chassis_board 等专属源缺席链接失败。
+# - Yaw 轴由底盘板主控负责，云台板固件不注册 Yaw 电机，不要因 BMI088 修复而改变。
+# - 遥控通道由底盘板经 FDCAN2 的 0x065 帧转发，由 Input/remote_input_forwarded
+#   适配接收；SingleBoard 安全模板保持纯框架实现（remote_input.cpp 的 S.BUS 路径）。
+# 未装配器件（BMI088/W25Q64JV）的服务由 BoardConfig 能力标志在运行时门控。
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
     BALANCE=1
@@ -332,8 +327,6 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     CHASSIS=$<BOOL:${H7_APP_CHASSIS}>
     SHOOT=$<BOOL:${H7_APP_SHOOT}>
     H7_HAS_DM_MOTOR=$<NOT:$<STREQUAL:${H7_BOARD},ChassisBoard>>
-    LEGACY_INFANTRY_GIMBAL=$<STREQUAL:${H7_BOARD},GimbalBoard>
-    LEGACY_INFANTRY_GIMBAL_YAW=0
 )
 
 # Remove wrong libob.a library dependency when using cpp files

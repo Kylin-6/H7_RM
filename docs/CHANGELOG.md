@@ -8,6 +8,35 @@
 
 ## 2026-10-04
 
+### 云台应用重写为直接实现，移除 LEGACY_INFANTRY_GIMBAL
+
+- 云台/发射应用去掉全部功能条件编译（`#if GIMBAL`、`LEGACY_INFANTRY_GIMBAL`）：
+  Gimbal 即老步兵单 Pitch IMU 力矩闭环，Shoot 即 DM3519 + M2006 老步兵实现，
+  框架替代实现从本分支删除。应用由构建期源码选择（H7_APP_GIMBAL/SHOOT）编入
+  GimbalBoard，关闭时不编译、不调度、不发布反馈。
+- Control_Task_Gimbal 单一路径：DM-IMU 桥 + Diagnostics + 三本地 Output；
+  框架 BoardTransport 分支不再保留。
+- Remote 输入按板选源：`remote_input.cpp`（S.BUS，SingleBoard 模板）与
+  `remote_input_forwarded.cpp`（0x065 板间转发，GimbalBoard）实现同一接口，
+  删除 remote_input 内的 legacy 条件段。
+- 板级硬件差异收敛到 BoardConfig 运行时能力标志：TIM_1ms 回调表的
+  W25Q64JV/BMI088 条目按 flash/imu 标志门控，EXTI 回调统一走"未初始化即返回"，
+  BMI088 姿态任务在 GimbalBoard 装配中固定不创建，Init 的 24V 电源轨开关改为
+  BoardHardware.power_dc24（云台板 false，只开 5V 的实车决定不变）。
+- Robot_Diagnostic_Topic 改为无条件定义；SingleBoard 模板不再编译应用源码
+  （与框架"关闭即不编译"一致）；产物名、presets 与构建脚本不受影响。
+- GimbalBoard / Debug / ChassisBoard 三树构建通过；GimbalBoard 符号检查确认
+  链入重写后的云台/发射/转发输入实现，Debug 确认不含应用符号。未做实机验证，
+  控制律、整形参数与灯效行为与重写前逐字一致（仅守卫与路径选择方式改变）。
+
+### 合入最新框架主线
+
+- 合入 framework/main（至 `3461da3`，9b00782 之后 18 个提交）：DJIMotor/DMMotor
+  掉线保护下沉、StatusTask 100 Hz ServiceAll、RobotCmd 射击事件门控、
+  EKF/Kalman/Matrix/ADC 上游修复、构建期应用选择与文档同步。
+- 保留老步兵云台与发射应用实现及 DM-IMU/0x065/WS2812 诊断适配；
+  CHANGELOG 保留双方条目。
+
 ### 合入上游算法与 ADC 修复
 
 - 从 H7_BSP main `300c220` 选择性移植 `9fc7258`、`c172e36`、`300c220` 的 Matrix、Kalman 与 EKF 修复。求逆使用缩放部分选主元并检查非有限值；滤波测量更新返回 bool，失败时保留当前 X/P 并清零 K；EKF 分阶段校验并复用中间结果。

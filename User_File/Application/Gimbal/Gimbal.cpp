@@ -3,27 +3,29 @@
  * @brief 老步兵单 Pitch 云台：框架消息入口、私有设备所有权和 IMU 力矩闭环。
  * @details Yaw 由底盘板主控，本板不注册 Yaw。Pitch 电机编码器用于健康判断，
  *          角度/角速度来自统一 INS Topic；DM-IMU 的适配与换算由设备桥完成。
+ *          应用按构建期源码选择编入 GimbalBoard（H7_APP_GIMBAL），文件内不再
+ *          保留功能条件编译；关闭时不编译、不调度、不发布云台反馈。
  */
 #include "Gimbal.h"
 #include "message_center.h"
-#if GIMBAL
+
 #include "alg_filter_iir.h"
 #include "alg_pid.h"
 #include "alg_slope.h"
 #include "dmmotor.h"
 #include "stm32h7xx_hal.h"
-#endif
+
 #include <cmath>
 
 namespace
 {
 constexpr float CONTROL_PERIOD_S = 0.001f;
+
 struct GimbalContext
 {
     INS_State ins{};
     bool ins_valid = false;
     uint8_t feedback_divider = 0U;
-#if GIMBAL
     Struct_Gimbal_Config config{};
     Class_DMMotor pitch_motor;
     Struct_DMMotor_Snapshot motor_snapshot{};
@@ -38,16 +40,23 @@ struct GimbalContext
     bool path_initialized = false;
     uint32_t arming_start_ms = 0U;
     float disturbance_torque_nm = 0.0f;
-#endif
 };
+
 GimbalContext ctx;
 
-#if GIMBAL
+/**
+ * @brief 将数值限制在闭区间 [minimum, maximum] 内。
+ * @note 调用方保证上下界有序、输入有限；不承担参数校验。
+ */
 float Clamp(float value, float minimum, float maximum)
 {
     return value < minimum ? minimum : (value > maximum ? maximum : value);
 }
 
+/**
+ * @brief 校验 IMU 力矩控制参数与机械限位。
+ * @return 应用层约束全部满足时返回 true；总线、协议量程等由设备 Init 继续校验。
+ */
 bool ConfigValid(const Struct_Gimbal_Config& config)
 {
     const auto& c = config.pitch_torque;
@@ -80,6 +89,10 @@ bool ConfigValid(const Struct_Gimbal_Config& config)
            config.pitch_min < config.pitch_max;
 }
 
+/**
+ * @brief 对已注册的 Pitch 电机请求失能，并复位武装与控制路径状态。
+ * @note 驱动处理边沿安全目标、失能帧及失败补交；重复请求不刷总线。
+ */
 void Stop()
 {
     // 驱动处理边沿安全目标、失能帧及失败补交；重复请求不刷总线。
@@ -93,6 +106,10 @@ void Stop()
     ctx.disturbance_torque_nm = 0.0f;
 }
 
+/**
+ * @brief 推导当前周期是否允许主动输出。
+ * @note 单轴 LOCK 沿用老步兵安全语义：失能；只有显式 IMU 目标允许输出。
+ */
 bool ControlPermitted()
 {
     // 单轴 LOCK 沿用老步兵安全语义：失能；只有显式 IMU 目标允许输出。
@@ -102,6 +119,11 @@ bool ControlPermitted()
            !ctx.motor_snapshot.fault;
 }
 
+/**
+ * @brief 计算本周期 Pitch 力矩并以 MIT 纯前馈模式提交。
+ * @note 控制律：位置环 + 不对称目标速度前馈 - IMU 速度阻尼 + Stribeck 摩擦补偿
+ *       + 低带宽扰动估计；仅在功能许可且电机 ready 后调用。
+ */
 void Control()
 {
     const auto &c = ctx.config.pitch_torque;
@@ -174,8 +196,11 @@ void Control()
     // 发布失败由下一 1 ms 周期提交最新目标，不阻塞等待 CAN。
     (void) ctx.pitch_motor.SetMIT(0.0f, 0.0f, 0.0f, 0.0f, c.torque_sign * torque_nm);
 }
-#endif
 
+/**
+ * @brief 每调用十次发布一次云台反馈；1 kHz 更新入口下对应 100 Hz。
+ * @note 姿态来自 INS，INS 无效时姿态/速度为零；enabled 表示功能获许可且电机 ready。
+ */
 void PublishFeedback()
 {
     if (++ctx.feedback_divider < 10U)
@@ -193,14 +218,18 @@ void PublishFeedback()
         feedback.yaw_speed_rad_s = ctx.ins.gyro_z_rad_s;
         feedback.pitch_speed_rad_s = ctx.ins.gyro_y_rad_s;
     }
-#if GIMBAL
     feedback.enabled = ControlPermitted() && ctx.motor_snapshot.ready;
-#endif
     MessageCenter::Gimbal_Feedback_Topic.Publish(feedback);
 }
-}
+} // namespace
 
-#if GIMBAL
+/**
+ * @brief 启动阶段校验并复制配置、注册 Pitch 电机并初始化目标斜坡。
+ * @param config 参数配置，复制后调用方无需保留其对象。
+ * @return 配置有效且电机注册成功时返回 true；失败后更新入口禁止正常控制。
+ * @note 同一 ControlTask 启动时仅调用一次；不等待反馈、不使能、不置零，
+ *       也不修改电机端模式或持久化参数。
+ */
 bool Gimbal_Init(const Struct_Gimbal_Config& config)
 {
     if (!ConfigValid(config))
@@ -217,7 +246,10 @@ bool Gimbal_Init(const Struct_Gimbal_Config& config)
     return ctx.initialized;
 }
 
-#if LEGACY_INFANTRY_GIMBAL
+/**
+ * @brief 汇总云台启动、许可与电机状态，供诊断层只读采集。
+ * @note 仅供同一 ControlTask 上下文的 Diagnostics 调用，不赋予设备控制权限。
+ */
 Struct_Gimbal_Diagnostic Gimbal_GetDiagnostic()
 {
     Struct_Gimbal_Diagnostic d{};
@@ -232,8 +264,11 @@ Struct_Gimbal_Diagnostic Gimbal_GetDiagnostic()
                m.online, m.feedback.state > 1U, m.requested_enabled, m.ready};
     return d;
 }
-#endif
 
+/**
+ * @brief 根据最近一次更新留下的命令、INS 和电机快照推导应用状态。
+ * @note 由同一任务上下文读取；不刷新设备快照、不执行控制或安排恢复。
+ */
 Enum_Gimbal_Status Gimbal_GetStatus(void)
 {
     if (!ctx.initialized) { return Gimbal_Status_CONFIG_ERROR; }
@@ -247,11 +282,14 @@ Enum_Gimbal_Status Gimbal_GetStatus(void)
     }
     return ctx.motor_snapshot.ready ? Gimbal_Status_READY : Gimbal_Status_ENABLING;
 }
-#endif
 
+/**
+ * @brief ControlTask 的 1 kHz 周期入口：读取快照、处理武装/许可并输出力矩。
+ * @note 在 RobotCmd_Update 之后调用；禁用或 INS 无效时请求停机，
+ *       设备故障和掉线输出由驱动保护。本入口不阻塞、不解析 CAN、不仲裁命令来源。
+ */
 void Gimbal_Update(void)
 {
-#if GIMBAL
     // Fresh = 这份姿态是否可用于当前控制周期；设备 Online（liveness）由
     // 各 Device 内的 Daemon 判定，两个概念独立，不做重复的掉线计算。
     ctx.ins_valid = MessageCenter::INS_State_Topic.ReadFresh(ctx.ins, ctx.config.ins_max_age_us);
@@ -288,8 +326,5 @@ void Gimbal_Update(void)
         }
     }
     ctx.motor_snapshot = ctx.pitch_motor.GetFeedbackSnapshot();
-#else
-    ctx.ins_valid = MessageCenter::INS_State_Topic.ReadFresh(ctx.ins, 100000U);
-#endif
     PublishFeedback();
 }

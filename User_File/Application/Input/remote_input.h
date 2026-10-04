@@ -4,10 +4,13 @@
 #include <stdint.h>
 
 /**
- * 默认配置：在 RobotCmd_Init 后绑定 UART5 S.BUS，失败时输入互锁保持关闭。
+ * Remote 输入源适配，按板型选择实现（构建期源码选择，同一接口）：
  *
- * 老步兵云台板配置（`LEGACY_INFANTRY_GIMBAL`）：本模块承担底盘板到云台板的
- * 板间输入适配。0x065 是底盘板代收遥控后转发的关键通道，属于 Remote 输入源：
+ * - remote_input.cpp（SingleBoard 模板）：UART5 S.BUS → SBUS_Device 解析 →
+ *   健康检查/解锁去抖 → 通道映射。
+ * - remote_input_forwarded.cpp（GimbalBoard，老步兵云台板）：本模块承担底盘板到
+ *   云台板的板间输入适配。0x065 是底盘板代收遥控后转发的关键通道，属于 Remote
+ *   输入源：
  *
  * ```text
  * 底盘板 0x065 (FDCAN2) -> Class_ChassisBoard -> RemoteInput_Update()
@@ -17,8 +20,8 @@
  *        └────────────── InputState_SubmitRemote() -> SourceArbitration -> RobotCmd
  * ```
  *
- * 链路超过 100 ms 没有新帧时提交空输入，由 SourceArbitration 输出 safe state：
- * 云台 DISABLED、发射 OFF。
+ * 两种实现都在 ControlTask 上下文调用 InputState_SubmitRemote()；链路/帧失效时
+ * 提交空输入，由 SourceArbitration 输出 safe state。
  */
 
 /** 初始化 Remote 输入；应在 RobotCmd 初始化之前调用一次。 */
@@ -28,7 +31,7 @@ void RemoteInput_Update(void);
 
 /**
  * @brief 读取 0x065 板间遥控链路的在线状态（ChassisBoard 内部 Daemon 结果）。
- * @return true 表示链路 liveness 在线；非 legacy 配置（S.BUS 输入）恒返回 false。
+ * @return true 表示链路 liveness 在线；S.BUS 输入实现（SingleBoard）恒返回 false。
  * @note 供诊断层读取 Daemon 结论，不重复实现超时计算；控制输入的时效仍由
  *       RemoteInput_Update 内的通道 freshness 独立判断。
  */
@@ -41,7 +44,7 @@ bool RemoteInput_IsLinkOnline(void);
  * @param pitch 输出 Pitch 轴通道；可为 nullptr。
  * @return true 表示三个通道都有 100 ms 内的有效数据。
  * @note 只读访问器，供遥测任务观测链路原始量使用。
- *       非 legacy 配置（S.BUS 输入）恒返回 false 并清零输出。
+ *       S.BUS 输入实现（SingleBoard）恒返回 false 并清零输出。
  */
 bool RemoteInput_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch);
 
