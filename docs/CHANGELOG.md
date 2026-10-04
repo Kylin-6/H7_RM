@@ -8,6 +8,29 @@
 
 ## 2026-10-04
 
+### 底盘应用重写为直接实现，移除 LEGACY_INFANTRY_CHASSIS
+
+- Chassis 应用去掉全部功能条件编译（`#if CHASSIS`、`LEGACY_INFANTRY_CHASSIS`）
+  与框架四舵轮 AGV 替代实现及空骨架：Chassis 即老步兵底盘（四路 DM 麦轮 +
+  本板 Yaw 轴 MIT 速度环）。应用由构建期源码选择（H7_APP_CHASSIS）编入
+  ChassisBoard，关闭时不编译、不调度、不发布反馈。
+- 标识符随直接实现去 Legacy 化：`kLegacyChassisConfig` → `kInfantryChassisConfig`、
+  `LegacyChassis_*_ToSi/FromSi` → `Chassis_*_ToSi/FromSi`（Input 与 Chassis 共用）、
+  `Legacy_PlanAxis` 等内部函数去掉前缀；数值与控制律逐字不变。
+- Control_Task_Chassis 单一路径（输入适配 → RobotCmd → Chassis + Diagnostics），
+  框架 BoardTransport 分支不再保留。
+- Remote 输入按板选源：`remote_input.cpp`（单板 S.BUS 调试模板）与新增
+  `remote_input_forwarding.cpp`（底盘板 S.BUS + 0x065/0x070/0x075 下行帧转发）
+  实现同一接口。
+- TIM_1ms 的灯效条目与 Diagnostics 头文件改用任务边界 `#if CHASSIS`；
+  CMake 移除 LEGACY_INFANTRY_CHASSIS 宏定义，`H7_LEGACY_CHASSIS_DEVICE_SOURCES`
+  更名 `H7_INFANTRY_CHASSIS_DEVICE_SOURCES`；单板模板不再编译应用源码。
+- ChassisBoard / Debug / GimbalBoard 三树构建通过；ChassisBoard 符号检查确认
+  链入重写后的底盘/转发输入实现，Debug 确认不含应用符号。未做实机验证，
+  控制律、整形参数与灯效行为与重写前逐字一致（仅守卫与路径选择方式改变）。
+
+## 2026-10-04
+
 ### 合入上游算法与 ADC 修复
 
 - 从 H7_BSP main `300c220` 选择性移植 `9fc7258`、`c172e36`、`300c220` 的 Matrix、Kalman 与 EKF 修复。求逆使用缩放部分选主元并检查非有限值；滤波测量更新返回 bool，失败时保留当前 X/P 并清零 K；EKF 分阶段校验并复用中间结果。

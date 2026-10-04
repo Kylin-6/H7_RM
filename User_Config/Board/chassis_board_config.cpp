@@ -3,7 +3,7 @@
 const BoardHardware &BoardConfig_Get(void)
 {
     /*
-     * 老步兵底盘板（LEGACY_INFANTRY_CHASSIS）：本板负责底盘四路 DM 麦轮、Yaw 轴
+     * 老步兵底盘板：本板负责底盘四路 DM 麦轮、Yaw 轴
      * DM 电机、SBUS 遥控接收，并经 FDCAN2 向云台板下发 0x065/0x070/0x075 下行帧。
      *
      * 1. 底盘四轮与 Yaw 轴同在 FDCAN1；Yaw 是整机云台偏航轴，但电机挂在本板，

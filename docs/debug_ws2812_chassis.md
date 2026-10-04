@@ -1,6 +1,6 @@
 # 老步兵底盘 WS2812 指南
 
-适用于 ChassisBoard / LEGACY_INFANTRY_CHASSIS。参考老步兵云台状态灯：单颗 SPI6 WS2812，亮度 15%；只观察，不改变控制许可、设备输出或故障恢复。
+适用于 ChassisBoard 构建（Diagnostics 模块编入）。参考老步兵云台状态灯：单颗 SPI6 WS2812，亮度 15%；只观察，不改变控制许可、设备输出或故障恢复。
 
 ## 在线状态来源与 freshness
 

@@ -59,9 +59,9 @@ RobotCmd 初始化由任务显式传入 Shoot 是否编入，未编入时拒绝�
 本地应用关闭且无远端发布者时，对应反馈 getter 返回 false，保持调用者对象不变。
 双板固件由 CMake 在构建期分别选择应用和任务源码。板内命令通过 `LocalPublisher` 进入
 Message Center，云台板的底盘命令通过 `RemotePublisher` 进入固定 CAN Transport。
-老步兵底盘板（`LEGACY_INFANTRY_CHASSIS`，即 ChassisBoard 角色）不使用框架板间
-Transport：三个命令输出都是本地发布，其中 Yaw 速度目标由本板 Chassis 消费，
-Shoot 命令只存在于消息端点（发射通道经 0x065 原始通道转发给云台板）。
+老步兵底盘板（ChassisBoard 角色）不使用框架板间 Transport：三个命令输出都是
+本地发布，其中 Yaw 速度目标由本板 Chassis 消费，Shoot 命令只存在于消息端点
+（发射通道经 0x065 原始通道转发给云台板）。
 
 ## 3. Control_Task 生命周期
 
@@ -128,7 +128,7 @@ CH5 跟随、CH3/CH4 云台与 CH6 发射暂未接入。旧步兵的 30/50 非 S
 失去输入许可和获许可时切换来源两处共用私有 `RobotCmd_DiscardShootEvents()`；
 清理仍发生在新来源目标装载之前，命令发布频率与来源仲裁顺序不变。
 
-老步兵底盘板（`LEGACY_INFANTRY_CHASSIS`）走老工程通道约定，不套用上面的单板模板：
+老步兵底盘板（remote_input_forwarding.cpp）走老工程通道约定，不套用上面的单板模板：
 CH5 跟随开关、CH2/CH1 平移、CH10 旋转、CH7 速度档、CH4 Yaw 摇杆；三轴抽象速度按
 `Chassis_Config.h` 的边界比例归一化到 `INPUT_MAX_*` 后再提交，由 Chassis 侧还原。
 平移方向用 Yaw 轴反馈旋转到操作者坐标系，跟随开关抬起时角速度由 Yaw 偏差生成；
@@ -183,9 +183,8 @@ Yaw 使用 INS 角度/速度串级闭环，通过达妙 MIT 纯转矩指令输�
 
 ## 6. Chassis
 
-同一份 `Chassis.cpp` 用互斥的编译开关承载两套底盘实现：老步兵底盘板
-（`LEGACY_INFANTRY_CHASSIS`）与框架四舵轮 AGV（`CHASSIS`）；两者都不启用时只保留
-消息端点。老步兵底盘板的机构参数、控制律与验证状态见
+ChassisBoard 构建编入老步兵底盘实现（四路 DM 麦轮 + 本板 Yaw 轴）；
+框架四舵轮 AGV 实现不在本分支保留。机构参数、控制律与验证状态见
 [底盘应用说明](Chassis/README.md)。
 
 ### 6.1 老步兵底盘板：四路 DM 麦轮 + Yaw 轴

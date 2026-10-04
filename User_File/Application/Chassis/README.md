@@ -5,7 +5,7 @@ SBUS 遥控接收，并经 FDCAN2 向云台板下发 0x065/0x070/0x075 下行帧
 发射机构在云台板固件上，不在本模块内。
 
 同一份 `Chassis.cpp` 还保留框架四舵轮 AGV 实现（`CHASSIS`），当前默认预设不编译；
-两套实现的编译开关互斥，见 [Application 指南](../README.md)。
+本实现即 ChassisBoard 构建编入的底盘应用，见 [Application 指南](../README.md)。
 
 ## 配置与来源
 
@@ -50,8 +50,8 @@ RobotCmd 会把命令撤销为 `DISABLED`。
 
 老步兵底盘三轴速度沿用实车验证过的抽象量纲（与麦轮预混后的 DM 轮速同量纲），没有可信
 的 m/s 标定。输入仲裁按框架 SI 边界（`INPUT_MAX_TRANSLATION_M_S` /
-`INPUT_MAX_ROTATION_RAD_S`）校验，因此：Input 侧用 `LegacyChassis_*_ToSi` 归一化，
-本模块用 `LegacyChassis_*_FromSi` 还原，两者共用 `Chassis_Config.h` 中的同一份比例。
+`INPUT_MAX_ROTATION_RAD_S`）校验，因此：Input 侧用 `Chassis_*_ToSi` 归一化，
+本模块用 `Chassis_*_FromSi` 还原，两者共用 `Chassis_Config.h` 中的同一份比例。
 这是边界换算约定，不代表这些数值已经标定为 SI 物理量。
 
 反馈按同一约定回写规划值（本板不测量真实车体速度）：`online` 表示四轮在线，

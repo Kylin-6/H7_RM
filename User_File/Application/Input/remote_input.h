@@ -5,8 +5,9 @@
  * 初始化 Remote 输入；应在 RobotCmd 初始化之前调用一次。
  *
  * 默认（单板安全模板）：绑定 UART5 S.BUS，失败时输入互锁保持关闭。
- * 老步兵底盘板（`LEGACY_INFANTRY_CHASSIS`）：除 UART5 S.BUS 外，同时绑定
+ * 老步兵底盘板（remote_input_forwarding.cpp）：除 UART5 S.BUS 外，同时绑定
  * BoardConfig 的板间链路总线，用于向云台板下发 0x065/0x070/0x075。
+ * 两种实现按板型构建期选源，接口一致。
  *
  * ```text
  * UART5 S.BUS → RemoteInput_Update → InputState(Remote) → SourceArbitration → RobotCmd

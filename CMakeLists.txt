@@ -195,7 +195,7 @@ set(H7_CHASSIS_DEVICE_SOURCES
     User_File/Device/Peripheral/Referee/referee_UI_26.c
     User_File/Device/Peripheral/Referee/vtm_26.c)
 # 老步兵底盘板专用设备与任务：SBUS 遥控、达妙电机、BMI088 姿态、板间下行帧。
-set(H7_LEGACY_CHASSIS_DEVICE_SOURCES
+set(H7_INFANTRY_CHASSIS_DEVICE_SOURCES
     User_File/Task/TIM_1ms_Task.cpp
     User_File/Task/BMI088_Task.cpp
     User_File/Device/Peripheral/Motor/DMmotor/dmmotor.cpp
@@ -213,11 +213,7 @@ if(H7_BOARD STREQUAL "SingleBoard")
         User_File/Application/RobotCmd/RobotCmd.cpp
         User_File/Application/Input/remote_input.cpp
         User_File/Application/Input/input_state.cpp
-        User_File/Application/Input/source_arbitration.cpp
-        # SingleBoard 安全模板：三个 App 源以宏=0 参与编译检查，不进入链接逻辑。
-        User_File/Application/Gimbal/Gimbal.cpp
-        User_File/Application/Chassis/Chassis.cpp
-        User_File/Application/Shoot/Shoot.cpp)
+        User_File/Application/Input/source_arbitration.cpp)
 elseif(H7_BOARD STREQUAL "GimbalBoard")
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         User_Config/Board/gimbal_board_config.cpp
@@ -234,11 +230,11 @@ else()
         User_Config/Board/chassis_board_config.cpp
         User_Config/Board/board_tasks_chassis.c
         ${H7_CHASSIS_DEVICE_SOURCES}
-        ${H7_LEGACY_CHASSIS_DEVICE_SOURCES}
+        ${H7_INFANTRY_CHASSIS_DEVICE_SOURCES}
         User_File/System/Transport/transport_chassis.cpp
         User_File/Task/Control_Task_Chassis.cpp
         User_File/Application/RobotCmd/RobotCmd.cpp
-        User_File/Application/Input/remote_input.cpp
+        User_File/Application/Input/remote_input_forwarding.cpp
         User_File/Application/Input/input_state.cpp
         User_File/Application/Input/source_arbitration.cpp
         # Chassis 由 H7_APP_CHASSIS 构建期选择统一装配。
@@ -327,7 +323,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # Add project symbols (macros)
 # 老步兵底盘板（ChassisBoard）不使用框架板间 Transport：遥控经 FDCAN2 的
 # 0x065/0x070/0x075 下行帧送往云台板，底盘四轮与 Yaw 轴都是达妙电机。
-# LEGACY_INFANTRY_CHASSIS 随板卡角色取值，SingleBoard/GimbalBoard 不受影响。
+# 底盘板输入适配由 Input/remote_input_forwarding 承担，SingleBoard 安全模板
+# 保持纯框架实现（remote_input.cpp 的 S.BUS 调试路径）。
 # 三个板型都有 DM 电机（云台 / 发射 / 底盘与 Yaw），StatusTask 统一维护协议状态。
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
@@ -336,7 +333,6 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     CHASSIS=$<BOOL:${H7_APP_CHASSIS}>
     SHOOT=$<BOOL:${H7_APP_SHOOT}>
     H7_HAS_DM_MOTOR=1
-    LEGACY_INFANTRY_CHASSIS=$<STREQUAL:${H7_BOARD},ChassisBoard>
 )
 
 # Remove wrong libob.a library dependency when using cpp files
@@ -350,9 +346,3 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     "${CMSIS_DSP_LIBRARY}"
 )
 
-# 各板型固件统一保留 H7_BSP 文件名（目录按板型隔离），IDE 构建分析器、
-# probe-rs / OpenOCD 烧录脚本不必随板型改可执行文件路径。
-# 映射文件同名 H7_BSP.map，由 cmake/gcc-arm-none-eabi.cmake 与 starm-clang.cmake 指定。
-set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES
-    OUTPUT_NAME "H7_BSP"
-)

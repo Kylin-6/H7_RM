@@ -20,7 +20,7 @@
 #include "bsp_uart.h"
 #include "bsp_w25q64jv.h"
 #include <cstddef>
-#if LEGACY_INFANTRY_CHASSIS
+#if CHASSIS
 #include "Diagnostics.h"
 #endif
 
@@ -41,7 +41,7 @@ static const PulseEntry_t TIM_1ms_Callback_Table[] = {
     {1U, BSP_Key_TIM_1ms_Process_PeriodElapsedCallback},
     {1U, BMI088_TIM_1ms_Service_PeriodElapsedCallback},
     {1U, UART_TIM_1ms_Recover_PeriodElapsedCallback},
-#if LEGACY_INFANTRY_CHASSIS
+#if CHASSIS
     {10U, Diagnostics_LED_Update},
 #else
     {10U, BSP_WS2812_TIM_10ms_Write_PeriodElapsedCallback},
