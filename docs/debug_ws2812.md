@@ -33,8 +33,8 @@ INS Topic `ReadFresh`、DM-IMU 桥 100 ms 姿态时效、0x065 通道 100 ms 接
 电机使用既有外部供电，本功能不改变两路 24V 关闭、仅开板载 5V 的配置。
 
 在工程根目录构建 `cmake --build --preset GimbalBoard`，烧录
-`build/GimbalBoard/H7_BSP.elf`。不要选择同目录历史 `GimbalBoard.elf`，
-也不要选择 SingleBoard 或验证目录的 ELF。烧录成功不等于程序已运行，烧录后应复位。
+`build/GimbalBoard/H7_Framework.elf`。不要选择同目录历史 `H7_BSP.elf`、
+`GimbalBoard.elf`，也不要选择 SingleBoard 或验证目录的 ELF。烧录成功不等于程序已运行，烧录后应复位。
 
 ## 看灯判断
 
