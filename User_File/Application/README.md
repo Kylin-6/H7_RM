@@ -89,7 +89,7 @@ RobotCmd 不直接访问电机、CAN 或 IMU。输入链现在是：
 
 ```text
 UART5 S.BUS → RemoteInput_Update → InputState(Remote)（底盘板 / 单板）
-底盘板 0x065 转发 → RemoteInput_Update（legacy 段）→ InputState(Remote)（老步兵云台板）
+底盘板 0x065 转发 → RemoteInput_Update（remote_input_forwarded）→ InputState(Remote)（老步兵云台板）
 VTM / Keyboard / Vision → InputState_Submit*（接入接口，当前未绑定设备）
 InputState → SourceArbitration_Resolve → RobotCmd_Update → Output
 ```
@@ -115,8 +115,10 @@ bool RobotCmd_PushShootEvent(const ShootEvent &event);
 发布；底盘命令每 10 ms 刷新。Setter 当前没有并发保护，应由 ControlTask 上下文调用，
 不能直接从 ISR/UART 回调并发修改。S.BUS 驱动只在 UART 中断保存完整帧，
 RemoteInput 在 ControlTask 中读取快照并提交 Remote 输入；0x065 链路的通道值同样
-只在中断里缓存，由 RemoteInput legacy 段在任务上下文整形后提交；VTM/键鼠/Vision 的
-未来适配器同样必须在任务上下文提交状态。
+只在中断里缓存，由 RemoteInput 转发实现在任务上下文整形后提交；VTM/键鼠/Vision 的
+未来适配器同样必须在任务上下文提交状态。0x065 链路建立/恢复后，火控开关须先被
+看到一次"松开位"才允许重新锁存按下：拔插板间线或上电时停在开位的开关不会立即
+恢复摩擦轮，需先拨到关位再拨回（迟滞与长短按语义不变）。
 
 S.BUS 使用 UART5：帧新鲜度 50 ms，frame-lost/failsafe 立即锁定；连续 200 ms 健康且
 CH1–CH4 回中后解锁。CH2/CH1 映射底盘前后/左右，CH7 为速度档，CH10 负半轴为手动旋转；

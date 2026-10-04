@@ -49,6 +49,9 @@ constexpr float kLoaderMaxOutputRadS =
 Class_ChassisBoard chassis_board;
 bool remote_input_initialized;
 bool fire_trigger_pressed;
+/** 链路建立/恢复后须先见到一次松开位，才允许重新锁存按下；避免插回链路时
+ *  停留在开位的火控开关立即恢复摩擦轮。 */
+bool require_fire_release;
 uint32_t trigger_start_ms;
 uint32_t shoot_event_sequence;
 constexpr uint32_t kLongPressMs = 300U;
@@ -94,6 +97,7 @@ bool RemoteInput_Init(void)
         return false;
     }
     fire_trigger_pressed = false;
+    require_fire_release = true;
     trigger_start_ms = 0U;
     shoot_event_sequence = 0U;
     /* 两级低通：每级 tau = 25 ms（原工程数值），1 kHz 采样。 */
@@ -141,20 +145,23 @@ void RemoteInput_Update(void)
         /* 安全互锁：提交空输入由仲裁输出 safe state；不再清除滤波历史，
          * 链路恢复后目标由限速率路径平滑过渡。 */
         fire_trigger_pressed = false;
+        require_fire_release = true;
         trigger_start_ms = now_ms;
         InputState_SubmitRemote({});
         return;
     }
 
     const bool was_pressed = fire_trigger_pressed;
-    if (fire <= kFirePressedThreshold)
+    if (fire >= kFireReleasedThreshold)
+    {
+        fire_trigger_pressed = false;
+        require_fire_release = false;
+    }
+    else if (fire <= kFirePressedThreshold && !require_fire_release)
     {
         fire_trigger_pressed = true;
     }
-    else if (fire >= kFireReleasedThreshold)
-    {
-        fire_trigger_pressed = false;
-    }
+    /* 中间区或未过恢复释放门：保持当前锁存值（恢复后必为未按）。 */
     const bool trigger_pressed = fire_trigger_pressed;
 
     if (trigger_pressed && !was_pressed)
