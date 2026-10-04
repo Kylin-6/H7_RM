@@ -66,7 +66,7 @@ struct Struct_DJIMotor_Init_Config
     PID_InitTypeDef angle_pid; // 角度闭环，内置反馈为输出侧累计 rad
     Enum_DJIMotor_Control_Mode control_mode = Enum_DJIMotor_Control_Mode::CURRENT;
     float gear_ratio = 0.0f; // 转子/输出轴传动比；非正数使用型号默认值。motor_type 不决定实际机械减速比，直驱 M3508 显式设 1。
-    uint32_t feedback_timeout_ms = 20; // 反馈超时阈值，须大于 0；Control/Send 检查时清零超时指令
+    uint32_t feedback_timeout_ms = 20; // Daemon 反馈超时阈值，须大于 0；设备服务独立清零超时指令
     bool reverse = false; // 同时反转内置运动反馈和输出指令，current_raw 保留报文符号
     Enum_DJIMotor_Feedback angle_feedback = Enum_DJIMotor_Feedback::MOTOR;
     Enum_DJIMotor_Feedback speed_feedback = Enum_DJIMotor_Feedback::MOTOR;
@@ -140,6 +140,7 @@ public:
     // 仅用于角度/速度目标：deg 或 deg/s；函数无条件转换为弧度制。
     void SetRef_Degree(float ref);
     void Control();
+    static void ServiceAll(); ///< 100 Hz 设备安全服务，不依赖 Application 调用 Control/Send。
     bool RequestEnabled(bool enabled);
     void Enable();
     bool Disable();

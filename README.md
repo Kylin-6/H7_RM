@@ -1,8 +1,8 @@
-# H7_BSP
+# H7_Framework
 
 > **第一次使用 H7_RM？从这里开始**
 >
-> 1. 阅读 [30～60 分钟快速上手](GETTING_STARTED.md)，先构建并找到控制任务。
+> 1. 阅读 [30～60 分钟快速上手](docs/GETTING_STARTED.md)，先构建并找到控制任务。
 > 2. 看 [新人控制数据流图](Assets/Architecture/H7_RM_GettingStarted.svg)（[交互版](Assets/Architecture/H7_RM_GettingStarted.html)），理解控制、姿态和在线监控三条链。
 > 3. 需要完整工程分层时，看 [H7_RM / H7_BSP 总览图](Assets/Architecture/H7_BSP.svg)（[交互版](Assets/Architecture/H7_BSP.html)）。
 > 4. 具体开发再进入下方各模块 reference；快速上手不替代接口与硬件约定。
@@ -16,7 +16,9 @@ degree 仅用于机械标定输入、调试显示和外部协议边界；进入�
 
 > **打开 `H7_BSP.ioc` 遇到版本迁移提示时，选择 Continue，不要选择 Migrate。** 迁移并重新生成可能使 `Middlewares/` 中的 FreeRTOS 与现有 SystemView 适配不兼容。请保持项目原有固件包，详见 [CubeMX 与构建边界](#cubemx-与构建边界)。
 
-[整体架构](#整体架构) · [通信与外设](#通信与外设-bsp) · [设备层](#设备层) · [算法层](#算法层) · [系统服务](#系统服务) · [可靠性与降级边界](#可靠性与降级边界) · [接入方式](#接入方式) · [构建与调试](#构建与调试) · [主机回归](#主机回归)
+[整体架构](#整体架构) · [通信与外设](#通信与外设-bsp) · [设备层](#设备层) · [算法层](#算法层) · [系统服务](#系统服务) · [可靠性与降级边界](#可靠性与降级边界) · [接入方式](#接入方式) · [构建与调试](#构建与调试)
+
+源码阅读：[全项目源码导航与调用约束](docs/CODE_GUIDE.md)。
 
 核心专篇：[BSP 开发指南](User_File/Middleware/BSP/README.md) · [Message Center](User_File/System/MessageCenter/README.md) · [Application 开发指南](User_File/Application/README.md)
 
@@ -31,7 +33,7 @@ degree 仅用于机械标定输入、调试显示和外部协议边界；进入�
 | 层次 | 职责 | 入口 |
 | --- | --- | --- |
 | Application / Task | 组织控制逻辑、任务周期与模块协作 | [Application 指南](User_File/Application/README.md)、[Task](User_File/Task) |
-| Device | 封装电机、板载器件与外接工具 | [Device](User_File/Device) |
+| Device | 封装电机、板载器件与外接工具 | [Device 函数使用指南](User_File/Device/README.md) |
 | Algorithm | 提供控制、观测、滤波、数学与调度辅助组件 | [Algorithm](User_File/Middleware/Algorithm) |
 | System | 统一初始化、回调、时间戳与调试服务 | [System](User_File/System) |
 | BSP | 管理外设实例、缓冲区、收发与回调注册 | [BSP 指南](User_File/Middleware/BSP/README.md) |
@@ -52,7 +54,7 @@ Core/                       CubeMX 生成的启动、外设与 RTOS 配置
 Drivers/                    HAL / CMSIS 驱动
 Middlewares/                FreeRTOS、USB Device、CMSIS-DSP 等依赖
 USB_DEVICE/                 USB CDC 设备配置
-User_Config/                链接脚本、FreeRTOS 补丁与烧录配置
+User_Config/                链接脚本、FreeRTOS 补丁与 Ozone 配置
 SystemView/                 SEGGER SystemView 与 RTT
 sysid/                      系统辨识数据、脚本与报告
 ```
@@ -92,13 +94,12 @@ CAN 接收回调在中断上下文执行。UART 的 DMA 接收须同时具备 Cu
 | --- | --- | --- |
 | DJI | M2006/C610、M3508/C620、GM6020；反馈、控制环与分组发送 | [DJI 电机驱动](User_File/Device/Peripheral/Motor/DJImotor/dji_motor.md) |
 | 达妙 | MIT、位置-速度、速度、力位混控接口；实际模式取决于型号与固件 | [达妙电机驱动](User_File/Device/Peripheral/Motor/DMmotor/dmmotor.md) |
-| QDrive | QD4310 协议与控制接口 | [QDrive](User_File/Device/Peripheral/Motor/QDrive) |
 
 电机型号、CAN ID、反馈源、方向、映射范围和控制参数由使用方配置；应用层负责控制周期、目标生成与输出边界。
 
-达妙动作/模式请求及 QDrive 命令接口返回 `bool`，表示是否成功提交到软件发送通道。提交失败时保留相应状态，调用方可据此重试；达妙置零仅在提交成功后重置位置展开状态。返回成功不代表电机已经执行或确认命令。
+达妙动作/模式请求接口返回 `bool`，表示是否成功提交到软件发送通道。提交失败时保留相应状态，调用方可据此重试；达妙置零仅在提交成功后重置位置展开状态。返回成功不代表电机已经执行或确认命令。
 
-达妙反馈以 `(FDCAN, master_id)` 注册接收入口，并用反馈首字节低四位匹配 `can_id`；电机 ID 使用非零 8 位值，高四位仍用于发送 ID。只有总线、ID、DLC 和节点号全部合法的运动反馈才刷新在线状态。Application 用 `RequestEnabled(bool)` 指定输出许可；DMMotor 在首次请求或状态边沿执行协议动作，失能请求立即尝试覆盖安全周期目标，相同状态重复请求不执行收发；具体语义见 [达妙电机驱动](User_File/Device/Peripheral/Motor/DMmotor/dmmotor.md)，由 `StatusTask` 的 `ServiceAll()` 以 100 Hz 补交失败项并依据新鲜反馈维护 Enable/Disable 协议状态。Daemon 只判断活性，Gimbal 根据当前 INS 与电机快照决定是否控制。
+达妙反馈以 `(FDCAN, master_id)` 注册接收入口，并用反馈首字节低四位匹配 `can_id`；电机 ID 使用非零 8 位值，高四位仍用于发送 ID。只有总线、ID、DLC 和节点号全部合法的运动反馈才刷新在线状态。Application 用 `RequestEnabled(bool)` 指定输出许可；DMMotor 在首次请求或状态边沿执行协议动作，失能请求立即尝试覆盖安全周期目标，相同状态重复请求不执行收发；具体语义见 [达妙电机驱动](User_File/Device/Peripheral/Motor/DMmotor/dmmotor.md)，由 `StatusTask` 的 `ServiceAll()` 以 100 Hz 补交失败项并依据新鲜反馈维护 Enable/Disable 协议状态。Daemon 只判断活性，DMMotor 自己在超时后覆盖安全目标并提交失能；Gimbal 根据初始化、功能模式和 INS 有效性决定控制许可，电机快照的 ready 只用于姿态捕获与恢复。
 
 ### 板载设备与外接工具
 
@@ -139,14 +140,15 @@ EricTool 的 USB/UART 解析均只读取回调传入的缓冲区及有效长度�
 
 - **PID**：死区作用于有效误差，不修改调用者目标；积分在本周期累加后限幅，支持负 `Ki`，`Ki=0` 时清空积分。积分限幅为零表示不限制积分，积分分离和变速积分的阈值约定见头文件。
 - **D 支路滤波**：`D_Filter_Cutoff` 使用 Hz，默认 `0` 关闭；与 `D_First` 微分先行独立配置。先滤波差分速率，再乘 `Kd`；DJI 的 `PID_InitTypeDef` 配置已透传该字段。首次启用或切换微分来源时滤波状态从零开始，持续启用且来源不变时保留滤波值。PID 参数更新不自动清空全部历史状态，死区也不保证总输出为零。
-- **Trajectory**：独立于原有 Slope，一个对象管理一个轴。位置目标以零速度、零加速度到达；速度目标到达后保持匀速，设置零速度可平滑停止。目标在下一周期从当前规划的 `p/v/a` 接续，重复目标不重新规划。模块不分配堆内存、不创建任务，不保证时间最优或多轴同步；制动距离内改目标允许必要的越过与返回。接口、错误处理和接入示例见 `RoboMaster_Test` 分支的 `Tests/Trajectory/README.md`。
+- **Trajectory**：独立于原有 Slope，一个对象管理一个轴。位置目标以零速度、零加速度到达；速度目标到达后保持匀速，设置零速度可平滑停止。目标在下一周期从当前规划的 `p/v/a` 接续，重复目标不重新规划。模块不分配堆内存、不创建任务，不保证时间最优或多轴同步；制动距离内改目标允许必要的越过与返回。
 
 ### 滤波、估计与模糊推理约定
 
 - **One Euro**：固定周期标量输入，以首帧对齐初值；最低截止频率、速率系数 `Beta` 与导数截止频率可配置。周期或参数改变时重新初始化。
-- **Polynomial**：默认二阶、支持 0～3 阶，窗口最多 33 点，在最新样本时刻求值。0 阶为移动平均；未收满窗口时原量直通、导数清零且 `Ready=false`，高于拟合阶数的导数恒为零。调用方负责等间隔新样本、量纲与角度展开，缺测后重置；接口与验证见 `RoboMaster_Test` 分支的 `Tests/FilterPolynomial/README.md`。
-- **Kalman**：每周期先预测，缺测时跳过测量更新，状态与协方差仍连续推进；恢复有效测量后再执行更新。
-- **Sugeno**：调用方提供有序节点和完整规则表，节点/规则在使用期间保持有效且只读；输入超范围时保持边界值。输入缩放、微分、规则设计及 PID 增益映射由应用负责，库中没有预设的电机或云台控制规则。使用方式与独立参考对照见 `RoboMaster_Test` 分支的 `Tests/Fuzzy/README.md`。
+- **Polynomial**：默认二阶、支持 0～3 阶，窗口最多 33 点，在最新样本时刻求值。0 阶为移动平均；未收满窗口时原量直通、导数清零且 `Ready=false`，高于拟合阶数的导数恒为零。调用方负责等间隔新样本、量纲与角度展开，缺测后重置。
+- **Kalman / EKF**：每周期先预测，缺测时跳过测量更新；更新接口返回 `bool`，求逆失败或更新结果非有限时保留当前 X/P 并清零 K，恢复有效测量后可继续更新。失败保护限于测量更新，预测和模型输入由调用方保证有效。
+- **Matrix 求逆**：采用缩放部分选主元；`Matrix_Compare_Epsilon` 在此接口中是无量纲主元比例阈值。输入、消元过程或结果非有限时失败；返回零矩阵作为占位，调用方应通过 `Get_Inverse(&success)` 区分失败。
+- **Sugeno**：调用方提供有序节点和完整规则表，节点/规则在使用期间保持有效且只读；输入超范围时保持边界值。输入缩放、微分、规则设计及 PID 增益映射由应用负责，库中没有预设的电机或云台控制规则。
 
 ## 系统服务
 
@@ -173,7 +175,7 @@ EricTool 的 USB/UART 解析均只读取回调传入的缓冲区及有效长度�
 
 业务类型和唯一静态通道统一定义在 [MessageCenter](User_File/System/MessageCenter)。`INS_State_Topic` 由 BMI088 链路发布，云台读取最新姿态；RobotCmd 通过 Output 发布 Gimbal、Chassis、Shoot 连续命令并汇总反馈，底盘命令在云台板由固定 Transport 送往底盘板 Topic。单发和三连发通过固定容量 `ShootEvent` FIFO 传递。完整 API、并发语义、通道所有权、示例和验证清单见 [Message Center 专篇](User_File/System/MessageCenter/README.md)。
 
-所有正常工作时应持续收到反馈、心跳或数据流的模块优先注册静态 Daemon，只在收到合法数据时 `Feed()`。当前已接入 DM、DJI、S.BUS、有效 INS 输出、双板 Transport 及可选 Referee/VTM；`StatusTask` 每 10 ms（100 Hz）统一 `CheckAll()`，有 DM 电机时再调用原有 `Class_DMMotor::ServiceAll()`。Daemon 只负责 liveness，不负责整车停机、清错、重启、安全策略或消息路由。管理器保持 32 个固定槽位，无动态分配；当前三板最坏注册数为 17/8/10。在线查询不替代 Topic ReadFresh 或电机反馈的微秒 freshness，详见 [Daemon 说明](User_File/System/Daemon/README.md)。
+所有正常工作时应持续收到反馈、心跳或数据流的模块优先注册静态 Daemon，只在收到合法数据时 `Feed()`。当前已接入 DM、DJI、S.BUS、有效 INS 输出、双板 Transport 及可选 Referee/VTM；`StatusTask` 每 10 ms（100 Hz）统一 `CheckAll()`，随后调用已编入的 DJI、DM 设备 `ServiceAll()`。Daemon 只负责 liveness，不负责整车停机、清错、重启、安全策略或消息路由。管理器保持 32 个固定槽位，无动态分配；当前三板最坏注册数为 17/8/10。电机在线查询与控制门控统一使用 Daemon 即时状态；Topic ReadFresh 仍独立判断业务数据时效，详见 [Daemon 说明](User_File/System/Daemon/README.md)。
 
 ### Application
 
@@ -181,9 +183,12 @@ Application 作为独立机器人业务层维护，不在 BSP 总览展开具体
 Control_Task 调度顺序、RobotCmd 所有权、Gimbal/Chassis/Shoot 行为和新应用接入规范见
 [Application 开发指南](User_File/Application/README.md)。
 
+当前 App 主流程保持“读取输入 → 表达功能许可 → 更新目标 → 计算并提交控制 → 发布反馈”。
+Gimbal 合并姿态捕获条件，并保留恢复后等待新 IMU 目标的要求；Shoot 在模式处理后统一选择拨弹外环与目标；RobotCmd 复用失联和切源时的射击事件清理。设备级掉线保护由 Motor 独立执行，WS2812 保持现有颜色缓存与刷新行为。
+
 ### 单板与双板
 
-构建目标在编译期确定应用与任务：`SingleBoard` 保留全部应用源码，但 Gimbal、Chassis、Shoot 硬件控制默认关闭；`GimbalBoard` 运行 RobotCmd、Gimbal、Shoot；`ChassisBoard` 运行 Chassis。BoardConfig 只绑定本板硬件，TransportConfig 固定板间总线和报文号。运行时不使用 Router 或动态 Topic 路由。
+构建目标在编译期确定应用与任务：`SingleBoard` 的 Gimbal、Chassis、Shoot 默认关闭；关闭应用时不编译或调度对应 App，也不发布对应本地应用反馈；关闭 Shoot 时拒绝射击事件；`GimbalBoard` 运行 RobotCmd、Gimbal、Shoot；`ChassisBoard` 运行 Chassis。BoardConfig 只绑定本板硬件，TransportConfig 固定板间总线和报文号。运行时不使用 Router 或动态 Topic 路由。
 
 单板 RobotCmd 的三个 Output 都是 LocalPublisher；云台板的底盘 Output 是 RemotePublisher。`ChassisCmd` 经 CAN 标准 ID `0x141` 到达底盘板本地 Topic，`ChassisFeedback` 经 `0x222` 返回云台板本地 Topic。两者是 8 字节 Classic CAN 最新值，接收任务按实际 RX 时间和序号校验，底盘命令超过 100 ms 变为 `ZERO_FORCE`。INS、Gimbal、Shoot 的 1 kHz 板内路径不经过 Transport。协议和接线见 [双板 Transport](User_File/System/Transport/README.md)。
 
@@ -215,7 +220,7 @@ Control_Task 调度顺序、RobotCmd 所有权、Gimbal/Chassis/Shoot 行为和�
 | `DataValid` | 当前反馈可供上层使用；现有驱动通常要求 Online |
 | `Ready` | 电机初始化、请求使能且反馈新鲜；DM 还要求协议报告已使能且无故障 |
 
-`Daemon` 只负责时间窗及在线/离线跃迁。设备收到完整合法反馈后自行 `Feed()`，`StatusTask` 每 10 ms 统一 `CheckAll()`，有 DM 电机时随后执行电机协议期望状态服务。它不决定全车停机、云台 READY、消息路由或故障上报；业务安全策略仍由拥有设备的 Application 决定，并需实机拔线验证时限。
+`Daemon` 只负责时间窗及在线/离线跃迁。设备收到完整合法反馈后自行 `Feed()`，`StatusTask` 每 10 ms 统一 `CheckAll()`，随后执行已编入的电机设备安全/协议服务。基础掉线保护由 Device 独立覆盖安全目标及执行失能，不依赖 App 持续调用控制接口。它不决定全车停机、云台 READY、消息路由或故障上报；业务安全策略仍由拥有设备的 Application 决定，并需实机拔线验证时限。
 
 ### 数据新鲜度、发送与可观测性
 
@@ -224,7 +229,7 @@ Control_Task 调度顺序、RobotCmd 所有权、Gimbal/Chassis/Shoot 行为和�
 - `BSP_CAN_GetTxStats()` 提供命令队列满、周期槽满、硬件 FIFO 满和 HAL 发送失败的饱和计数快照。计数只提供证据，不自动改变调度或执行安全策略。
 - 主机测试可以确认协议编解码、ID/DLC 隔离、超时边界、队列溢出和数据新鲜度；真实波特率/采样点、终端电阻、总线仲裁、供电时序、电机参数和 EMC 必须在目标板上确认。
 
-当前框架尚未启用独立 IWDG，也没有通用的 Daemon→安全策略联动和复位原因遥测。接入整机前至少应完成遥控器失联互锁、关键设备拔线、上电仲裁、跌压重启和长跑水位检查，不能把主机回归通过等同于整机安全验收。
+当前框架尚未启用独立 IWDG，也没有通用的整车安全策略联动和复位原因遥测。接入整机前至少应完成遥控器失联互锁、关键设备拔线、上电仲裁、跌压重启和长跑水位检查，不能把主机回归通过等同于整机安全验收。
 
 ## 接入方式
 
@@ -278,6 +283,10 @@ FreeRTOS 使用 `heap_5`，默认总量 64 KiB，分为 **48 KiB DTCMRAM + 16 Ki
 
 ## 构建与调试
 
+### 推荐 VS Code 插件
+
+**优先推荐 [EmberProbe - MCU Flash & Debug](https://marketplace.visualstudio.com/items?itemName=BakeSheep.emberprobe)**（[GitHub 仓库](https://github.com/BakeSheep/EmberProbe-MCU-Flash-Debug)），作为本项目烧录、断点调试、实时变量观测与 ELF 分析入口。构建与源码阅读搭配 STM32CubeIDE、CMake Tools 和 STM32Cube clangd，C/C++ 格式化推荐 Clang-Format 并使用仓库 `.clang-format`；完整清单及板型 ELF 选择步骤见 [VS Code 插件推荐](docs/VSCODE_EXTENSIONS.md)。
+
 ### 环境与构建
 
 准备 CMake 3.22 或更高版本、Ninja 和 GNU Arm 工具链，确保 `arm-none-eabi-gcc` / `arm-none-eabi-g++` 等命令可用。在仓库根目录执行：
@@ -287,19 +296,22 @@ cmake --preset Debug
 cmake --build --preset Debug
 ```
 
-产物为 `build/Debug/H7_BSP.elf`，链接映射为同目录下的 `H7_BSP.map`。Release 使用对应 preset：
+产物为 `build/Debug/H7_Framework.elf`，链接映射为同目录下的 `H7_Framework.map`。Release 使用对应 preset：
 
 ```powershell
 cmake --preset Release
 cmake --build --preset Release
 ```
 
-[CMakePresets.json](CMakePresets.json) 保留 Debug/Release 配置；[CMakeUserPresets.json](CMakeUserPresets.json) 提供 SingleBoard/GimbalBoard/ChassisBoard。Debug 使用 `-Og -g3`，Release 使用 `-Os -g0`。
+[CMakePresets.json](CMakePresets.json) 保留 Debug/Release 配置；[CMakeUserPresets.json](CMakeUserPresets.json) 提供 SingleBoard/GimbalBoard/ChassisBoard。Debug 使用 `-Og -g3`，Release 使用 `-Os -g0`。所有配置均生成同名的 ELF 和 map，供构建分析器读取：
 
-各板型产物统一命名 `H7_BSP.elf` 与 `H7_BSP.map`，靠构建目录区分：
-`build/SingleBoard/`、`build/GimbalBoard/`、`build/ChassisBoard/`（Debug/Release 为 `build/Debug`、`build/Release`）。
-IDE 构建分析器、`.vscode` 烧录任务与 `User_Config/flash_h7_bsp.ps1` 因此不必随板型改路径，
-烧录前只需确认选中的是哪个构建目录。
+| Preset | 构建目录 | ELF / map 文件名（不含扩展名） |
+| --- | --- | --- |
+| Debug | `build/Debug` | `H7_Framework` |
+| Release | `build/Release` | `H7_Framework` |
+| SingleBoard | `build/SingleBoard` | `H7_Framework` |
+| GimbalBoard | `build/GimbalBoard` | `H7_Framework` |
+| ChassisBoard | `build/ChassisBoard` | `H7_Framework` |
 
 ### 主机回归
 
@@ -321,7 +333,9 @@ git switch RoboMaster_Test
 
 ### 烧录与观察
 
-本地如已配置 VS Code 烧录/调试任务，可按探针和目标芯片检查工具路径；仓库提供 [Ozone 工程](H7_BSP.jdebug) 作为源码调试入口。
+烧录使用 VS Code 的 EmberProbe: Flash & Debug 插件。先构建所需 preset，再选择对应 `build/<preset>/H7_Framework.elf`，并核对探针与 STM32H723 目标配置；不要选择旧名称的构建产物。仓库不再维护独立烧录脚本。
+
+保留 [Ozone 工程](H7_BSP.jdebug) 作为 J-Link 源码调试入口（默认加载 Debug 固件），以及 [Ozone DAPLink 配置](User_Config/ozone_daplink.cfg)。
 
 - Ozone / GDB：观察设备反馈、算法状态、系统调试数据与任务栈水位。
 - SystemView / RTT：观察任务调度、中断和运行时信息。
@@ -331,17 +345,16 @@ git switch RoboMaster_Test
 ## 文档与参考
 
 - [BSP 开发指南](User_File/Middleware/BSP/README.md) · [Message Center](User_File/System/MessageCenter/README.md) · [Application 开发指南](User_File/Application/README.md)。
-- [DJI 电机驱动](User_File/Device/Peripheral/Motor/DJImotor/dji_motor.md) · [达妙电机驱动](User_File/Device/Peripheral/Motor/DMmotor/dmmotor.md) · [更新记录](CHANGELOG.md)。
-- [文档与注释一致性审查](docs/documentation_sync_2026-09-28.md) · [2026-09-25 历史框架审查](docs/framework_review_2026-09-25.md)。
+- [DJI 电机驱动](User_File/Device/Peripheral/Motor/DJImotor/dji_motor.md) · [达妙电机驱动](User_File/Device/Peripheral/Motor/DMmotor/dmmotor.md) · [更新记录](docs/CHANGELOG.md)。
 - [FreeRTOS heap memory management](https://www.freertos.org/Documentation/02-Kernel/02-Kernel-features/09-Memory-management/01-Memory-management)。
-- [ST AN4891：STM32H7 系统架构与性能](https://www.st.com/resource/en/application_note/an4891-stm32h72x-stm32h73x-and-singlecore-stm32h74x75x-system-architecture-and-performance-stmicroelectronics.pdf)。
-- [ST AN4839：STM32F7/H7 一级缓存](https://www.st.com/resource/en/application_note/an4839-level-1-cache-on-stm32f7-series-and-stm32h7-series-stmicroelectronics.pdf)。
 
 ## 致谢
 
 感谢 MermaidFAR 开源并提供本项目所基于的 [H7_BSP](https://github.com/MermaidFAR/H7_BSP) 基础工程。
 
-本框架的分层设计、设备抽象与工程组织参考了[湖南大学 RoboMaster 跃鹿战队 `basic_framework`](https://github.com/HNUYueLuRM/basic_framework)、中国科学技术大学 RoboWalker 的开源框架，以及 [Meta-Team 的 `Meta-Embedded-NG`](https://github.com/Meta-Team/Meta-Embedded-NG)。感谢这些团队对 RoboMaster 电控社区的开放分享与长期贡献。
+本框架的分层设计、设备抽象与工程组织参考了[湖南大学 RoboMaster 跃鹿战队 `basic_framework`](https://github.com/HNUYueLuRM/basic_framework)、中国科学技术大学 RoboWalker 的开源框架 [`damiao_mc02_bsp`](https://github.com/yssickjgd/damiao_mc02_bsp)，以及 [Meta-Team 的 `Meta-Embedded-NG`](https://github.com/Meta-Team/Meta-Embedded-NG)。
+
+感谢 xrobot-org 开源并分享 [`libxr`](https://github.com/xrobot-org/libxr)。
 
 <a id="维护架构图"></a>
 

@@ -16,9 +16,8 @@
 
 #include "Chassis.h"
 #include "Chassis_Config.h"
-
-#include "message_center.h"
 #include "board_config.h"
+#include "message_center.h"
 
 static constexpr uint64_t CHASSIS_COMMAND_MAX_AGE_US = 100000U;
 
@@ -276,7 +275,7 @@ struct ChassisContext
 };
 
 ChassisContext ctx;
-}
+} // namespace
 
 static PID_InitTypeDef Chassis_MakePID(const ChassisPidConfig &config)
 {
@@ -290,6 +289,12 @@ static PID_InitTypeDef Chassis_MakePID(const ChassisPidConfig &config)
     return pid;
 }
 
+/**
+ * @brief 将底盘速度分解为四轮目标，并按最短舵向选择轮速正反方向。
+ * @param wheel_target_rad_s 输出四个行走轮的输出轴角速度，单位 rad/s。
+ * @param steer_target_rad 输出四个舵向电机的累计角度目标，单位 rad。
+ * @note 使用本周期命令和舵向快照；轮索引、方向及机械零位须与配置一致。
+ */
 static void Chassis_CalculateTargets(float wheel_target_rad_s[4],
                                      float steer_target_rad[4])
 {
@@ -314,10 +319,10 @@ static void Chassis_CalculateTargets(float wheel_target_rad_s[4],
     for (uint8_t index = 0; index < 4; ++index)
     {
         const float velocity_m_s = std::sqrt(wheel_vx[index] * wheel_vx[index] +
-                                            wheel_vy[index] * wheel_vy[index]);
+                                             wheel_vy[index] * wheel_vy[index]);
         const float current_angle_rad =
             ctx.steer_snapshot[index].output_total_angle;
-        if (velocity_m_s < kChassisConfig.stop_speed_m_s)
+        if (velocity_m_s < kChassisConfig.stop_speed_m_s) // 近零轮速不确定方向，保持舵角，避免微小速度输入造成转向跳变。
         {
             // 近零轮速时保持当前舵角，避免 atan2 的方向随微小输入跳变。
             wheel_target_rad_s[index] = 0.0f;
@@ -330,12 +335,12 @@ static void Chassis_CalculateTargets(float wheel_target_rad_s[4],
         float difference_rad = std::remainder(target_angle_rad - current_angle_rad,
                                               2.0f * kPiRad);
         /* remainder 将误差压到 [-π, π]；超过 ±π/2 时舵角少转 π、轮速取反。 */
-        if (difference_rad > kPiRad / 2.0f)
+        if (difference_rad > kPiRad / 2.0f) // 正向舵角差超过 90°，少转 180°并反转行走轮可保持同一速度向量。
         {
             difference_rad -= kPiRad;
             ctx.wheel_direction[index] = -1;
         }
-        else if (difference_rad < -kPiRad / 2.0f)
+        else if (difference_rad < -kPiRad / 2.0f) // 负向舵角差超过 90°，同样通过转向补偿与轮速反转缩短转向路径。
         {
             difference_rad += kPiRad;
             ctx.wheel_direction[index] = -1;
@@ -352,6 +357,11 @@ static void Chassis_CalculateTargets(float wheel_target_rad_s[4],
     }
 }
 
+/**
+ * @brief 用轮速与舵角估算底盘速度，并聚合八台电机 online/ready。
+ * @note 结果是运动学估计，不是融合里程计；滑移和零位偏差会影响估计。
+ *       使用更新入口读取的快照，反馈平滑在 1 kHz 执行，消息以 100 Hz 发布。
+ */
 static void Chassis_UpdateFeedback(void)
 {
     float wheel_vx[4];
@@ -386,11 +396,12 @@ static void Chassis_UpdateFeedback(void)
     // 一阶平滑 y += alpha * (x - y)，在 1 kHz 控制周期更新；100 Hz 仅是发布频率。
     // 初始输出沿用初始化时的零值，feedback_alpha 是每个控制周期的权重。
     ctx.feedback.velocity_x_m_s += kChassisConfig.feedback_alpha *
-        (vx - ctx.feedback.velocity_x_m_s);
+                                   (vx - ctx.feedback.velocity_x_m_s);
     ctx.feedback.velocity_y_m_s += kChassisConfig.feedback_alpha *
-        (vy - ctx.feedback.velocity_y_m_s);
+                                   (vy - ctx.feedback.velocity_y_m_s);
     ctx.feedback.angular_velocity_rad_s += kChassisConfig.feedback_alpha *
-        (0.5f * (wz_x + wz_y) - ctx.feedback.angular_velocity_rad_s);
+                                           (0.5f * (wz_x + wz_y) - ctx.feedback.angular_velocity_rad_s);
+    // 快照在本周期使能请求之前读取，enabled 可能滞后一周期；不代表 CAN 已发送。
     ctx.feedback.enabled = ctx.command.mode != ChassisMode::ZERO_FORCE && ready;
     ctx.feedback.online = online;
 }
@@ -430,6 +441,11 @@ Struct_Chassis_Diagnostic_Input Chassis_GetDiagnostic(void)
 }
 #endif
 
+/**
+ * @brief 启动阶段注册八台电机，再绑定两个四电机发送组。
+ * @return 全部电机注册与发送组绑定成功时为 true。
+ * @note 仅调用一次；成功后请求零输出，不执行机械寻零，不等待电机反馈。
+ */
 bool Chassis_Init(void)
 {
     ctx.command = {};
@@ -515,16 +531,16 @@ bool Chassis_Init(void)
         initialized = ctx.steer_motor[index].Init(steer_config) && initialized;
     }
     initialized = initialized && ctx.wheel_group.Init(
-        &ctx.wheel_motor[0], &ctx.wheel_motor[1],
-        &ctx.wheel_motor[2], &ctx.wheel_motor[3]);
+                                     &ctx.wheel_motor[0], &ctx.wheel_motor[1],
+                                     &ctx.wheel_motor[2], &ctx.wheel_motor[3]);
     initialized = initialized && ctx.steer_group.Init(
-        &ctx.steer_motor[0], &ctx.steer_motor[1],
-        &ctx.steer_motor[2], &ctx.steer_motor[3]);
+                                     &ctx.steer_motor[0], &ctx.steer_motor[1],
+                                     &ctx.steer_motor[2], &ctx.steer_motor[3]);
     ctx.initialized = initialized;
-    if (initialized)
+    if (initialized) // 仅在全部电机与发送组初始化成功后提交零输出；不代表设备已经在线。
     {
-        (void)ctx.wheel_group.RequestEnabled(false);
-        (void)ctx.steer_group.RequestEnabled(false);
+        (void) ctx.wheel_group.RequestEnabled(false);
+        (void) ctx.steer_group.RequestEnabled(false);
     }
     return initialized;
 #else
@@ -532,19 +548,18 @@ bool Chassis_Init(void)
 #endif
 }
 
+/**
+ * @brief 1 kHz 读取新鲜命令、计算舵轮目标、提交组输出并更新反馈。
+ * @note 命令超过 100 ms 时默认 ZERO_FORCE；设备反馈超时由 DJI 驱动逐电机处理。
+ *       此处不仲裁输入、不解析 CAN、不新增模式控制器；反馈按十个周期分频发布。
+ */
 void Chassis_Update(void)
 {
     /* 仅在命令 Topic 仍新鲜时沿用目标；过期后使用默认 ZERO_FORCE 关闭输出。 */
-    ChassisCmd command{};
-    if (MessageCenter::Chassis_Command_Topic.ReadFresh(
-            command, CHASSIS_COMMAND_MAX_AGE_US))
-    {
-        ctx.command = command;
-    }
-    else
-    {
-        ctx.command = {};
-    }
+    ctx.command = {};
+    // 命令需存在且年龄不超过 100 ms；双板由 Transport 发布，本地由 RobotCmd 发布。
+    (void) MessageCenter::Chassis_Command_Topic.ReadFresh(
+        ctx.command, CHASSIS_COMMAND_MAX_AGE_US);
 
 #if LEGACY_INFANTRY_CHASSIS
     /*
@@ -654,24 +669,24 @@ void Chassis_Update(void)
             ctx.steer_snapshot[index] = ctx.steer_motor[index].GetMotionSnapshot();
         }
         const bool enabled = ctx.command.mode != ChassisMode::ZERO_FORCE;
-        (void)ctx.wheel_group.RequestEnabled(enabled);
-        (void)ctx.steer_group.RequestEnabled(enabled);
-        if (enabled)
+        (void) ctx.wheel_group.RequestEnabled(enabled);
+        (void) ctx.steer_group.RequestEnabled(enabled);
+        if (enabled) // 非 ZERO_FORCE 才计算运动目标；实际反馈超时保护由驱动逐电机执行。
         {
             float wheel_target_rad_s[4];
             float steer_target_rad[4];
             Chassis_CalculateTargets(wheel_target_rad_s, steer_target_rad);
             ctx.wheel_group.Control(wheel_target_rad_s[0], wheel_target_rad_s[1],
-                                        wheel_target_rad_s[2], wheel_target_rad_s[3]);
+                                    wheel_target_rad_s[2], wheel_target_rad_s[3]);
             ctx.steer_group.Control(steer_target_rad[0], steer_target_rad[1],
-                                        steer_target_rad[2], steer_target_rad[3]);
+                                    steer_target_rad[2], steer_target_rad[3]);
         }
         Chassis_UpdateFeedback();
     }
 
     /* 电机控制按 1 kHz 执行，反馈消息按 100 Hz 发布。 */
     ctx.feedback_divider++;
-    if (ctx.feedback_divider >= 10U)
+    if (ctx.feedback_divider >= 10U) // 1 kHz 下每十周期发布一次，反馈采样和平滑仍是 1 kHz。
     {
         ctx.feedback_divider = 0U;
         ctx.feedback_publisher.Publish(ctx.feedback);

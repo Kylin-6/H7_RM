@@ -29,8 +29,13 @@ Application 不应：
 - 解析底层 CAN/UART/SPI 协议帧。
 - 创建另一套消息总线或用字符串查找 Topic。
 - 把设备在线检测迁入应用消息中心。
-- 维护电机协议重试、退避或 CAN 发送细节；用电机快照决定何时计算机构目标。
+- 维护电机协议重试、退避或 CAN 发送细节。
+- 每周期逐个判断电机掉线并手动清零；基础 fail-safe 属于 Device，快照用于反馈及必要的功能策略。
 - 在多个模块中争用同一电机或同一命令所有权。
+
+安全职责为：合法反馈由 Device 校验并 Feed，Daemon 判断在线状态，Device 自动安全化输出，
+App 决定功能许可、目标和恢复策略。StatusTask 在 CheckAll 后调用电机 ServiceAll，
+设备基础保护不依赖 App 持续调用控制接口。完整时序见 [Daemon 文档](../System/Daemon/README.md#安全职责与调度)。
 
 ## 2. 当前目录
 
@@ -46,8 +51,12 @@ Chassis 与 Shoot 的机械参数和 PID 初值分别放在 `Chassis_Config.h`�
 运行状态和设备实例由各自 `.cpp` 内的私有 Context 持有。BoardConfig 只提供总线等硬件
 资源，不存机构参数。Gimbal 的配置保存在 `Gimbal_Config.h`，状态根据当前命令、INS 和电机快照计算。
 `Input` 保存 Remote 输入适配、输入状态和来源仲裁；设备协议仍由 Device/BSP 处理。
+接口、通道映射与来源接入例程见 [Input 开发指南](Input/README.md)。
 
-单板固件的硬件路径由 `H7_APP_GIMBAL`、`H7_APP_CHASSIS`、`H7_APP_SHOOT` 控制，默认均关闭；
+单板固件的 Gimbal、Chassis、Shoot App 由 `H7_APP_GIMBAL`、`H7_APP_CHASSIS`、`H7_APP_SHOOT` 控制，默认均关闭。
+关闭时 CMake 排除对应源码，任务不包含其头文件、不调用入口，也不发布对应应用反馈；INS 独立发布。
+RobotCmd 初始化由任务显式传入 Shoot 是否编入，未编入时拒绝射击事件；静态 Topic 与连续命令发布契约保留。
+本地应用关闭且无远端发布者时，对应反馈 getter 返回 false，保持调用者对象不变。
 双板固件由 CMake 在构建期分别选择应用和任务源码。板内命令通过 `LocalPublisher` 进入
 Message Center，云台板的底盘命令通过 `RemotePublisher` 进入固定 CAN Transport。
 老步兵底盘板（`LEGACY_INFANTRY_CHASSIS`，即 ChassisBoard 角色）不使用框架板间
@@ -59,8 +68,8 @@ Shoot 命令只存在于消息端点（发射通道经 0x065 原始通道转发�
 各板的 `Control_Task` 均由 1 ms 线程标志唤醒，当前初始化和更新顺序为：
 
 ```text
-SingleBoard: RobotCmd_Init → RemoteInput_Init → Gimbal_Init(启用时) → Chassis_Init → Shoot_Init
-             RemoteInput_Update → RobotCmd_Update → Gimbal_Update → Chassis_Update → Shoot_Update
+SingleBoard: RobotCmd_Init → RemoteInput_Init → Gimbal_Init(启用时) → Chassis_Init(启用时) → Shoot_Init(启用时)
+             RemoteInput_Update → RobotCmd_Update → Gimbal_Update(启用时) → Chassis_Update(启用时) → Shoot_Update(启用时)
 GimbalBoard: BoardTransport_Init → RobotCmd_Init → RemoteInput_Init → Gimbal_Init → Shoot_Init
              BoardTransport_Poll → RemoteInput_Update → RobotCmd_Update → Gimbal_Update → Shoot_Update
 ChassisBoard（老步兵底盘板）: RobotCmd_Init（三个本地输出）→ Chassis_Init → RemoteInput_Init
@@ -76,6 +85,8 @@ Gimbal/Chassis 板间轮询复用该任务，不创建额外控制任务。
 `#else` 段，但当前 ChassisBoard 角色固定为老步兵底盘板，默认预设不再编译该路径。
 
 ## 4. RobotCmd：命令唯一入口
+
+接口契约、发布时序与逐函数代码见 [RobotCmd 开发指南](RobotCmd/README.md)。
 
 RobotCmd 不直接访问电机、CAN 或 IMU。输入链现在是：
 
@@ -114,6 +125,8 @@ CH1–CH4 回中后解锁。CH2/CH1 映射底盘前后/左右，CH7 为速度档
 CH5 跟随、CH3/CH4 云台与 CH6 发射暂未接入。旧步兵的 30/50 非 SI 参数不移植，
 目前调试上限为 0.5 m/s 和 1 rad/s，实车使用前须确认方向、机械零位与限幅。
 失联时清除未执行的发射事件，并立即发布 Gimbal `DISABLED`、Chassis `ZERO_FORCE`、Shoot `OFF`。
+失去输入许可和获许可时切换来源两处共用私有 `RobotCmd_DiscardShootEvents()`；
+清理仍发生在新来源目标装载之前，命令发布频率与来源仲裁顺序不变。
 
 老步兵底盘板（`LEGACY_INFANTRY_CHASSIS`）走老工程通道约定，不套用上面的单板模板：
 CH5 跟随开关、CH2/CH1 平移、CH10 旋转、CH7 速度档、CH4 Yaw 摇杆；三轴抽象速度按
@@ -152,9 +165,12 @@ Yaw 使用 INS 角度/速度串级闭环，通过达妙 MIT 纯转矩指令输�
 姿态误差转换为 MIT 电机位置/速度目标，并限制机械范围。两轴预先配置为 MIT 模式。
 
 初始化只校验云台机构关系和控制参数并注册驱动；设备参数由 DMMotor 初始化校验。Gimbal 不维护
-就绪超时、退避、稳定窗口或 CAN 软件槽失败状态；电机协议在请求边沿立即提交，并由 DMMotor 的 100 Hz 服务依据在线反馈纠正。离线期间不追加离散命令，已进入 FDCAN 硬件 FIFO 的帧由硬件自动重发。恢复后重置控制器
-并捕获当前姿态，IMU 模式等待新目标，避免旧目标重放；DISABLED 或故障时调用
-`RequestEnabled(false)`，由电机立即覆盖安全输出并维护失能命令。
+就绪超时、退避、稳定窗口或 CAN 软件槽失败状态；电机协议在请求边沿立即提交，并由 DMMotor 的 100 Hz 服务依据在线反馈纠正。普通协议纠正在离线期间暂停，设备自身的离线安全失能仍由 DMMotor 提交及补交；已进入 FDCAN 硬件 FIFO 的帧由硬件自动重发。恢复后重置控制器
+并捕获当前姿态，IMU 模式等待新目标，避免旧目标重放；DISABLED、INS 无效或初始化失败时请求功能失能。活动模式直接更新目标并计算控制，电机故障与未就绪输出由驱动保护；ready 只用于姿态捕获与恢复，不再通过 PrepareControl 作设备停机准入。
+
+`UpdateTarget()` 将未就绪、首次就绪／恢复、进入 LOCK 合并为一次 `CapturePose()`。
+未就绪期间每周期捕获，恢复当周期再次捕获并消费当前命令序号；其余周期才接收 IMU 新序号目标。
+因此合并条件不改变控制器重置次数，也不允许恢复前的目标重放。
 
 配置集中在 [Gimbal_Config.h](Gimbal/Gimbal_Config.h)。默认关闭云台编译选项；Yaw 转矩环
 增益全零，Pitch 增益和限位来自参考机构示例，均须实机标定。完整公式、参数来源、
@@ -223,6 +239,10 @@ Yaw 命令按框架云台命令语义只判最新值、不判时效（摇杆保�
 
 ## 7. Shoot
 
+接口、移植位置和按函数代码例程见 [Shoot 开发指南](Shoot/README.md)。
+
+接口、移植位置和按函数代码例程见 [Shoot 开发指南](Shoot/README.md)。
+
 发射控制分为连续状态和离散事件。
 
 ### 7.1 ShootCmd
@@ -248,9 +268,11 @@ STOP 模式每周期最多消费一个事件：首次事件从当前反馈角建
 目标上累加 1 或 3 个弹位。BURST/REVERSE 取消事件角度保持；OFF 禁用输出并排空当前
 队列，避免重新使能后补射。`ShootFeedback.enabled` 表示三个电机均 ready 且总开关为 ON。
 每次成功 Push 只代表一个逻辑动作请求；事件按目标角累加，不等待前一发物理完成。
+模式分支只计算拨弹目标并维护事件角度保持状态，随后统一选择角度／速度外环，
+调用一次 `loader_group.Control()`；总开关 OFF 提前返回，不计算或提交主动控制目标。
 当前没有摩擦轮就绪、卡弹检测/回退、热量限制、裁判系统互锁或完整 FEEDING 状态机。
 
-调用者必须检查 `RobotCmd_PushShootEvent()` 返回值。返回 false 表示队列已满，本次动作
+调用者必须检查 `RobotCmd_PushShootEvent()` 返回值。返回 false 表示 Shoot 未编入、输入未获许可或队列已满，本次动作
 没有被接受。
 
 ## 8. Message Center 使用规则
@@ -328,8 +350,7 @@ void Example_Update(void);
 ## 12. 开源适配
 
 Application 边界、四舵轮运动学和基础发射控制参考 Meta-Embedded-NG，并适配为本工程
-的 C++ Device、CMSIS-RTOS v2、静态 Message Center 和 CAN 提交语义。许可信息见
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+的 C++ Device、CMSIS-RTOS v2、静态 Message Center 和 CAN 提交语义。
 
 ## 13. 相关文档
 

@@ -33,7 +33,7 @@ extern "C" void Control_Task(void *)
     static LocalPublisher<GimbalCmd> gimbal_output(MessageCenter::Gimbal_Command_Topic);
     static LocalPublisher<ChassisCmd> chassis_output(MessageCenter::Chassis_Command_Topic);
     static LocalPublisher<ShootCmd> shoot_output(MessageCenter::Shoot_Command_Topic);
-    if (!RobotCmd_Init(gimbal_output.Bind(), chassis_output.Bind(), shoot_output.Bind()))
+    if (!RobotCmd_Init(gimbal_output.Bind(), chassis_output.Bind(), shoot_output.Bind(), SHOOT != 0))
     {
         Diagnostics_PublishInitFailure();
         for (;;) osDelay(1000U);

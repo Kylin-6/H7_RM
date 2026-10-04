@@ -107,6 +107,7 @@ public:
     Struct_DMMotor_Feedback feedback;
 
 private:
+    static void OfflineCallback(void *context);
     static void FeedbackCallback(FDCAN_HandleTypeDef *hfdcan,
                                  uint32_t id,
                                  uint8_t *data,
@@ -132,14 +133,14 @@ private:
     volatile bool lifecycle_requested = false;
     bool safe_output_pending = false;
     bool lifecycle_command_pending = false;
+    bool offline_disable_pending = false;
     bool service_registered = false;
     Class_DMMotor *service_next = nullptr;
     static Class_DMMotor *service_head;
-    uint64_t last_feedback_us = 0;
     bool feedback_initialized = false;
     float last_position = 0.0f;
     int32_t total_round = 0;
-    Daemon feedback_daemon{100U}; ///< 只跟踪合法运动反馈的在线状态。
+    Daemon feedback_daemon{100U, OfflineCallback, this}; ///< 超时通知由本设备处理。
 };
 
 #endif

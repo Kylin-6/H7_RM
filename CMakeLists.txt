@@ -19,16 +19,15 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # CMake 在配置期固定板型，并选择 Application/Device/Task 源码；硬件接线由
-# BoardConfig 管理，跨板 CAN 映射由 TransportConfig 管理。单板保留原 ELF 名称。
+# BoardConfig 管理，跨板 CAN 映射由 TransportConfig 管理。所有板型统一使用 H7_Framework 产物名称。
 set(H7_BOARD "SingleBoard" CACHE STRING "Firmware board role")
 set_property(CACHE H7_BOARD PROPERTY STRINGS SingleBoard GimbalBoard ChassisBoard)
-if(H7_BOARD STREQUAL "SingleBoard")
-    set(CMAKE_PROJECT_NAME H7_BSP)
-elseif(H7_BOARD STREQUAL "GimbalBoard" OR H7_BOARD STREQUAL "ChassisBoard")
-    set(CMAKE_PROJECT_NAME ${H7_BOARD})
-else()
+if(NOT H7_BOARD STREQUAL "SingleBoard" AND
+   NOT H7_BOARD STREQUAL "GimbalBoard" AND
+   NOT H7_BOARD STREQUAL "ChassisBoard")
     message(FATAL_ERROR "Unknown H7_BOARD: ${H7_BOARD}")
 endif()
+set(CMAKE_PROJECT_NAME H7_Framework)
 
 # Enable compile command to ease indexing with e.g. clangd
 set(CMAKE_EXPORT_COMPILE_COMMANDS TRUE)
@@ -168,6 +167,19 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Middleware/Algorithm/CRC/crc16.c
 )
 
+option(H7_APP_GIMBAL "Build the Gimbal application" OFF)
+option(H7_APP_CHASSIS "Build the Chassis application" OFF)
+option(H7_APP_SHOOT "Build the Shoot application" OFF)
+if(H7_BOARD STREQUAL "GimbalBoard")
+    set(H7_APP_GIMBAL ON)
+    set(H7_APP_CHASSIS OFF)
+    set(H7_APP_SHOOT ON)
+elseif(H7_BOARD STREQUAL "ChassisBoard")
+    set(H7_APP_GIMBAL OFF)
+    set(H7_APP_CHASSIS ON)
+    set(H7_APP_SHOOT OFF)
+endif()
+
 set(H7_GIMBAL_TASK_DEVICE_SOURCES
     User_File/Task/TransportTask.cpp
     User_File/Task/TIM_1ms_Task.cpp
@@ -195,7 +207,6 @@ if(H7_BOARD STREQUAL "SingleBoard")
         User_Config/Board/single_board_config.cpp
         User_Config/Board/board_tasks_single.c
         User_File/Task/InsTask.cpp
-        User_File/Device/Peripheral/Motor/QDrive/QD4310.cpp
         ${H7_GIMBAL_TASK_DEVICE_SOURCES}
         ${H7_CHASSIS_DEVICE_SOURCES}
         User_File/Task/Control_Task.cpp
@@ -203,6 +214,7 @@ if(H7_BOARD STREQUAL "SingleBoard")
         User_File/Application/Input/remote_input.cpp
         User_File/Application/Input/input_state.cpp
         User_File/Application/Input/source_arbitration.cpp
+        # SingleBoard 安全模板：三个 App 源以宏=0 参与编译检查，不进入链接逻辑。
         User_File/Application/Gimbal/Gimbal.cpp
         User_File/Application/Chassis/Chassis.cpp
         User_File/Application/Shoot/Shoot.cpp)
@@ -216,9 +228,7 @@ elseif(H7_BOARD STREQUAL "GimbalBoard")
         User_File/Application/RobotCmd/RobotCmd.cpp
         User_File/Application/Input/remote_input.cpp
         User_File/Application/Input/input_state.cpp
-        User_File/Application/Input/source_arbitration.cpp
-        User_File/Application/Gimbal/Gimbal.cpp
-        User_File/Application/Shoot/Shoot.cpp)
+        User_File/Application/Input/source_arbitration.cpp)
 else()
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         User_Config/Board/chassis_board_config.cpp
@@ -231,9 +241,22 @@ else()
         User_File/Application/Input/remote_input.cpp
         User_File/Application/Input/input_state.cpp
         User_File/Application/Input/source_arbitration.cpp
-        User_File/Application/Chassis/Chassis.cpp
+        # Chassis 由 H7_APP_CHASSIS 构建期选择统一装配。
         User_File/Application/Diagnostics/Diagnostics.cpp
         User_File/Application/Diagnostics/Diagnostics_Runtime.cpp)
+endif()
+
+if(H7_APP_GIMBAL)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        User_File/Application/Gimbal/Gimbal.cpp)
+endif()
+if(H7_APP_CHASSIS)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        User_File/Application/Chassis/Chassis.cpp)
+endif()
+if(H7_APP_SHOOT)
+    target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+        User_File/Application/Shoot/Shoot.cpp)
 endif()
 
 # Add include paths
@@ -284,7 +307,6 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Device/Onboard/Key
         User_File/Device/Onboard/WS2812
         User_File/Device/Peripheral/EricTool
-        User_File/Device/Peripheral/Motor/QDrive
         User_File/Device/Peripheral/Motor/DMmotor
         User_File/Device/Peripheral/Motor/DJImotor
         User_File/Middleware/Algorithm/Pulse/
@@ -301,19 +323,6 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Application/Input/
         User_File/Application/Balance/
 )
-
-option(H7_APP_GIMBAL "Build the Gimbal hardware-control path" OFF)
-option(H7_APP_CHASSIS "Build the Chassis hardware-control path" OFF)
-option(H7_APP_SHOOT "Build the Shoot hardware-control path" OFF)
-if(H7_BOARD STREQUAL "GimbalBoard")
-    set(H7_APP_GIMBAL ON)
-    set(H7_APP_CHASSIS OFF)
-    set(H7_APP_SHOOT ON)
-elseif(H7_BOARD STREQUAL "ChassisBoard")
-    set(H7_APP_GIMBAL OFF)
-    set(H7_APP_CHASSIS ON)
-    set(H7_APP_SHOOT OFF)
-endif()
 
 # Add project symbols (macros)
 # 老步兵底盘板（ChassisBoard）不使用框架板间 Transport：遥控经 FDCAN2 的
