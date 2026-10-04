@@ -41,6 +41,14 @@ Pitch 电机和外环状态，不向外暴露电机指针。独立 `Application/
 - `LOCK` / `DISABLED`：本单轴应用保持失能，沿用老步兵无明确目标不带力矩启动的行为。
 - 位置 PID + 不对称目标速度前馈 - IMU 速度阻尼 + Stribeck 摩擦补偿 + 低带宽扰动估计。
   电机端 MIT `kp/kd` 恒为 0，仅用 `t_ff` 执行力矩。
+- 扰动积分不继续推高饱和力矩，允许反向积分退出饱和；非有限力矩计算结果请求失能。
+- 扰动补偿上限为 0.15 N·m，总力矩仍限幅 0.5 N·m，用于补偿静止重力偏差。
+- 运动时冻结扰动学习并保持补偿，不再按 0.2 s 时间常数衰减支撑力矩；停稳后继续学习。
+  输入撤销、INS 失效或电机掉线等停机路径仍清零补偿，恢复从当前姿态重新起步。
+- 静止学习增益为 0.8 N·m/(rad·s)，速度阻尼为 0.060 N·m·s/rad，位置刚度为
+  0.52 N·m/rad；速度前馈保持正向 0.012、负向 0.018 N·m·s/rad，目标限速保持原值。
+  当前机构的采样结果与验证边界见
+  [2026-10-04 Pitch 调参记录](../../../sysid/reports/pitch_tuning_2026-10-04.md)。
 - DM-IMU 桥沿用欧拉角差分速度：序号差乘标称 1 ms，限幅 ±3 rad/s，变间隔一阶低通
   tau=10 ms，结果放在 INS 的 `gyro_y_rad_s`。它是 Pitch 姿态速度，不是原始机体系陀螺。
 - 桥只在收到新欧拉角帧时发布；无数据不发布零姿态续期，Gimbal 根据 Topic 时间戳停机。
@@ -54,6 +62,21 @@ Pitch 电机和外环状态，不向外暴露电机指针。独立 `Application/
 
 `Gimbal_GetStatus()` 用于观察 CONFIG_ERROR / DISABLE / FAULT / ENABLING / READY。
 `GimbalFeedback.enabled` 表示当前控制许可有效且本板唯一 Pitch 电机 ready。
+
+## Pitch 曲线观测
+
+EmberProbe 可只读采样 `Remote_Pitch_Channel`、`Remote_Pitch_Valid` 和
+`Gimbal_Debug` 的标量成员：`command_rad` 为遥控滤波后的命令，`target_rad` /
+`target_speed_rad_s` 为限速后的闭环目标，`actual_rad` / `actual_speed_rad_s`
+为实际 INS 反馈，`command_torque_nm` 为电机协议方向的提交力矩，
+`feedback_torque_nm` 为电机报告的反馈力矩。两者不能视为精确测力结果。
+检查 `controlling`、`ins_valid`、`motor_ready` 与 `submitted`；提交成功不代表执行确认。
+停机时指令力矩显示零，不表示电机已确认失能或机械已停止。
+
+观测值由 ControlTask 更新，不允许写入这些变量调参或控制电机。运行中跨字段读取
+非原子快照，`tick_ms` 为本轮更新时间；用相同批次采样比较趋势，不能据此分析单周期因果。
+USART1 的原 24 通道发射遥测格式保持不变。调参前保持发射关闭，在机械范围中部做
+小幅动作，比较跟踪误差、超调、稳定时间和力矩饱和比例；不能仅凭静止数据修改增益。
 
 ## 故障指示灯
 

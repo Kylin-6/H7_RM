@@ -17,12 +17,15 @@
 
 #include <cmath>
 
+Struct_Gimbal_Debug Gimbal_Debug{};
+
 namespace
 {
 constexpr float CONTROL_PERIOD_S = 0.001f;
 
 struct GimbalContext
 {
+    Struct_Gimbal_Debug debug{};
     INS_State ins{};
     bool ins_valid = false;
     uint8_t feedback_divider = 0U;
@@ -61,7 +64,7 @@ bool ConfigValid(const Struct_Gimbal_Config& config)
 {
     const auto& c = config.pitch_torque;
     const float positive[] = {c.position_kp, c.target_rate_rad_s,
-                              c.stribeck_velocity_rad_s, c.stribeck_smooth_rad_s, c.disturbance_decay_tau_s,
+                              c.stribeck_velocity_rad_s, c.stribeck_smooth_rad_s,
                               c.torque_limit_nm};
     for (float value : positive)
     {
@@ -177,24 +180,37 @@ void Control()
     torque_nm += (coulomb_friction + (static_friction - coulomb_friction) *
                                          std::exp(-(speed_ratio * speed_ratio))) *
                  std::tanh(direction / c.stribeck_smooth_rad_s);
-    // 静止时学习重力/负载；运动时衰减，故障恢复时不重用旧补偿。
+    // 静止时学习重力/负载；运动时保持支撑力矩，故障恢复时不重用旧补偿。
     if (std::fabs(target_velocity_rad_s) < c.disturbance_target_speed_rad_s &&
         std::fabs(velocity_rad_s) < c.disturbance_actual_speed_rad_s)
     {
-        ctx.disturbance_torque_nm = Clamp(ctx.disturbance_torque_nm +
+        const float candidate = Clamp(ctx.disturbance_torque_nm +
                                               c.disturbance_integral_gain * error_rad * CONTROL_PERIOD_S,
                                           -c.disturbance_max_nm, c.disturbance_max_nm);
+        // 已饱和且积分会进一步增大输出时冻结；仍允许反向积分退出饱和。
+        const float delta = candidate - ctx.disturbance_torque_nm;
+        const float proposed = torque_nm + candidate;
+        if (!((proposed > c.torque_limit_nm && delta > 0.0f) ||
+              (proposed < -c.torque_limit_nm && delta < 0.0f)))
+        {
+            ctx.disturbance_torque_nm = candidate;
+        }
     }
-    else
+    torque_nm += ctx.disturbance_torque_nm;
+    if (!std::isfinite(torque_nm))
     {
-        ctx.disturbance_torque_nm -= ctx.disturbance_torque_nm *
-                                     CONTROL_PERIOD_S / c.disturbance_decay_tau_s;
+        Stop();
+        return;
     }
-    torque_nm = Clamp(torque_nm + ctx.disturbance_torque_nm,
-                      -c.torque_limit_nm, c.torque_limit_nm);
+    torque_nm = Clamp(torque_nm, -c.torque_limit_nm, c.torque_limit_nm);
     // kp/kd 恒为 0：电机侧只执行 t_ff，位置闭环由本板 IMU 外环完成。
     // 发布失败由下一 1 ms 周期提交最新目标，不阻塞等待 CAN。
-    (void) ctx.pitch_motor.SetMIT(0.0f, 0.0f, 0.0f, 0.0f, c.torque_sign * torque_nm);
+    ctx.debug.target_rad = target_rad;
+    ctx.debug.target_speed_rad_s = target_velocity_rad_s;
+    ctx.debug.command_torque_nm = c.torque_sign * torque_nm;
+    ctx.debug.submitted = ctx.pitch_motor.SetMIT(0.0f, 0.0f, 0.0f, 0.0f,
+                                                  ctx.debug.command_torque_nm);
+    ctx.debug.controlling = true;
 }
 
 /**
@@ -290,6 +306,10 @@ Enum_Gimbal_Status Gimbal_GetStatus(void)
  */
 void Gimbal_Update(void)
 {
+    ctx.debug.controlling = false;
+    ctx.debug.submitted = false;
+    ctx.debug.command_torque_nm = 0.0f;
+    ctx.debug.target_speed_rad_s = 0.0f;
     // Fresh = 这份姿态是否可用于当前控制周期；设备 Online（liveness）由
     // 各 Device 内的 Daemon 判定，两个概念独立，不做重复的掉线计算。
     ctx.ins_valid = MessageCenter::INS_State_Topic.ReadFresh(ctx.ins, ctx.config.ins_max_age_us);
@@ -327,4 +347,16 @@ void Gimbal_Update(void)
     }
     ctx.motor_snapshot = ctx.pitch_motor.GetFeedbackSnapshot();
     PublishFeedback();
+    ctx.debug.tick_ms = HAL_GetTick();
+    ctx.debug.command_rad = ctx.command.pitch_angle_rad;
+    ctx.debug.actual_rad = ctx.ins.pitch_rad;
+    ctx.debug.actual_speed_rad_s = ctx.ins.gyro_y_rad_s;
+    ctx.debug.feedback_torque_nm = ctx.motor_snapshot.feedback.torque;
+    ctx.debug.ins_valid = ctx.ins_valid;
+    ctx.debug.motor_ready = ctx.motor_snapshot.ready;
+    if (!ctx.debug.controlling)
+    {
+        ctx.debug.target_rad = ctx.ins.pitch_rad;
+    }
+    Gimbal_Debug = ctx.debug;
 }

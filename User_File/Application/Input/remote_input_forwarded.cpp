@@ -23,6 +23,10 @@
 #include <string.h>
 #include <cmath>
 
+// EmberProbe 只读观测，ControlTask 唯一写入者；无效时通道值不用于控制。
+int16_t Remote_Pitch_Channel = 0;
+bool Remote_Pitch_Valid = false;
+
 namespace
 {
 /* Pitch 通道 -> DM-IMU 目标角（数值取自云台板原 Pitch 模块）。 */
@@ -139,6 +143,8 @@ void RemoteInput_Update(void)
     const int16_t fire = channels.fire;
     const int16_t dial = channels.dial;
     const int16_t pitch = channels.pitch;
+    Remote_Pitch_Channel = pitch;
+    Remote_Pitch_Valid = channels_valid;
 
     if (!channels_valid)
     {
