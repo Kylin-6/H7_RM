@@ -3,7 +3,8 @@
  * @brief 老步兵底盘应用：四路 DM 麦轮（速度模式）+ 本板 Yaw DM 电机（MIT 速度环）。
  * @details 四路 DM 麦轮负责底盘运动，另一路挂在本板的 Yaw DM 电机负责整机云台
  *          偏航轴。遥控整形、云台跟随与坐标旋转在 Input 层完成，本模块只做速率
- *          规划、麦轮逆运动学、Yaw 控制律与下发，并发布底盘反馈与 Yaw 轴反馈。
+ *          规划（平移在云台坐标系进行）、麦轮逆运动学、Yaw 控制律与下发，
+ *          并发布底盘反馈与 Yaw 轴反馈。
  *          应用按构建期源码选择编入 ChassisBoard（H7_APP_CHASSIS），文件内不再
  *          保留功能条件编译；关闭时不编译、不调度、不发布底盘反馈。
  */
@@ -65,6 +66,7 @@ struct LegacyChassisContext
     Class_DMMotor yaw_motor;
     Class_Trajectory x_trajectory;
     Class_Trajectory y_trajectory;
+    bool translation_gimbal_frame = false;
     Class_Trajectory w_trajectory;
     Class_Trajectory yaw_trajectory;
     ChassisCmd command{};
@@ -86,7 +88,7 @@ LegacyChassisContext ctx;
 
 /**
  * @brief 麦轮逆运动学：三轴速度直接代数组合成四轮目标。
- * @note 与老工程一致，不做轮距与半径换算（三轴本身已是轮速量纲），最后整轮限幅。
+ * @note 不做轮距与半径换算（三轴本身已是轮速量纲），四轮同比缩放限幅。
  */
 void ControlWheels(float velocity_x, float velocity_y, float velocity_w)
 {
@@ -96,9 +98,15 @@ void ControlWheels(float velocity_x, float velocity_y, float velocity_w)
     wheel_speed[2] = -velocity_y - velocity_x + velocity_w;
     wheel_speed[3] = velocity_x - velocity_y + velocity_w;
 
+    float peak = kInfantryChassisConfig.wheel_speed_max;
     for (uint8_t index = 0U; index < MOTOR_COUNT; ++index)
     {
-        const float limited = Basic_Math_Constrain(wheel_speed[index],
+        peak = std::fmax(peak, std::fabs(wheel_speed[index]));
+    }
+    const float scale = kInfantryChassisConfig.wheel_speed_max / peak;
+    for (uint8_t index = 0U; index < MOTOR_COUNT; ++index)
+    {
+        const float limited = Basic_Math_Constrain(wheel_speed[index] * scale,
                                                   -kInfantryChassisConfig.wheel_speed_max,
                                                    kInfantryChassisConfig.wheel_speed_max);
         (void)ctx.wheel_motor[index].SetSpeed(limited);
@@ -345,18 +353,40 @@ void Chassis_Update(void)
 
             if (wheels_enabled)
             {
+                GimbalFeedback yaw_feedback{};
+                const bool gimbal_frame = MessageCenter::Gimbal_Feedback_Topic.ReadFresh(
+                    yaw_feedback, 100000U) && yaw_feedback.enabled &&
+                    std::isfinite(yaw_feedback.yaw_rad);
+                const float angle = gimbal_frame ? Basic_Math_Modulus_Normalization(
+                    yaw_feedback.yaw_rad - kInfantryChassisConfig.follow_forward_rad,
+                    2.0f * 3.14159265358979323846f) : 0.0f;
+                const float cosine = std::cos(angle);
+                const float sine = std::sin(angle);
+                if (gimbal_frame != ctx.translation_gimbal_frame)
+                {
+                    (void)ctx.x_trajectory.Reset(0.0f);
+                    (void)ctx.y_trajectory.Reset(0.0f);
+                    ctx.translation_gimbal_frame = gimbal_frame;
+                }
+                /* 命令接口保持底盘坐标；先还原云台坐标，再规划平移，
+                 * 最后按当前角度旋转，避免 S 曲线滞后于小陀螺方向变化。 */
+                const float target_x = Chassis_TranslateX_FromSi(ctx.command.velocity_x_m_s);
+                const float target_y = Chassis_TranslateY_FromSi(ctx.command.velocity_y_m_s);
                 /* 先把 SI 仲裁边界的目标还原为老步兵抽象速度量纲。 */
                 const bool x_valid = PlanAxis(
                     ctx.x_trajectory,
-                    Chassis_TranslateX_FromSi(ctx.command.velocity_x_m_s), &ctx.planned_x);
+                    target_x * cosine + target_y * sine, &ctx.planned_x);
                 const bool y_valid = PlanAxis(
                     ctx.y_trajectory,
-                    Chassis_TranslateY_FromSi(ctx.command.velocity_y_m_s), &ctx.planned_y);
+                    -target_x * sine + target_y * cosine, &ctx.planned_y);
                 const bool w_valid = PlanAxis(
                     ctx.w_trajectory,
                     Chassis_Rotation_FromSi(ctx.command.angular_velocity_rad_s), &ctx.planned_w);
                 if (x_valid && y_valid && w_valid)
                 {
+                    const float planned_x = ctx.planned_x;
+                    ctx.planned_x = planned_x * cosine - ctx.planned_y * sine;
+                    ctx.planned_y = planned_x * sine + ctx.planned_y * cosine;
                     ControlWheels(ctx.planned_x, ctx.planned_y, ctx.planned_w);
                 }
                 else
