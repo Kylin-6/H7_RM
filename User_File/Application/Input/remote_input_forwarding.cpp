@@ -31,8 +31,8 @@ namespace
 /* ============================== 遥控通道约定 ============================== */
 /* 索引对应 SBUS 原始通道（解析后已减中位 1024），与老工程 sbus_channel_bsp.c 一致。 */
 
-/** 开关 1：> 0 时允许底盘跟随云台。 */
-constexpr unsigned kChannelFollowSwitch = 4U;
+/** CH8 跟随开关：> 0 时允许底盘跟随云台；CH5 不参与控制。 */
+constexpr unsigned kChannelFollowSwitch = 7U;
 /** 前后方向摇杆。 */
 constexpr unsigned kChannelTranslateX = 1U;
 /** 左右方向摇杆。 */
@@ -255,9 +255,9 @@ void RemoteInput_Update(void)
         (static_cast<float>(kRotationTrigger) - frame.channels[kChannelRotation]) /
             (kChannelMax + kRotationTrigger),
         0.0f, 1.0f);
-    float velocity_w = -((1.0f - kRotationExpo) * rotation_stick +
-                         kRotationExpo * rotation_stick * rotation_stick * rotation_stick) *
-                       rotation_limit;
+    const float manual_rotation =
+        -((1.0f - kRotationExpo) * rotation_stick +
+          kRotationExpo * rotation_stick * rotation_stick * rotation_stick) * rotation_limit;
 
     /* Yaw 轴是真实 rad/s 语义，直接提交；符号与老工程一致（摇杆正方向对应负输出）。 */
     GimbalCmd gimbal_command{};
@@ -273,7 +273,8 @@ void RemoteInput_Update(void)
      */
     GimbalFeedback yaw_feedback{};
     const bool yaw_feedback_valid =
-        RobotCmd_GetGimbalFeedback(yaw_feedback) && yaw_feedback.enabled;
+        RobotCmd_GetGimbalFeedback(yaw_feedback) && yaw_feedback.enabled &&
+        std::isfinite(yaw_feedback.yaw_rad);
 
     float forward_error = 0.0f;
     if (yaw_feedback_valid)
@@ -283,31 +284,33 @@ void RemoteInput_Update(void)
     }
 
     /*
-     * 旋转通道 >= +350 时交由跟随开关决定跟随或不转；
-     * 通道 < +350 时保留上面的手动旋转值。
+     * 小陀螺优先：进入自转区时不做朝向对齐；退出后由 CH8 允许跟随。
+     * 偏差是云台相对底盘正面的角度，实车旋转输出取反使偏差趋近零。
      */
     ChassisCmd chassis_command{};
-    if (frame.channels[kChannelRotation] >= kRotationTrigger)
+    float follow_rotation = 0.0f;
+    const bool follow_enabled = frame.channels[kChannelRotation] >= kRotationTrigger &&
+                                frame.channels[kChannelFollowSwitch] > kFollowSwitchThreshold &&
+                                yaw_feedback_valid;
+    if (follow_enabled)
     {
-        if (frame.channels[kChannelFollowSwitch] > kFollowSwitchThreshold)
-        {
-            velocity_w = yaw_feedback_valid
-                             ? Basic_Math_Constrain(
-                                   forward_error * kInfantryChassisConfig.follow_kp,
-                                   -rotation_limit, rotation_limit)
-                             : 0.0f;
-            chassis_command.mode = ChassisMode::FOLLOW_GIMBAL_YAW;
-        }
-        else
-        {
-            velocity_w = 0.0f;
-            chassis_command.mode = ChassisMode::NO_FOLLOW;
-        }
+        const float follow_limit = std::fmin(rotation_limit,
+                                             kInfantryChassisConfig.follow_rotation_max);
+        /* 死区外扣除死区宽度，避免跨过边界时修正速度跳变。 */
+        const float follow_error = std::copysign(
+            std::fmax(std::fabs(forward_error) - kInfantryChassisConfig.follow_deadband_rad,
+                      0.0f),
+            forward_error);
+        follow_rotation = Basic_Math_Constrain(
+            -follow_error * kInfantryChassisConfig.follow_kp, -follow_limit, follow_limit);
+        chassis_command.mode = ChassisMode::FOLLOW_GIMBAL_YAW;
     }
     else
     {
         chassis_command.mode = ChassisMode::NO_FOLLOW;
     }
+    const float velocity_w = Basic_Math_Constrain(manual_rotation + follow_rotation,
+                                                 -rotation_limit, rotation_limit);
 
     /*
      * 边界量纲转换：老步兵抽象速度 → 框架 SI 仲裁边界，同一份比例定义在

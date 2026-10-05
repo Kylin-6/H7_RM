@@ -107,7 +107,7 @@ void ControlWheels(float velocity_x, float velocity_y, float velocity_w)
 
 /**
  * @brief Yaw 轴 MIT 速度环。
- * @details 摇杆速度减去底盘自转角速度前馈后用非对称速率规划平滑；MIT 位置增益恒为 0、
+ * @details 摇杆速度先用 S 曲线平滑，再叠加底盘自转补偿并限制总速度；MIT 位置增益恒为 0、
  *          位置目标恒为 0，阻尼随摇杆推进减小、反向瞬间提高，力矩前馈由规划加速度换算。
  */
 void ControlYaw(float chassis_yaw_rate_rad_s)
@@ -117,12 +117,7 @@ void ControlYaw(float chassis_yaw_rate_rad_s)
         -kInfantryChassisConfig.yaw_speed_max_rad_s,
         kInfantryChassisConfig.yaw_speed_max_rad_s);
 
-    float target_speed = stick_speed -
-                         kInfantryChassisConfig.yaw_rate_feedforward_gain *
-                             chassis_yaw_rate_rad_s;
-    target_speed = Basic_Math_Constrain(target_speed,
-                                        -kInfantryChassisConfig.yaw_total_speed_max_rad_s,
-                                        kInfantryChassisConfig.yaw_total_speed_max_rad_s);
+    float target_speed = stick_speed;
 
     const float stick_ratio =
         std::fabs(stick_speed) / kInfantryChassisConfig.yaw_speed_max_rad_s;
@@ -141,7 +136,12 @@ void ControlYaw(float chassis_yaw_rate_rad_s)
         (void)ctx.yaw_motor.RequestEnabled(false);
         return;
     }
-    ctx.yaw_speed = ctx.yaw_trajectory.Get_Velocity();
+    /* 自转补偿不经过摇杆 S 曲线，避免起转与变速时引入额外规划滞后。 */
+    ctx.yaw_speed = Basic_Math_Constrain(
+        ctx.yaw_trajectory.Get_Velocity() -
+            kInfantryChassisConfig.yaw_rate_feedforward_gain * chassis_yaw_rate_rad_s,
+        -kInfantryChassisConfig.yaw_total_speed_max_rad_s,
+        kInfantryChassisConfig.yaw_total_speed_max_rad_s);
 
     float kd_target = kInfantryChassisConfig.yaw_mit_kd_center +
                       (kInfantryChassisConfig.yaw_mit_kd_moving -
@@ -279,7 +279,7 @@ bool Chassis_Init(void)
                       kInfantryChassisConfig.w_jerk_limit,
                       kInfantryChassisConfig.control_dt_s) && initialized;
     initialized = ctx.yaw_trajectory.Init(
-                      kInfantryChassisConfig.yaw_total_speed_max_rad_s,
+                      kInfantryChassisConfig.yaw_speed_max_rad_s,
                       kInfantryChassisConfig.yaw_trajectory_accel_max,
                       kInfantryChassisConfig.yaw_trajectory_jerk_max,
                       kInfantryChassisConfig.control_dt_s) && initialized;

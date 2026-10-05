@@ -92,6 +92,10 @@ struct InfantryChassisConfig
     float follow_forward_rad = 3.14159265f;
     /** 跟随云台时底盘角速度的比例增益，1/s。 */
     float follow_kp = 8.0f;
+    /** 跟随旋转独立上限，抽象速度单位；不限制小陀螺目标。 */
+    float follow_rotation_max = 5.0f;
+    /** 跟随角度死区，rad（机械标定输入 2°）。 */
+    float follow_deadband_rad = 2.0f * 3.14159265f / 180.0f;
 };
 
 constexpr InfantryChassisConfig kInfantryChassisConfig{};
