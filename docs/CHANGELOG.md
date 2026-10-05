@@ -8,6 +8,15 @@
 
 ## 2026-10-04
 
+### 恢复底盘 BMI088 加热
+
+- `BMI088_Accel.Init(false)` 恢复为 `Init(true)`：小陀螺时云台 Yaw 轴稳定依赖
+  底盘自转角速度前馈，温漂直接影响控制质量。加热目标 50°C、预热基点 45°C
+  （TIM3 CH4 PWM，输出按电源电压平方比补偿），为驱动既有默认参数。
+- IMU 说明同步；加热对陀螺零偏收敛的实际收益需上板观察。
+
+## 2026-10-04
+
 ### 底盘应用重写为直接实现，移除 LEGACY_INFANTRY_CHASSIS
 
 - Chassis 应用去掉全部功能条件编译（`#if CHASSIS`、`LEGACY_INFANTRY_CHASSIS`）
