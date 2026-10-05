@@ -136,3 +136,7 @@ bool RemoteInput_IsLinkOnline(void)
     return receiver_ready && SBUS_IsOnline();
 }
 
+bool RemoteInput_IsManualProtection(void)
+{
+    return false;
+}

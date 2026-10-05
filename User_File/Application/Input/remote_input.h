@@ -32,5 +32,7 @@ void RemoteInput_Update(void);
  *       （50 ms 帧新鲜度、失控位、回中解锁）仍由 RemoteInput_Update 独立判断。
  */
 bool RemoteInput_IsLinkOnline(void);
+/** 最近新鲜遥控帧的 CH5 手动保护状态；仅供 ControlTask 诊断，不改变许可。 */
+bool RemoteInput_IsManualProtection(void);
 
 #endif // RM_REMOTE_INPUT_H

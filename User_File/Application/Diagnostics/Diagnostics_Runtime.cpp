@@ -3,6 +3,7 @@
 #include "board_config.h"
 #include "bsp_ws2812.h"
 #include "remote_input.h"
+#include "sbus.h"
 #include "message_center.h"
 
 Struct_Diagnostic_LED_State Diagnostics_LED_State{};
@@ -23,9 +24,12 @@ void Diagnostics_Publish(void)
     bool timeout[5]{};
     const uint32_t now = HAL_GetTick();
     const auto g = Chassis_GetDiagnostic();
-    /* DIAG_REMOTE 只消费 S.BUS 链路 Daemon 的在线结果，不再自行做
-     * received_ms + timeout 计算；输入健康互锁由 RemoteInput/仲裁负责。 */
-    const bool remote_valid = RemoteInput_IsLinkOnline();
+    /* 接收链路在线仍可能收到失控帧；诊断同时检查接收机的失控标志。
+     * CH5 保护不改变链路状态，继续单独显示；输入互锁由 RemoteInput/仲裁负责。 */
+    Struct_SBUS_Frame remote_frame{};
+    const bool remote_valid = RemoteInput_IsLinkOnline() &&
+                              SBUS_ReadLatest(&remote_frame) &&
+                              !remote_frame.frame_lost && !remote_frame.failsafe;
     // 连续请求期间只观察超时，不重发或修改使能请求。
     for (uint8_t i = 0U; i < 5U; ++i)
     {
@@ -39,6 +43,7 @@ void Diagnostics_Publish(void)
         timeout[i] = pending[i] && now - started_ms[i] >= 1000U;
     }
     auto d = Diagnostics_BuildSnapshot(g, remote_valid, timeout);
+    d.manual_protection = RemoteInput_IsManualProtection();
     if (init_failed) d.fault_mask |= 1U << 1;
     MessageCenter::Chassis_Diagnostic_Topic.Publish(d);
 }

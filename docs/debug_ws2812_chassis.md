@@ -8,7 +8,8 @@
 （详见 `User_File/System/Daemon/README.md`）：四轮与 Yaw 为各自 DMMotor Daemon，
 遥控为 SBUS Daemon，INS 为 System_IMU Daemon。Diagnostics 只消费这些
 Device / Application 诊断快照并映射为故障码（遥控位经
-`RemoteInput_IsLinkOnline()` 读取 SBUS Daemon 结论），不自行计算
+`RemoteInput_IsLinkOnline()` 读取 SBUS Daemon 结论，同时检查最新帧的
+`frame_lost` / `failsafe` 标志），不自行计算
 `last_rx + timeout`，WS2812 只负责显示。
 
 与 Online 相互独立保留的数据 freshness（"这份数据是否可用于当前控制"）：
@@ -24,7 +25,7 @@ INS Topic `ReadFresh`（控制侧 10 ms 门限）、S.BUS 50 ms 帧新鲜度与�
 | 灯色 | 闪烁次数与含义 |
 | --- | --- |
 | 白 | 1：系统致命初始化失败；2：底盘、遥控或命令入口初始化失败；3：控制诊断超过 50 ms 未更新或从未发布 |
-| 黄 | 1：S.BUS 遥控链路离线（SBUS Daemon）；2～5：第 1～4 路轮电机请求使能连续 1 s 未就绪 |
+| 黄 | 1：S.BUS 遥控链路离线（SBUS Daemon）或最新帧带 frame_lost / failsafe；2～5：第 1～4 路轮电机请求使能连续 1 s 未就绪 |
 | 品红 | 1：BMI088 INS 姿态无新鲜数据（沿用控制侧 10 ms 门限；链路活性见 INS Daemon） |
 | 红 | 1～4：对应轮电机最近反馈 state > 1 |
 | 橙 | 1～4：对应轮电机请求工作但反馈离线（DMMotor Daemon） |
@@ -32,14 +33,15 @@ INS Topic `ReadFresh`（控制侧 10 ms 门限）、S.BUS 50 ms 帧新鲜度与�
 | 绿常亮 | 有控制许可，INS 与所需电机正常；不表示轮子一定在转 |
 | 蓝慢闪 | 启动或使能等待，亮、灭各 500 ms |
 | 蓝常亮 | 主动撤销许可，且无其他显示异常 |
+| 紫常亮（RGB 128/0/255，亮度 15%） | CH5 < 0 手动保护；无更高优先级异常、启动或等待状态时显示 |
 
 优先级：系统初始化 → 应用初始化 → 控制快照过期 → 遥控 → INS → 四轮硬件故障 → 四轮使能超时 → 四轮离线 → Yaw 硬件故障 → Yaw 使能超时 → Yaw 离线。同类轮故障先显示编号较小的一路；修复后自动显示下一项。
 
-开机前 3 s 只显示初始化失败，其他状态先蓝慢闪。主动失能不因电机停止反馈而报警；最近的电机故障状态即使反馈过期仍保留，收到非故障反馈后清除。使能超时只是观察，不影响现有 ServiceAll 重试。遥控关闭仍显示黄色链路异常，而非蓝色主动撤销。
+开机前 3 s 只显示初始化失败，其他状态先蓝慢闪。主动失能不因电机停止反馈而报警；最近的电机故障状态即使反馈过期仍保留，收到非故障反馈后清除。使能超时只是观察，不影响现有 ServiceAll 重试。遥控关闭仍显示黄色链路异常，而非蓝色主动撤销。CH5 手动保护使用独立诊断状态显示紫色，不伪造遥控离线故障；恢复开关后按原 200 ms 去抖解锁。
 
 ## 诊断与刷新
 
-ControlTask 在 Chassis_Update 后每 10 ms 调用 `Diagnostics_Publish()`，发布 `MessageCenter::Chassis_Diagnostic_Topic`，含 `fault_mask / permitted / waiting`。TIM_1ms_Task 的既有 10 ms 回调调用 `Diagnostics_LED_Update()`，读取一致快照、选择灯效并刷新 SPI6，输入模块不再写灯色。`BoardConfig.indicators=false` 时不设置和发送灯效。
+ControlTask 在 Chassis_Update 后每 10 ms 调用 `Diagnostics_Publish()`，发布 `MessageCenter::Chassis_Diagnostic_Topic`，含 `fault_mask / permitted / waiting / manual_protection`。TIM_1ms_Task 的既有 10 ms 回调调用 `Diagnostics_LED_Update()`，读取一致快照、选择灯效并刷新 SPI6，输入模块不再写灯色。`BoardConfig.indicators=false` 时不设置和发送灯效。
 
 故障位图：bit 1 应用初始化，bit 3 遥控，bit 4 INS，bit 5～8 四轮故障，bit 9～12 四轮离线，bit 13～16 四轮使能超时，bit 17 Yaw 故障，bit 18 Yaw 离线，bit 19 Yaw 使能超时。系统致命失败 bit 0 与控制快照过期 bit 2 由灯效读取时叠加。低优先级异常保留在快照，不因未显示而清除。
 

@@ -129,6 +129,7 @@ struct Struct_Chassis_Diagnostic
     uint32_t fault_mask = 0U;
     bool permitted = false;
     bool waiting = false;
+    bool manual_protection = false;
 };
 
 #endif

@@ -49,7 +49,8 @@ Struct_Diagnostic_Pattern Diagnostics_SelectPattern(const Struct_Chassis_Diagnos
         else { green = blue = 255U; pulses = bit == 17U ? 2U : (bit == 18U ? 1U : 3U); }
         break;
     }
-    if (!selected && !slow && d.permitted) { green = 255U; blue = 0U; }
+    if (!selected && !slow && d.manual_protection) { red = 128U; green = 0U; blue = 255U; }
+    else if (!selected && !slow && d.permitted) { green = 255U; blue = 0U; }
     return {selected, red, green, blue, pulses, slow};
 }
 

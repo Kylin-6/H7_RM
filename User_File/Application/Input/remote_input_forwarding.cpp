@@ -31,7 +31,9 @@ namespace
 /* ============================== 遥控通道约定 ============================== */
 /* 索引对应 SBUS 原始通道（解析后已减中位 1024），与老工程 sbus_channel_bsp.c 一致。 */
 
-/** CH8 跟随开关：> 0 时允许底盘跟随云台；CH5 不参与控制。 */
+/** CH5 手动保护开关：< 0 时按遥控失联锁定输入。 */
+constexpr unsigned kChannelSafetySwitch = 4U;
+/** CH8 跟随开关：> 0 时允许底盘跟随云台。 */
 constexpr unsigned kChannelFollowSwitch = 7U;
 /** 前后方向摇杆。 */
 constexpr unsigned kChannelTranslateX = 1U;
@@ -80,6 +82,7 @@ constexpr uint8_t kBoardDivider = 2U;
 
 Class_GimbalBoard gimbal_board;
 bool initialized;
+bool manual_protection;
 /** 上电默认锁定；连续健康 200 ms 才解锁，失联立即锁定。 */
 bool armed;
 bool ever_healthy;
@@ -103,12 +106,12 @@ float ShapeStick(int16_t channel, float deadband, float expo)
     return normalized < 0.0f ? -curved : curved;
 }
 
-/** 三档速度通道 [-784, 784] 线性映射为 [0, maximum]。 */
+/** CH7 三挡速度：负位 30%、中位 60%、正位 100%，分界为 ±392。 */
 float MapSpeedGear(int16_t gear_channel, float maximum)
 {
-    const float limit = (static_cast<float>(gear_channel) + kChannelMax) * maximum /
-                        (2.0f * kChannelMax);
-    return Basic_Math_Constrain(limit, 0.0f, maximum);
+    const float ratio = gear_channel < -392 ? 0.30f :
+                        gear_channel > 392 ? 1.0f : 0.60f;
+    return maximum * ratio;
 }
 
 /** 云台相对底盘正前方的偏差，回绕到 [-π, π]。 */
@@ -167,6 +170,7 @@ void ForwardBoardFrames(const Struct_SBUS_Frame *frame)
 bool RemoteInput_Init(void)
 {
     initialized = false;
+    manual_protection = false;
     armed = false;
     ever_healthy = false;
     last_healthy_ms = HAL_GetTick();
@@ -195,11 +199,13 @@ void RemoteInput_Update(void)
     const uint32_t now = HAL_GetTick();
     InputState_SetTime(now);
 
-    const bool healthy = SBUS_ReadLatest(&frame) &&
-                         now - frame.timestamp_ms <= kFrameFreshMs &&
-                         !frame.frame_lost && !frame.failsafe;
+    const bool frame_healthy = SBUS_ReadLatest(&frame) &&
+                               now - frame.timestamp_ms <= kFrameFreshMs &&
+                               !frame.frame_lost && !frame.failsafe;
+    manual_protection = frame_healthy && frame.channels[kChannelSafetySwitch] < 0;
+    const bool healthy = frame_healthy && !manual_protection;
 
-    /* 维护武装互锁：连续健康 200 ms 才解锁，坏帧或失联立即锁定。 */
+    /* 维护武装互锁：连续健康 200 ms 才解锁，坏帧、失联或 CH5 保护立即锁定。 */
     if (healthy)
     {
         last_healthy_ms = now;
@@ -341,4 +347,9 @@ bool RemoteInput_IsLinkOnline(void)
     /* 直接返回 SBUS Device 内部 Daemon 的 liveness 结果，不自行计算超时；
      * 健康互锁（50 ms 帧新鲜度、失控位、200 ms 回中解锁）保持独立。 */
     return initialized && SBUS_IsOnline();
+}
+
+bool RemoteInput_IsManualProtection(void)
+{
+    return initialized && manual_protection;
 }
