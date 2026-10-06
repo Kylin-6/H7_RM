@@ -59,7 +59,7 @@ struct InfantryChassisConfig
     /** Yaw 轴 DM 电机（MIT 模式）节点 ID 与主控接收 ID。 */
     uint8_t yaw_motor_id = 0x03U;
     uint16_t yaw_motor_master_id = 0x05U;
-    float yaw_position_max_rad = 3.14f;
+    float yaw_position_max_rad = 3.14159f;
     float yaw_velocity_max_rad_s = 30.0f;
     float yaw_torque_max_nm = 10.0f;
     /** 摇杆给出的 Yaw 速度上限，rad/s。 */
