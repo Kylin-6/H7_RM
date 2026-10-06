@@ -65,7 +65,7 @@ struct InfantryChassisConfig
     /** 摇杆给出的 Yaw 速度上限，rad/s。 */
     float yaw_speed_max_rad_s = 8.0f;
     /** IMU 位置外环比例增益，1/s；初始试验值，须实机调参。 */
-    float yaw_position_kp = 2.0f;
+    float yaw_position_kp = 3.0f;
     /** IMU 位置外环积分 / 微分增益，单位 1/s² / 无量纲；先关闭，逐项调参。 */
     float yaw_position_ki = 0.0f;
     float yaw_position_kd = 0.0f;
