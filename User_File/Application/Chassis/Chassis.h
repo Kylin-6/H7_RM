@@ -2,6 +2,7 @@
 #define CHASSIS_H
 
 #include "dmmotor.h"
+#include "message_types.h"
 
 struct Struct_Chassis_Diagnostic_Input
 {
@@ -17,5 +18,8 @@ bool Chassis_Init(void);
 void Chassis_Update(void);
 /** 仅供同一 ControlTask 上下文的诊断层采集，不从其他任务读取应用 Context。 */
 Struct_Chassis_Diagnostic_Input Chassis_GetDiagnostic(void);
+
+/** 读取云台回传 INS；超过 100 ms 或无完整帧时返回 false，保持输出不变。 */
+bool Chassis_GetGimbalImu(INS_State &state);
 
 #endif

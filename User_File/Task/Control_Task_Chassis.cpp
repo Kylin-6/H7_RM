@@ -8,6 +8,7 @@
  */
 #include "Chassis.h"
 #include "Init.h"
+#include "gimbal_imu_transport.h"
 #include "cmsis_os2.h"
 
 #include "Diagnostics.h"
@@ -35,7 +36,8 @@ extern "C" void Control_Task(void *)
     const bool chassis_ready = Chassis_Init();
     /* 遥控接收依赖 UART BSP 与 init_finished，放在设备初始化之后。 */
     const bool remote_ready = RemoteInput_Init();
-    if (!chassis_ready || !remote_ready)
+    const bool imu_link_ready = GimbalImuTransport_Init();
+    if (!chassis_ready || !remote_ready || !imu_link_ready)
     {
         Diagnostics_PublishInitFailure();
     }
@@ -45,6 +47,7 @@ extern "C" void Control_Task(void *)
     {
         osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
         /* 输入适配先于 RobotCmd，保证本周期发布的命令来自本周期通道。 */
+        GimbalImuTransport_Update();
         RemoteInput_Update();
         RobotCmd_Update();
         Chassis_Update();

@@ -111,6 +111,55 @@ bool DecodeChassisFeedback(const uint8_t *bytes, uint32_t size,
     return true;
 }
 
+bool EncodeGimbalImu(const INS_State &state, uint8_t sequence,
+                     uint8_t (&attitude)[kPayloadSize], uint8_t (&rate)[kPayloadSize])
+{
+    constexpr float kTwoPi = 6.28318530718f;
+    uint8_t angles[kPayloadSize] = {sequence, static_cast<uint8_t>(kVersion << 4U)};
+    uint8_t rates[kPayloadSize] = {sequence, static_cast<uint8_t>(kVersion << 4U)};
+    if (!EncodeScalar(std::remainder(state.yaw_rad, kTwoPi), &angles[2]) ||
+        !EncodeScalar(std::remainder(state.pitch_rad, kTwoPi), &angles[4]) ||
+        !EncodeScalar(std::remainder(state.roll_rad, kTwoPi), &angles[6]) ||
+        !EncodeScalar(state.gyro_x_rad_s, &rates[2]) ||
+        !EncodeScalar(state.gyro_y_rad_s, &rates[4]) ||
+        !EncodeScalar(state.gyro_z_rad_s, &rates[6]))
+    {
+        return false;
+    }
+    for (uint8_t index = 0U; index < kPayloadSize; ++index)
+    {
+        attitude[index] = angles[index];
+        rate[index] = rates[index];
+    }
+    return true;
+}
+
+bool DecodeGimbalImu(const uint8_t *attitude, const uint8_t *rate,
+                     INS_State &state, uint8_t &sequence)
+{
+    if (attitude == nullptr || rate == nullptr || attitude[0] != rate[0] ||
+        attitude[1] != (kVersion << 4U) || rate[1] != (kVersion << 4U))
+    {
+        return false;
+    }
+    INS_State decoded{};
+    decoded.yaw_rad = DecodeScalar(&attitude[2]);
+    decoded.pitch_rad = DecodeScalar(&attitude[4]);
+    decoded.roll_rad = DecodeScalar(&attitude[6]);
+    if (std::fabs(decoded.yaw_rad) > 3.1425f ||
+        std::fabs(decoded.pitch_rad) > 3.1425f ||
+        std::fabs(decoded.roll_rad) > 3.1425f)
+    {
+        return false;
+    }
+    decoded.gyro_x_rad_s = DecodeScalar(&rate[2]);
+    decoded.gyro_y_rad_s = DecodeScalar(&rate[4]);
+    decoded.gyro_z_rad_s = DecodeScalar(&rate[6]);
+    state = decoded;
+    sequence = attitude[0];
+    return true;
+}
+
 bool SequenceNewer(uint8_t candidate, uint8_t previous)
 {
     const uint8_t distance = static_cast<uint8_t>(candidate - previous);

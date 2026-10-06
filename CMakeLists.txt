@@ -232,6 +232,7 @@ else()
         ${H7_CHASSIS_DEVICE_SOURCES}
         ${H7_INFANTRY_CHASSIS_DEVICE_SOURCES}
         User_File/System/Transport/transport_chassis.cpp
+        User_File/System/Transport/gimbal_imu_transport.cpp
         User_File/Task/Control_Task_Chassis.cpp
         User_File/Application/RobotCmd/RobotCmd.cpp
         User_File/Application/Input/remote_input_forwarding.cpp

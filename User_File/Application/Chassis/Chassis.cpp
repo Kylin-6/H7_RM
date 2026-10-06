@@ -435,3 +435,8 @@ void Chassis_Update(void)
         PublishFeedback(ins_valid);
     }
 }
+
+bool Chassis_GetGimbalImu(INS_State &state)
+{
+    return MessageCenter::Gimbal_INS_State_Topic.ReadFresh(state, 100000U);
+}

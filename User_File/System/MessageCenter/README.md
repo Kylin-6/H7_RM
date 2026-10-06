@@ -387,3 +387,6 @@ Message Center 不负责：
 - [Shoot：持续状态与事件消费](../../Application/Shoot/README.md)
 - [Transport：板间时间戳与消息编码](../Transport/README.md)
 - [交互式架构图](../../../Assets/Architecture/H7_BSP.html)
+
+`Gimbal_INS_State_Topic` 是云台板回传 INS 的独立最新值状态，不覆盖本板
+`INS_State_Topic`；来源与时效见 [回传协议](../Transport/GIMBAL_IMU.md)。
