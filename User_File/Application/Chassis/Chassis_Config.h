@@ -65,10 +65,10 @@ struct InfantryChassisConfig
     /** 摇杆给出的 Yaw 速度上限，rad/s。 */
     float yaw_speed_max_rad_s = 8.0f;
     /** IMU 位置外环比例增益，1/s；初始试验值，须实机调参。 */
-    float yaw_position_kp = 3.0f;
+    float yaw_position_kp = 3.5f;
     /** IMU 位置外环积分 / 微分增益，单位 1/s² / 无量纲；先关闭，逐项调参。 */
     float yaw_position_ki = 0.0f;
-    float yaw_position_kd = 0.0f;
+    float yaw_position_kd = 0.3f;
     /** PID 输出与积分分量限幅，rad/s；0 关闭这两层限幅，最终电机速度仍限幅。 */
     float yaw_position_speed_max_rad_s = 0.0f;
     /** 电机正速度对应 IMU Yaw 增大为 +1、减小为 -1；0 未标定，禁止 Yaw 输出。 */
@@ -103,8 +103,8 @@ struct InfantryChassisConfig
     float follow_forward_rad = 3.14159265f;
     /** 跟随云台时底盘角速度的比例增益，1/s。 */
     float follow_kp = 8.0f;
-    /** 跟随旋转独立上限，抽象速度单位；不限制小陀螺目标。 */
-    float follow_rotation_max = 5.0f;
+    /** 跟随旋转独立上限为底盘最大转速的 15%，抽象速度单位；不限制小陀螺目标。 */
+    float follow_rotation_max = 0.15f * angular_velocity_max;
     /** 跟随角度死区，rad（机械标定输入 2°）。 */
     float follow_deadband_rad = 2.0f * 3.14159265f / 180.0f;
 };
