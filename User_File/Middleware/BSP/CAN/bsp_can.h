@@ -61,6 +61,7 @@ typedef struct
     uint32_t submit_queue_full_count;  /*!< 命令 FIFO 无空位导致的提交失败次数。 */
     uint32_t periodic_slot_full_count; /*!< 新周期键无可用槽位的次数。 */
     uint32_t hardware_fifo_full_count; /*!< 发送时硬件 Tx FIFO 暂时无空位的次数。 */
+    uint32_t bus_off_recovery_count[3]; /*!< FDCAN1/2/3 发起 Bus-off 恢复次数，非恢复成功确认。 */
     uint32_t hal_send_error_count;     /*!< HAL 拒绝发送且原因不是 FIFO 满的次数。 */
 } Struct_CAN_Tx_Stats;
 

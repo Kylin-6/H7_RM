@@ -14,7 +14,10 @@ struct PendingFrame
     bool valid = false;
 };
 // RX ISR 写入，ControlTask 在保存/恢复 PRIMASK 的临界区内取得一致快照。
-PendingFrame pending[2];
+// 保留交错到达的四组样本；完整配对独立保存，不被下一组半帧覆盖。
+PendingFrame pending[4][2];
+PendingFrame completed[2];
+bool completed_valid;
 bool initialized;
 bool has_sequence;
 uint8_t last_sequence;
@@ -30,12 +33,21 @@ void Receive(FDCAN_HandleTypeDef *bus, uint32_t id, uint8_t *data,
         return;
     }
     const uint8_t index = id == TransportProtocol::kGimbalImuAttitudeCanId ? 0U : 1U;
+    auto &frames = pending[data[0] % 4U];
     for (uint8_t byte = 0U; byte < 8U; ++byte)
     {
-        pending[index].bytes[byte] = data[byte];
+        frames[index].bytes[byte] = data[byte];
     }
-    pending[index].received_us = SYS_Timestamp_Get_Microsecond();
-    pending[index].valid = true;
+    frames[index].received_us = SYS_Timestamp_Get_Microsecond();
+    frames[index].valid = true;
+    if (frames[0].valid && frames[1].valid &&
+        frames[0].bytes[0] == frames[1].bytes[0])
+    {
+        completed[0] = frames[0];
+        completed[1] = frames[1];
+        completed_valid = true;
+        frames[0].valid = frames[1].valid = false;
+    }
 }
 }
 
@@ -58,14 +70,12 @@ void GimbalImuTransport_Update(void)
     PendingFrame frames[2];
     const uint32_t primask = __get_PRIMASK();
     __disable_irq();
-    frames[0] = pending[0];
-    frames[1] = pending[1];
-    const bool paired = frames[0].valid && frames[1].valid &&
-                        frames[0].bytes[0] == frames[1].bytes[0];
+    const bool paired = completed_valid;
     if (paired)
     {
-        pending[0].valid = false;
-        pending[1].valid = false;
+        frames[0] = completed[0];
+        frames[1] = completed[1];
+        completed_valid = false;
     }
     __DMB();
     __set_PRIMASK(primask);
