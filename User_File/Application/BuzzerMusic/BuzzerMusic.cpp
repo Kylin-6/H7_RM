@@ -15,52 +15,50 @@ struct Struct_Score_Note
     uint16_t gap_ms;
 };
 
-// 转录自用户提供的 remember_mr_zhang_score.c，保留音高与毫秒时值。
+// 曲谱来源：NCUROBOT (C) 2022，Buzzer-YOU/BSP/buzzer.c 的 gala_you()。
+// GALA《Young For You》，保留 Note() 的原始音高及 Long * 200 ms 时值。
 constexpr Struct_Score_Note score[] = {
-    {698.456f, 198U, 2U}, // F5
-    {587.330f, 198U, 2U}, // D5
-    {698.456f, 198U, 2U}, // F5
-    {587.330f, 198U, 2U}, // D5
-    {1046.502f, 798U, 2U}, // C6
-    {932.328f, 198U, 2U}, // AS5
-    {932.328f, 198U, 2U}, // AS5
-    {932.328f, 198U, 2U}, // AS5
-    {587.330f, 98U, 2U}, // D5
-    {698.456f, 500U, 400U}, // F5
-    {783.991f, 398U, 2U}, // G5
-    {783.991f, 198U, 2U}, // G5
-    {783.991f, 98U, 2U}, // G5
-    {698.456f, 498U, 2U}, // F5
-    {587.330f, 198U, 2U}, // D5
-    {466.164f, 198U, 2U}, // AS4
-    {622.254f, 198U, 2U}, // DS5
-    {587.330f, 198U, 2U}, // D5
-    {622.254f, 98U, 2U}, // DS5
-    {783.991f, 298U, 2U}, // G5
-    {698.456f, 798U, 2U}, // F5
-    {698.456f, 198U, 2U}, // F5
-    {587.330f, 198U, 2U}, // D5
-    {698.456f, 198U, 2U}, // F5
-    {587.330f, 198U, 2U}, // D5
-    {1046.502f, 798U, 2U}, // C6
-    {932.328f, 198U, 2U}, // AS5
-    {932.328f, 198U, 2U}, // AS5
-    {932.328f, 198U, 2U}, // AS5
-    {587.330f, 98U, 2U}, // D5
-    {783.991f, 98U, 2U}, // G5
-    {698.456f, 400U, 200U}, // F5
-    {783.991f, 98U, 2U}, // G5
-    {880.000f, 98U, 2U}, // A5
-    {932.328f, 398U, 2U}, // AS5
-    {932.328f, 198U, 2U}, // AS5
-    {698.456f, 198U, 2U}, // F5
-    {698.456f, 198U, 2U}, // F5
-    {932.328f, 398U, 2U}, // AS5
-    {587.330f, 198U, 2U}, // D5
-    {523.251f, 198U, 2U}, // C5
-    {587.330f, 398U, 2U}, // D5
-    {523.251f, 198U, 2U}, // C5
-    {466.164f, 800U, 0U}, // AS4
+    {494.0f, 200U, 0U}, // note_5B
+    {392.0f, 200U, 0U}, // note_G
+    {494.0f, 400U, 0U}, // note_5B
+    {392.0f, 200U, 0U}, // note_G
+    {494.0f, 400U, 0U}, // note_5B
+    {392.0f, 200U, 0U}, // note_G
+    {587.0f, 400U, 0U}, // note_5D
+    {392.0f, 200U, 0U}, // note_G
+    {523.0f, 200U, 0U}, // note_5C
+    {523.0f, 200U, 0U}, // note_5C
+    {392.0f, 200U, 0U}, // note_G
+    {494.0f, 200U, 0U}, // note_5B
+    {523.0f, 200U, 0U}, // note_5C
+    {494.0f, 200U, 0U}, // note_5B
+    {392.0f, 200U, 0U}, // note_G
+    {494.0f, 400U, 0U}, // note_5B
+    {392.0f, 200U, 0U}, // note_G
+    {494.0f, 400U, 0U}, // note_5B
+    {392.0f, 200U, 0U}, // note_G
+    {587.0f, 400U, 0U}, // note_5D
+    {392.0f, 200U, 0U}, // note_G
+    {523.0f, 200U, 0U}, // note_5C
+    {523.0f, 200U, 0U}, // note_5C
+    {392.0f, 200U, 0U}, // note_G
+    {494.0f, 200U, 0U}, // note_5B
+    {523.0f, 200U, 0U}, // note_5C
+    {494.0f, 200U, 0U}, // note_5B
+    {392.0f, 200U, 0U}, // note_G
+    {494.0f, 400U, 0U}, // note_5B
+    {392.0f, 200U, 0U}, // note_G
+    {494.0f, 400U, 0U}, // note_5B
+    {392.0f, 200U, 0U}, // note_G
+    {587.0f, 400U, 0U}, // note_5D
+    {392.0f, 200U, 0U}, // note_G
+    {523.0f, 200U, 0U}, // note_5C
+    {523.0f, 200U, 0U}, // note_5C
+    {392.0f, 200U, 0U}, // note_G
+    {494.0f, 200U, 0U}, // note_5B
+    {523.0f, 200U, 0U}, // note_5C
+    {494.0f, 200U, 0U}, // note_5B
+    {392.0f, 200U, 0U}, // note_G
 };
 }
 
@@ -103,7 +101,12 @@ void BuzzerMusic_Update(void)
     {
         started_ms = now;
         started = true;
-        BSP_Buzzer.Set_Frequency(score[index].frequency_hz);
-        BSP_Buzzer.Set_Loudness(0.15f);
+        if (score[index].frequency_hz > 0.0f)
+        {
+            BSP_Buzzer.Set_Frequency(score[index].frequency_hz);
+            BSP_Buzzer.Set_Loudness(1.0f);
+        }
+        else
+            BSP_Buzzer.Set_Loudness(0.0f);
     }
 }
