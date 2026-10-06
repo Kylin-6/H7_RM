@@ -368,6 +368,29 @@ bool CAN_Tx_Submit(const Struct_CAN_Tx_Msg *tx_msg)
     return true;
 }
 
+bool CAN_Tx_SubmitPair(const Struct_CAN_Tx_Msg *first, const Struct_CAN_Tx_Msg *second)
+{
+    if (!BSP_CAN_MessageIsValid(first) || !BSP_CAN_MessageIsValid(second) ||
+        first->hfdcan != second->hfdcan || first->id == second->id)
+    {
+        return false;
+    }
+    const uint8_t bus = BSP_CAN_BusIndex(first->hfdcan);
+    const uint32_t primask = BSP_CAN_EnterCritical();
+    // 至多缓存一组待发数据；总线阻塞时拒绝新组，避免积压旧 INS。
+    if (Can_TxQueue[bus] == NULL || Can_TxPending[bus] != 0U ||
+        osMessageQueueGetCount(Can_TxQueue[bus]) != 0U ||
+        osMessageQueueGetSpace(Can_TxQueue[bus]) < 2U)
+    {
+        BSP_CAN_ExitCritical(primask);
+        return false;
+    }
+    const bool submitted = osMessageQueuePut(Can_TxQueue[bus], first, 0U, 0U) == osOK &&
+                           osMessageQueuePut(Can_TxQueue[bus], second, 0U, 0U) == osOK;
+    BSP_CAN_ExitCritical(primask);
+    return submitted;
+}
+
 /**
  * @brief 发布某个 (FDCAN 句柄, CAN ID) 的最新周期发送数据。
  * @param tx_msg 要发布的完整 CAN 消息。
@@ -504,9 +527,26 @@ void BSP_CAN_GetTxStats(Struct_CAN_Tx_Stats *stats)
  * @details 每条总线各自保留一帧待重试消息；失败不阻塞其他总线。
  * @note 只能由同一个 CAN 发送任务调用，不支持并发或重入。
  */
+/* Bus-off 硬件置 INIT；清除它后由控制器等待 128 次总线空闲完成恢复。
+ * 仅发送任务调用，不 Stop/Init、不忙等、不修改软件命令与周期槽。 */
+static void BSP_CAN_RecoverBusOff(FDCAN_HandleTypeDef *hfdcan)
+{
+    if (hfdcan->State == HAL_FDCAN_STATE_BUSY &&
+        (hfdcan->Instance->PSR & FDCAN_PSR_BO) != 0U &&
+        (hfdcan->Instance->CCCR & FDCAN_CCCR_INIT) != 0U)
+    {
+        CLEAR_BIT(hfdcan->Instance->CCCR, FDCAN_CCCR_INIT);
+        BSP_CAN_SaturatingIncrement(
+            &Can_TxStats.bus_off_recovery_count[BSP_CAN_BusIndex(hfdcan)]);
+    }
+}
+
 void BSP_CAN_SendAsync(void)
 {
     uint8_t bus;
+    BSP_CAN_RecoverBusOff(&hfdcan1);
+    BSP_CAN_RecoverBusOff(&hfdcan2);
+    BSP_CAN_RecoverBusOff(&hfdcan3);
     for (bus = 0U; bus < CAN_BUS_COUNT; ++bus)
     {
         if (Can_TxPending[bus] == 0U)

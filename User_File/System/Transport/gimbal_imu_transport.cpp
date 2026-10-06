@@ -47,10 +47,9 @@ void GimbalImuTransport_Update(void)
     }
     // 每次尝试使用新序号，避免部分提交失败后混合两个采样时刻。
     ++sequence;
-    // 两个槽独立提交，部分失败不算完成；下一周期重试，接收端只发布配对帧。
-    const bool attitude_sent = CAN_Tx_Perform(&attitude);
-    const bool rate_sent = CAN_Tx_Perform(&rate);
-    if (attitude_sent && rate_sent)
+    // 整组进入有界 FIFO，避免两帧被独立的最新值槽跨样本覆盖。
+    // 插入队列尚有旧帧时拒绝整组；下一周期选取新鲜源样本重试。
+    if (CAN_Tx_SubmitPair(&attitude, &rate))
     {
         last_topic_sequence = sample.sequence;
         has_sent = true;

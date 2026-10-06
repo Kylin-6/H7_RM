@@ -61,6 +61,7 @@ typedef struct
     uint32_t submit_queue_full_count;  /*!< 命令 FIFO 无空位导致的提交失败次数。 */
     uint32_t periodic_slot_full_count; /*!< 新周期键无可用槽位的次数。 */
     uint32_t hardware_fifo_full_count; /*!< 发送时硬件 Tx FIFO 暂时无空位的次数。 */
+    uint32_t bus_off_recovery_count[3]; /*!< FDCAN1/2/3 发起 Bus-off 恢复次数，非恢复成功确认。 */
     uint32_t hal_send_error_count;     /*!< HAL 拒绝发送且原因不是 FIFO 满的次数。 */
 } Struct_CAN_Tx_Stats;
 
@@ -94,6 +95,10 @@ bool BSP_CAN_RegisterCallback(uint32_t can_id,
  * @note true 只表示软件 FIFO 接受；不表示 HAL 已写入硬件 FIFO、总线发送、对端接收或设备执行。
  */
 bool CAN_Tx_Submit(const Struct_CAN_Tx_Msg *tx_msg);
+/** 原子提交同总线的两帧；仅在该总线插入队列空闲时接收，失败不入队。
+ *  固定顺序、不覆盖已提交数据，非阻塞；供需要同一序号配对的 Transport 使用。
+ *  true 仍只表示软件入队，不代表对端接收。 */
+bool CAN_Tx_SubmitPair(const Struct_CAN_Tx_Msg *first, const Struct_CAN_Tx_Msg *second);
 
 /**
  * @brief 更新周期发送缓冲。
