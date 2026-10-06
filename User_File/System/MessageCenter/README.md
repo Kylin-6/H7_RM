@@ -401,3 +401,6 @@ DM-IMU 桥仅在新欧拉角帧到达时发布 INS；Pitch 差分速度放 `gyro
 老步兵 GimbalBoard 的 `Robot_Diagnostic_Topic` 由 ControlTask 每 10 ms 发布，
 TIM_1ms_Task 读取以驱动 WS2812；它只传递诊断快照，不参与安全控制。
 颜色与位图契约见 [debug 指南](../../../docs/debug_ws2812.md)。
+
+`Gimbal_INS_State_Topic` 是云台板回传 INS 的独立最新值状态，不覆盖本板
+`INS_State_Topic`；来源与时效见 [回传协议](../Transport/GIMBAL_IMU.md)。

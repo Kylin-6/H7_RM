@@ -27,6 +27,12 @@ bool EncodeChassisFeedback(const ChassisFeedback &feedback, uint8_t sequence,
                            uint8_t (&bytes)[kPayloadSize]);
 bool DecodeChassisFeedback(const uint8_t *bytes, uint32_t size,
                            ChassisFeedback &feedback, uint8_t &sequence);
+constexpr uint16_t kGimbalImuAttitudeCanId = 0x143U;
+constexpr uint16_t kGimbalImuRateCanId = 0x144U;
+bool EncodeGimbalImu(const INS_State &state, uint8_t sequence,
+                     uint8_t (&attitude)[kPayloadSize], uint8_t (&rate)[kPayloadSize]);
+bool DecodeGimbalImu(const uint8_t *attitude, const uint8_t *rate,
+                     INS_State &state, uint8_t &sequence);
 bool SequenceNewer(uint8_t candidate, uint8_t previous);
 }
 

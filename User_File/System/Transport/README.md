@@ -80,3 +80,8 @@ Poll 在 bus、ID、大小、接收时效与 Decode 全部通过后 Feed，再�
 USB 遥测任务，与板间 CAN 的 `BoardTransport_Poll()` 是两个独立入口。
 INS、Gimbal 和 Shoot 板内控制不经过此 Transport。扩展第三块板时新增对应
 构建预设、BoardConfig、固定 TransportConfig 绑定以及该消息的编解码和接收发布入口。
+
+## 老步兵云台 INS 回传
+
+两板 FDCAN2 新增 0x143/0x144 回传，协议、源数据限制与底盘读取接口见
+[云台 INS 回传底盘](GIMBAL_IMU.md)。此入口独立于框架的 0x141/0x222 Transport。

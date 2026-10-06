@@ -9,6 +9,7 @@ namespace MessageCenter
 {
 extern Topic<Struct_Robot_Diagnostic> Robot_Diagnostic_Topic;
 extern Topic<INS_State> INS_State_Topic;
+extern Topic<INS_State> Gimbal_INS_State_Topic;
 extern Topic<GimbalCmd> Gimbal_Command_Topic;
 extern Topic<ChassisCmd> Chassis_Command_Topic;
 extern Topic<ShootCmd> Shoot_Command_Topic;

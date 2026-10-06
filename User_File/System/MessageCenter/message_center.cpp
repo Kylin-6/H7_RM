@@ -4,6 +4,7 @@ namespace MessageCenter
 {
 Topic<Struct_Robot_Diagnostic> Robot_Diagnostic_Topic;
 Topic<INS_State> INS_State_Topic;
+Topic<INS_State> Gimbal_INS_State_Topic;
 Topic<GimbalCmd> Gimbal_Command_Topic;
 Topic<ChassisCmd> Chassis_Command_Topic;
 Topic<ShootCmd> Shoot_Command_Topic;

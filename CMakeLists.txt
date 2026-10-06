@@ -212,6 +212,7 @@ elseif(H7_BOARD STREQUAL "GimbalBoard")
         User_Config/Board/gimbal_board_config.cpp
         User_Config/Board/board_tasks_gimbal.c
         ${H7_GIMBAL_TASK_DEVICE_SOURCES}
+        User_File/System/Transport/gimbal_imu_transport.cpp
         User_File/Task/Control_Task_Gimbal.cpp
         User_File/Application/Diagnostics/Diagnostics.cpp
         User_File/Application/Diagnostics/Diagnostics_Runtime.cpp

@@ -12,6 +12,7 @@
 #include "remote_input.h"
 #include "Shoot.h"
 #include "Init.h"
+#include "gimbal_imu_transport.h"
 #include "message_center.h"
 #include "output.h"
 #include "cmsis_os2.h"
@@ -42,6 +43,10 @@ extern "C" void Control_Task(void *)
         for (;;) osDelay(1000U);
     }
     (void)RemoteInput_Init();
+    if (!GimbalImuTransport_Init())
+    {
+        Diagnostics_PublishInitFailure();
+    }
     /* BMI088 缺席：DM-IMU 统一发布姿态，Gimbal 只读取 INS Topic。 */
     (void)DM_IMU_InsBridge_Init();
     (void) Gimbal_Init();
@@ -53,6 +58,7 @@ extern "C" void Control_Task(void *)
         /* 输入适配先于 RobotCmd，保证本周期发布的命令来自本周期通道。 */
         RemoteInput_Update();
         DM_IMU_InsBridge_Update();
+        GimbalImuTransport_Update();
         RobotCmd_Update();
         Gimbal_Update();
         Shoot_Update();
