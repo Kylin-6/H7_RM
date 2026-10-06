@@ -69,8 +69,8 @@ struct InfantryChassisConfig
     /** IMU 位置外环积分 / 微分增益，单位 1/s² / 无量纲；先关闭，逐项调参。 */
     float yaw_position_ki = 0.0f;
     float yaw_position_kd = 0.0f;
-    /** PID 输出与积分分量限幅，rad/s；不限制摇杆与底盘角速度前馈。 */
-    float yaw_position_speed_max_rad_s = 1.0f;
+    /** PID 输出与积分分量限幅，rad/s；0 关闭这两层限幅，最终电机速度仍限幅。 */
+    float yaw_position_speed_max_rad_s = 0.0f;
     /** 电机正速度对应 IMU Yaw 增大为 +1、减小为 -1；0 未标定，禁止 Yaw 输出。 */
     float yaw_motor_to_imu_sign = 1.0f;
     /** 回传 IMU 用于 Yaw 闭环的新鲜度，us；接收 Topic 本身采用 100 ms 契约。 */

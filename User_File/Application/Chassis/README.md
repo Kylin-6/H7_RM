@@ -22,7 +22,7 @@ SBUS 遥控接收，并经 FDCAN2 向云台板下发 0x065/0x070/0x075 下行帧
 | Yaw 总线 / ID / 反馈 ID | FDCAN1，0x03 / 0x05 | Yaw 电机挂在本板，MIT 模式 |
 | Yaw 电机量程 | ±3.14 rad、±30 rad/s、±10 N·m | 同上 |
 | 摇杆 Yaw 速度上限 | 8 rad/s | `yaw_speed_max_rad_s`，只限制摇杆目标 |
-| 位置外环 PID / 输出限幅 | Kp=2、Ki=0、Kd=0 / ±1 rad/s | 初始试验值，积分、微分先关闭，须实机调参 |
+| 位置外环 PID / 输出限幅 | Kp=2、Ki=0、Kd=0 / 关闭 | 初始试验值，积分、微分先关闭，须实机调参 |
 | 电机速度到 IMU Yaw 的方向 | +1（手动转轴观测同向） | `yaw_motor_to_imu_sign`；只有 +1 / -1 才允许 Yaw 输出 |
 | 云台姿态与底盘角速度闭环新鲜度 | 10 ms | `yaw_imu_max_age_us`，失效撤销 Yaw 输出 |
 | 补偿后 Yaw 总速度上限 | 15 rad/s | `yaw_total_speed_max_rad_s`，限制摇杆与位置修正合成目标 |
@@ -112,7 +112,7 @@ jerk 上限由 15000 降到 7500 rad/s³，加速度建立时间约 20 ms，柔�
 
 参数集中在 `Chassis_Config.h`：`yaw_position_kp=2`（1/s）、
 `yaw_position_ki=0`（1/s²）、`yaw_position_kd=0`（无量纲）、
-`yaw_position_speed_max_rad_s=1`、`yaw_imu_max_age_us=10000`。
+`yaw_position_speed_max_rad_s=0`、`yaw_imu_max_age_us=10000`。
 这些增益是初始试验参数，尚未实机闭环调参。2026-10-06 保持底盘静止、手动转动
 Yaw 轴，通过探针读取两组数据：电机角度增量约 +1.745 / +1.158 rad，
 云台 IMU Yaw 对应增量约 +1.738 / +1.169 rad（均已处理回绕），方向一致。
@@ -125,14 +125,14 @@ Yaw 轴，通过探针读取两组数据：电机角度增量约 +1.745 / +1.158
 首次就绪 / 恢复：target = 当前 imu_yaw
 每周期：target = wrap(target + s * v * dt)
 error = wrap(target - imu_yaw)                         // [-π, π] 最短路径
-correction = PID(error, dt)                           // IMU rad/s，输出限幅 ±1
+correction = PID(error, dt)                           // IMU rad/s，输出不单独限幅
 motor_speed = clamp(v + s * (correction - gain * chassis_gyro_z), -15, +15)
 SetMIT(0, motor_speed, 0, kd, torque_ff)
 ```
 
 摇杆回中后，S 曲线减速到零，角目标随减速段继续积分，停稳后保持；外环复用 `Class_PID`，
-目前 Kp=2、Ki=0、Kd=0，先以比例项调试；PID 积分分量也限幅 ±1 rad/s。
-PID 输出限幅作用于位置误差修正，摇杆前馈与 PID 修正合成后的电机速度仍限幅 ±15 rad/s。
+目前 Kp=2、Ki=0、Kd=0，先以比例项调试；PID 输出与积分分量限幅均关闭（参数 0），Ki 仍为 0。
+位置 PID 修正不单独限幅，摇杆前馈与 PID 修正合成后的电机速度仍限幅 ±15 rad/s。
 `gain=yaw_rate_feedforward_gain`，默认 +1，假设底盘 BMI088 Z 轴与云台 IMU Yaw 正方向一致；
 须实测底盘转动时两者符号，反向安装需设为 -1。前馈不经过摇杆规划，也不积分进地面系角目标。
 不依赖云台 IMU 角速度字段。MIT Kp 恒为 0，Kd 形成电机编码器速度内环，

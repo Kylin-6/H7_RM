@@ -30,7 +30,7 @@ false 并保持输出对象不变。接收初始化失败进入现有初始化�
 不覆盖底盘 `INS_State_Topic`。底盘 Yaw 位置外环使用回传的 `yaw_rad`，闭环
 采用更严格的 10 ms 新鲜度；方向未标定时禁止 Yaw 输出，见
 [底盘控制契约](../../Application/Chassis/README.md#云台-imu-yaw-位置外环)。
-Yaw 控制采用云台 IMU 位置 PID（修正限幅 ±1 rad/s）与底盘 BMI088 反向角速度前馈，
+Yaw 控制采用云台 IMU 位置 PID（修正不单独限幅）与底盘 BMI088 反向角速度前馈，
 合成电机 MIT 速度目标；无需云台原生 gyro。两路反馈用于闭环时均要求 10 ms 内新鲜。
 
 ## 当前数据来源限制
