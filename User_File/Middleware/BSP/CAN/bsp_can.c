@@ -368,6 +368,29 @@ bool CAN_Tx_Submit(const Struct_CAN_Tx_Msg *tx_msg)
     return true;
 }
 
+bool CAN_Tx_SubmitPair(const Struct_CAN_Tx_Msg *first, const Struct_CAN_Tx_Msg *second)
+{
+    if (!BSP_CAN_MessageIsValid(first) || !BSP_CAN_MessageIsValid(second) ||
+        first->hfdcan != second->hfdcan || first->id == second->id)
+    {
+        return false;
+    }
+    const uint8_t bus = BSP_CAN_BusIndex(first->hfdcan);
+    const uint32_t primask = BSP_CAN_EnterCritical();
+    // 至多缓存一组待发数据；总线阻塞时拒绝新组，避免积压旧 INS。
+    if (Can_TxQueue[bus] == NULL || Can_TxPending[bus] != 0U ||
+        osMessageQueueGetCount(Can_TxQueue[bus]) != 0U ||
+        osMessageQueueGetSpace(Can_TxQueue[bus]) < 2U)
+    {
+        BSP_CAN_ExitCritical(primask);
+        return false;
+    }
+    const bool submitted = osMessageQueuePut(Can_TxQueue[bus], first, 0U, 0U) == osOK &&
+                           osMessageQueuePut(Can_TxQueue[bus], second, 0U, 0U) == osOK;
+    BSP_CAN_ExitCritical(primask);
+    return submitted;
+}
+
 /**
  * @brief 发布某个 (FDCAN 句柄, CAN ID) 的最新周期发送数据。
  * @param tx_msg 要发布的完整 CAN 消息。

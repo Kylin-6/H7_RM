@@ -1,11 +1,20 @@
 # 老步兵底盘板应用
 
+上电后蜂鸣器播放一次用户旋律，接入方式见 [蜂鸣器旋律](../BuzzerMusic/README.md)。
+
 ChassisBoard 固件承载老步兵底盘板：四路 DM 麦轮、一路挂在本板的 Yaw DM 电机、
 SBUS 遥控接收，并经 FDCAN2 向云台板下发 0x065/0x070/0x075 下行帧。云台 Pitch 与
 发射机构在云台板固件上，不在本模块内。
 
 同一份 `Chassis.cpp` 还保留框架四舵轮 AGV 实现（`CHASSIS`），当前默认预设不编译；
 本实现即 ChassisBoard 构建编入的底盘应用，见 [Application 指南](../README.md)。
+
+底盘调试固件关闭 BMI088 加热：初始化不启动 TIM3 CH4 PWM，温度采样、
+加速度/陀螺仪采集和姿态解算继续运行。需重新烧录才能在板上生效。
+
+底盘 OSPI2 的 W25Q64（8 MiB）按 100 Hz 保存运动与 Yaw 故障数据，
+由 StorageTask 写入，不在控制周期等待 Flash；格式、状态和导出方法见
+[Flash 故障记录](FlashLog/README.md)。
 
 ## 配置与来源
 

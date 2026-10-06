@@ -208,7 +208,7 @@ float yaw_rad = state.yaw_rad; // 控制层使用 SI 角度，安装坐标由传
 | 函数 | 用途与限制 |
 | --- | --- |
 | Init(mode) / Is_Initialized / Is_Ready | 初始化、检查启动与空闲；默认 Normal 模式，OSPI2 已由 System 绑定 |
-| Enable_Quad_Mode | 配置 Quad 位，属于设备初始化流程 |
+| Enable_Quad_Mode | RTOS 任务中配置 Quad 位，保留 SR2 其他位；检查 bool，QE 回读失败或存在保护/传输错误返回 false |
 | Get_Buffer(address,length) | 异步读取到管理对象 Rx_Buffer，完成回调后取数据，length 为字节数 |
 | Set_Write_Enable | 提交写使能；编程/擦除前按流程调用并等待完成 |
 | Set_Buffer(buffer,address,length) | 异步页编程，先写使能并核对页边界；提交成功不是写完 |
@@ -221,6 +221,8 @@ float yaw_rad = state.yaw_rad; // 控制层使用 SI 角度，安装坐标由传
 
 地址单位 byte，Flash 8 MiB、页 256 byte，DMA 缓冲 512 byte。Write_Data 自动处理页边界与写使能，
 不自动擦除旧内容；Read_Data/Write_Data 不用于 ISR 或 1 kHz 控制任务。
+超时检查在短 PRIMASK 临界区内读取 busy 与 64 位起始时间，并核对时间未倒退，
+避免 OSPI ISR 刷新起始时间时无符号减法下溢误判超时；1 ms 检查复用同一路径。
 Get_Buffer 的结果在 OSPI 管理缓冲中，下一次传输会复用，消费后应复制到自己的对象。
 
 ## 电源、按键、蜂鸣器与 RGB

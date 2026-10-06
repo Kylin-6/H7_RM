@@ -8,7 +8,7 @@ const BoardHardware &BoardConfig_Get(void)
      *
      * 1. 底盘四轮与 Yaw 轴同在 FDCAN1；Yaw 是整机云台偏航轴，但电机挂在本板，
      *    因此由 Chassis 持有，见 Application/Chassis/Chassis.cpp。
-     * 2. 板载 BMI088 提供 Yaw 角速度前馈与姿态；未安装 W25Q64JV，不做 Flash 初始化。
+     * 2. 板载 BMI088 提供 Yaw 角速度前馈与姿态；OSPI2 接 W25Q64（8 MB），用于故障记录。
      * 3. WS2812 用作武装状态指示；USB 调试不接入。
      */
     static const BoardHardware hardware{
@@ -18,7 +18,7 @@ const BoardHardware &BoardConfig_Get(void)
         nullptr,  // chassis_steer_bus（麦轮无舵向电机）
         nullptr,  // shoot_bus（本板不控发射）
         true,     // imu：BMI088
-        false,    // flash：未安装 W25Q64JV
+        true,     // flash：OSPI2 外挂 W25Q64
         true,     // adc
         true,     // power
         true,     // indicators：WS2812

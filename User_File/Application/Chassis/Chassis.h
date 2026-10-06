@@ -30,6 +30,8 @@ struct Struct_Yaw_Tuning
     bool active = false;
 };
 bool Chassis_ReadYawTuning(Struct_Yaw_Tuning &sample);
+/** 同一 ControlTask 在诊断发布后每 10 ms 采样到 Flash RAM 队列。 */
+void Chassis_RecordFlashLog(void);
 
 /** 启动阶段仅调用一次；注册设备，失败返回 false，不执行机械寻零。 */
 bool Chassis_Init(void);

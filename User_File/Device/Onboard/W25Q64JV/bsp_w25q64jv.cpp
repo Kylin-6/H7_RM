@@ -94,12 +94,13 @@ bool Class_W25Q64JV::Init(const Enum_W25Q64JV_Mode &__Flash_Mode)
  *        走标准 DMA + 回调链，调用前确保 RTOS 已启动
  *
  */
-void Class_W25Q64JV::Enable_Quad_Mode()
+bool Class_W25Q64JV::Enable_Quad_Mode()
 {
     if (!Initialized)
     {
-        return;
+        return false;
     }
+    const uint32_t initial_errors = Auto_Polling_Error_Count;
     SEGGER_RTT_printf(0, "QE start\n");
 
     // 硬件复位 Flash（确保干净状态）
@@ -107,20 +108,34 @@ void Class_W25Q64JV::Enable_Quad_Mode()
     Command.Instruction = W25Q64JV_Command_ENABLE_RESET;
     if (!Check_Transfer_Status(OSPI_Command(OSPI_Manage_Object->OSPI_Handler, &Command)))
     {
-        return;
+        return false;
     }
     osDelay(1);
     Command.Instruction = W25Q64JV_Command_RESET_DEVICE;
     if (!Check_Transfer_Status(OSPI_Command(OSPI_Manage_Object->OSPI_Handler, &Command)))
     {
-        return;
+        return false;
     }
     osDelay(50);
     SEGGER_RTT_printf(0, "Reset done\n");
 
+    // 只设置 QE，保留 SR2 其他保护/锁定位。
+    Suppress_AutoPolling = true;
+    Command = COMMAND_DEFAULT_CONFIG;
+    Command.Instruction = W25Q64JV_Command_READ_STATUS_REGISTER_2;
+    Command.DataMode = HAL_OSPI_DATA_1_LINE;
+    Command.NbData = 1;
+    if (!Check_Transfer_Status(OSPI_Command_Receive_Data(OSPI_Manage_Object->OSPI_Handler, &Command)))
+    {
+        return false;
+    }
+    osDelay(5);
+    const uint8_t previous_sr2 = OSPI_Manage_Object->Rx_Buffer[0];
+    Suppress_AutoPolling = false;
+
     // 发送 Write Enable
+    Reset_Busy_Timestamp();
     Busy_Flag = true;
-    Busy_Timestamp = SYS_Timestamp.Get_Current_Timestamp();
     Current_Instruction = W25Q64JV_Command_WRITE_ENABLE;
     Current_Auto_Polling_Timeout = AUTOPOLLING_DEFAULT_TIMEOUT;
 
@@ -128,12 +143,12 @@ void Class_W25Q64JV::Enable_Quad_Mode()
     Command.Instruction = W25Q64JV_Command_WRITE_ENABLE;
     if (!Check_Transfer_Status(OSPI_Command(OSPI_Manage_Object->OSPI_Handler, &Command)))
     {
-        return;
+        return false;
     }
 
     if (!Auto_Polling_With_Timeout())
     {
-        return;
+        return false;
     }
     while (Is_Busy())
     {
@@ -150,20 +165,26 @@ void Class_W25Q64JV::Enable_Quad_Mode()
     Command.NbData = 1;
     if (!Check_Transfer_Status(OSPI_Command_Receive_Data(OSPI_Manage_Object->OSPI_Handler, &Command)))
     {
-        return;
+        return false;
     }
     osDelay(5);
     uint8_t wel_check = OSPI_Manage_Object->Rx_Buffer[0];
     SEGGER_RTT_printf(0, "WEL check: SR1=%02X (WEL=%d WIP=%d)\n",
                       wel_check, (wel_check >> 1) & 1, wel_check & 1);
 
-    // 写 SR2 = 0x02（QE = 1），抑制回调中的 AutoPolling，手动轮询 WIP
-    OSPI_Manage_Object->Tx_Buffer[0] = 0x02;
+    if ((wel_check & 0x02U) == 0U || Auto_Polling_Error_Count != initial_errors)
+    {
+        Suppress_AutoPolling = false;
+        return false;
+    }
+
+    // 设置 SR2 QE 位，抑制回调中的 AutoPolling，手动轮询 WIP
+    OSPI_Manage_Object->Tx_Buffer[0] = previous_sr2 | 0x02U;
 
     Suppress_AutoPolling = true;
 
+    Reset_Busy_Timestamp();
     Busy_Flag = true;
-    Busy_Timestamp = SYS_Timestamp.Get_Current_Timestamp();
     Current_Instruction = W25Q64JV_Command_WRITE_STATUS_REGISTER_2;
     Current_Auto_Polling_Timeout = AUTOPOLLING_DEFAULT_TIMEOUT;
 
@@ -174,12 +195,12 @@ void Class_W25Q64JV::Enable_Quad_Mode()
 
     if (!Check_Transfer_Status(OSPI_Command_Transmit_Data(OSPI_Manage_Object->OSPI_Handler, &Command)))
     {
-        return;
+        return false;
     }
     osDelay(10);
 
     // 手动轮询 WIP，回调链已被 Suppress_AutoPolling 抑制，无冲突
-    Busy_Timestamp = SYS_Timestamp.Get_Current_Timestamp();
+    Reset_Busy_Timestamp();
     while (1)
     {
         Command = COMMAND_DEFAULT_CONFIG;
@@ -188,7 +209,7 @@ void Class_W25Q64JV::Enable_Quad_Mode()
         Command.NbData = 1;
         if (!Check_Transfer_Status(OSPI_Command_Receive_Data(OSPI_Manage_Object->OSPI_Handler, &Command)))
         {
-            return;
+            return false;
         }
         osDelay(1);
 
@@ -214,7 +235,7 @@ void Class_W25Q64JV::Enable_Quad_Mode()
     Command.NbData = 1;
     if (!Check_Transfer_Status(OSPI_Command_Receive_Data(OSPI_Manage_Object->OSPI_Handler, &Command)))
     {
-        return;
+        return false;
     }
     osDelay(5);
     sr1 = OSPI_Manage_Object->Rx_Buffer[0];
@@ -225,7 +246,7 @@ void Class_W25Q64JV::Enable_Quad_Mode()
     Command.NbData = 1;
     if (!Check_Transfer_Status(OSPI_Command_Receive_Data(OSPI_Manage_Object->OSPI_Handler, &Command)))
     {
-        return;
+        return false;
     }
     osDelay(5);
     sr2 = OSPI_Manage_Object->Rx_Buffer[0];
@@ -238,6 +259,8 @@ void Class_W25Q64JV::Enable_Quad_Mode()
     Busy_Flag = false;
 
     SEGGER_RTT_printf(0, "QE done err=%d\n", Auto_Polling_Error_Count);
+    return (sr2 & 0x02U) != 0U && (sr1 & 0x7cU) == 0U &&
+           Auto_Polling_Error_Count == initial_errors;
 }
 
 /**
@@ -250,7 +273,6 @@ void Class_W25Q64JV::OSPI_StatusMatchCallback()
     {
         return;
     }
-    SEGGER_RTT_printf(0, "StatMatch Busy=%d Instr=%02X\n", Busy_Flag, Current_Instruction);
 
     Busy_Flag = false;
     Write_Enable_Activated_Flag = false;
@@ -299,11 +321,7 @@ void Class_W25Q64JV::TIM_1ms_AutoPollingTimeout_PeriodElapsedCallback()
     {
         return;
     }
-    if (Busy_Flag && (SYS_Timestamp.Get_Current_Timestamp() - Busy_Timestamp > Current_Auto_Polling_Timeout))
-    {
-        Busy_Flag = false;
-        Auto_Polling_Error_Count++;
-    }
+    (void)Is_Busy();
 }
 
 /**
@@ -312,9 +330,8 @@ void Class_W25Q64JV::TIM_1ms_AutoPollingTimeout_PeriodElapsedCallback()
  */
 bool Class_W25Q64JV::Auto_Polling_With_Timeout()
 {
-    SEGGER_RTT_printf(0, "AP start\n");
     OSPI_Manage_Object->Auto_Polling_Timestamp = SYS_Timestamp.Get_Current_Timestamp();
-    Busy_Timestamp = SYS_Timestamp.Get_Current_Timestamp();
+    Reset_Busy_Timestamp();
 
     Command = COMMAND_DEFAULT_CONFIG;
     Command.Instruction = W25Q64JV_Command_READ_STATUS_REGISTER_1;

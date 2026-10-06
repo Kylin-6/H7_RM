@@ -55,6 +55,7 @@ extern "C" void Control_Task(void *)
         {
             diagnostic_divider = 0U;
             Diagnostics_Publish();
+            Chassis_RecordFlashLog();
         }
     }
 }

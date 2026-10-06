@@ -22,6 +22,7 @@
 #include <cstddef>
 #if CHASSIS
 #include "Diagnostics.h"
+#include "../Application/BuzzerMusic/BuzzerMusic.h"
 #endif
 
 /**
@@ -42,6 +43,7 @@ static const PulseEntry_t TIM_1ms_Callback_Table[] = {
     {1U, BMI088_TIM_1ms_Service_PeriodElapsedCallback},
     {1U, UART_TIM_1ms_Recover_PeriodElapsedCallback},
 #if CHASSIS
+    {1U, BuzzerMusic_Update},
     {10U, Diagnostics_LED_Update},
 #else
     {10U, BSP_WS2812_TIM_10ms_Write_PeriodElapsedCallback},

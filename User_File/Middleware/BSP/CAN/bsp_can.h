@@ -95,6 +95,10 @@ bool BSP_CAN_RegisterCallback(uint32_t can_id,
  * @note true 只表示软件 FIFO 接受；不表示 HAL 已写入硬件 FIFO、总线发送、对端接收或设备执行。
  */
 bool CAN_Tx_Submit(const Struct_CAN_Tx_Msg *tx_msg);
+/** 原子提交同总线的两帧；仅在该总线插入队列空闲时接收，失败不入队。
+ *  固定顺序、不覆盖已提交数据，非阻塞；供需要同一序号配对的 Transport 使用。
+ *  true 仍只表示软件入队，不代表对端接收。 */
+bool CAN_Tx_SubmitPair(const Struct_CAN_Tx_Msg *first, const Struct_CAN_Tx_Msg *second);
 
 /**
  * @brief 更新周期发送缓冲。

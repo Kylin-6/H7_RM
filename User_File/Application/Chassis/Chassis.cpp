@@ -11,6 +11,7 @@
 
 #include "Chassis.h"
 #include "Chassis_Config.h"
+#include "FlashLog/ChassisFlashLog.h"
 #include "board_config.h"
 #include "message_center.h"
 
@@ -19,6 +20,8 @@
 #include "dmmotor.h"
 
 #include <cmath>
+#include <cstddef>
+#include <cstring>
 
 static constexpr uint64_t CHASSIS_COMMAND_MAX_AGE_US = 100000U;
 
@@ -27,6 +30,7 @@ namespace
 /** 电机数量与反馈发布分频（2 ms 控制路径下 10 分频 = 100 Hz）。 */
 constexpr uint8_t MOTOR_COUNT = 4U;
 constexpr uint8_t FEEDBACK_DIVIDER = 10U;
+uint32_t flash_log_events = 0U; // 两次 100 Hz 采样之间累计瞬态事件。
 
 /** 以最大步长逼近目标，用于 MIT 阻尼与力矩前馈的逐周期限速。 */
 float MoveTowards(float current, float target, float maximum_delta)
@@ -48,6 +52,7 @@ bool PlanAxis(Class_Trajectory &trajectory, float target, float *speed)
     if (!trajectory.Set_Target_Velocity(planned_target) ||
         trajectory.TIM_Calculate_PeriodElapsedCallback() == TRAJECTORY_ERROR)
     {
+        flash_log_events |= 1U << 3U;
         return false;
     }
     *speed = trajectory.Get_Velocity();
@@ -370,6 +375,10 @@ void Chassis_Update(void)
         MessageCenter::INS_State_Topic.ReadFresh(
             chassis_ins, kInfantryChassisConfig.yaw_imu_max_age_us) &&
         std::isfinite(chassis_ins.gyro_z_rad_s);
+    if (!ctx.yaw_imu_valid)
+    {
+        flash_log_events |= 1U << 28U;
+    }
 
     if (ctx.initialized)
     {
@@ -412,6 +421,7 @@ void Chassis_Update(void)
                 const float sine = std::sin(angle);
                 if (gimbal_frame != ctx.translation_gimbal_frame)
                 {
+                    flash_log_events |= 1U << 19U;
                     (void)ctx.x_trajectory.Reset(0.0f);
                     (void)ctx.y_trajectory.Reset(0.0f);
                     ctx.translation_gimbal_frame = gimbal_frame;
@@ -504,4 +514,55 @@ bool Chassis_GetGimbalImu(INS_State &state)
 bool Chassis_ReadYawTuning(Struct_Yaw_Tuning &sample)
 {
     return yaw_tuning_topic.ReadFresh(sample, 20000U);
+}
+
+void Chassis_RecordFlashLog(void)
+{
+    Struct_Chassis_Flash_Record record{};
+    record.flags = flash_log_events | (ctx.yaw_imu_valid ? 1U : 0U) |
+                   (ctx.yaw_target_valid ? 2U : 0U) | (ctx.translation_gimbal_frame ? 4U : 0U);
+    flash_log_events = 0U;
+    Struct_Yaw_Tuning tuning{};
+    (void) Chassis_ReadYawTuning(tuning);
+    static_assert(offsetof(Struct_Yaw_Tuning, imu_valid) == sizeof(record.yaw), "Yaw log layout");
+    std::memcpy(record.yaw, &tuning, sizeof(record.yaw));
+    record.command[0] = ctx.command.velocity_x_m_s;
+    record.command[1] = ctx.command.velocity_y_m_s;
+    record.command[2] = ctx.command.angular_velocity_rad_s;
+    record.planned[0] = ctx.planned_x;
+    record.planned[1] = ctx.planned_y;
+    record.planned[2] = ctx.planned_w;
+    for (uint8_t i = 0U; i < 5U; ++i)
+    {
+        const auto motor = i < 4U ? ctx.wheel_motor[i].GetFeedbackSnapshot() : ctx.yaw_motor.GetFeedbackSnapshot();
+        record.motor_states |= static_cast<uint32_t>(motor.feedback.state & 0x0fU) << (4U * i);
+        if (motor.ready)
+            record.flags |= 1U << (4U + i);
+        if (motor.online)
+            record.flags |= 1U << (9U + i);
+        if (motor.requested_enabled)
+            record.flags |= 1U << (14U + i);
+        if (i < 4U)
+            record.wheel_velocity[i] = motor.feedback.velocity;
+        else
+            record.yaw_position_rad = motor.feedback.position;
+    }
+    const auto gimbal = MessageCenter::Gimbal_INS_State_Topic.ReadWithMeta();
+    const auto chassis = MessageCenter::INS_State_Topic.ReadWithMeta();
+    record.timestamp_us = SYS_Timestamp_Get_Microsecond();
+    auto age = [&record](const TopicSnapshot<INS_State>& sample) -> uint32_t
+    {
+        if (!sample.valid || record.timestamp_us < sample.timestamp_us ||
+            record.timestamp_us - sample.timestamp_us > UINT32_MAX)
+            return UINT32_MAX;
+        return static_cast<uint32_t>(record.timestamp_us - sample.timestamp_us);
+    };
+    record.gimbal_age_us = age(gimbal);
+    record.chassis_age_us = age(chassis);
+    Struct_Chassis_Diagnostic diagnostic{};
+    (void) MessageCenter::Chassis_Diagnostic_Topic.Read(diagnostic);
+    record.fault_mask = diagnostic.fault_mask;
+    record.flags |= static_cast<uint32_t>(ctx.command.mode) << 20U;
+    record.flags |= static_cast<uint32_t>(ctx.yaw_command.mode) << 24U;
+    ChassisFlashLog_Capture(record);
 }

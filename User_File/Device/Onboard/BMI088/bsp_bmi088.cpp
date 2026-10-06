@@ -233,9 +233,8 @@ bool Class_BMI088::Init()
     SPI_Manage_Object = &SPI2_Manage_Object;
     Init_Finished_Flag = false;
 
-    /* 按实车要求恢复 IMU 加热（目标 50°C，预热基点 45°C，TIM3 CH4 PWM）；
-     * 小陀螺时底盘自转角速度前馈依赖本陀螺，温漂直接影响 Yaw 轴稳定质量。 */
-    const bool accel_initialized = BMI088_Accel.Init(true);
+    // 底盘调试时关闭加热，不启动 TIM3 CH4 PWM；其他构建保持原有加热配置。
+    const bool accel_initialized = BMI088_Accel.Init(CHASSIS == 0);
     const bool gyro_initialized = BMI088_Gyro.Init();
     if (!accel_initialized || !gyro_initialized)
     {

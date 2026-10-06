@@ -47,7 +47,8 @@ public:
      */
     bool Init(const Enum_W25Q64JV_Mode &__Flash_Mode = W25Q64JV_Mode_Normal);
 
-    void Enable_Quad_Mode();
+    /** RTOS 任务中调用；QE 回读正确且无保护/传输错误时返回 true。 */
+    bool Enable_Quad_Mode();
 
     inline bool Get_Buffer(const uint32_t &Address, const uint16_t &Length);
 
@@ -148,20 +149,34 @@ public:
     volatile bool Suppress_AutoPolling = false;
     bool Initialized = false;
 
+    void Reset_Busy_Timestamp()
+    {
+        const uint32_t primask = __get_PRIMASK();
+        __disable_irq();
+        Busy_Timestamp = SYS_Timestamp.Get_Current_Timestamp();
+        __DMB();
+        __set_PRIMASK(primask);
+    }
+
     bool Is_Busy()
     {
+        // ISR 会重置 64 位 Busy_Timestamp；状态、时间戳和超时清除须同一临界区。
+        const uint32_t primask = __get_PRIMASK();
+        __disable_irq();
         if (Busy_Flag)
         {
-            if (SYS_Timestamp.Get_Current_Timestamp() - Busy_Timestamp > Current_Auto_Polling_Timeout)
+            const uint64_t now = SYS_Timestamp.Get_Current_Timestamp();
+            if (now >= Busy_Timestamp && now - Busy_Timestamp > Current_Auto_Polling_Timeout)
             {
-                SEGGER_RTT_printf(0, "TIMEOUT! Instr=%02X\n", Current_Instruction);
                 Busy_Flag = false;
+                Write_Enable_Activated_Flag = false;
                 Auto_Polling_Error_Count++;
-                return false;
             }
-            return true;
         }
-        return false;
+        const bool busy = Busy_Flag;
+        __DMB();
+        __set_PRIMASK(primask);
+        return busy;
     }
 
     bool Check_Transfer_Status(HAL_StatusTypeDef status)
@@ -199,8 +214,8 @@ inline bool Class_W25Q64JV::Get_Buffer(const uint32_t &Address, const uint16_t &
     {
         return false;
     }
+    Reset_Busy_Timestamp();
     Busy_Flag = true;
-    Busy_Timestamp = SYS_Timestamp.Get_Current_Timestamp();
 
     Command = COMMAND_DEFAULT_CONFIG;
     Command.Instruction = W25Q64JV_Command_FAST_READ_QUAD_IO;
@@ -224,8 +239,8 @@ inline bool Class_W25Q64JV::Set_Write_Enable()
     {
         return false;
     }
+    Reset_Busy_Timestamp();
     Busy_Flag = true;
-    Busy_Timestamp = SYS_Timestamp.Get_Current_Timestamp();
 
     Command = COMMAND_DEFAULT_CONFIG;
     Command.Instruction = W25Q64JV_Command_WRITE_ENABLE;
@@ -248,8 +263,8 @@ inline bool Class_W25Q64JV::Set_Sector_Erased(const uint32_t &Address)
     {
         return false;
     }
+    Reset_Busy_Timestamp();
     Busy_Flag = true;
-    Busy_Timestamp = SYS_Timestamp.Get_Current_Timestamp();
 
     if (!Write_Enable_Activated_Flag)
     {
@@ -286,8 +301,8 @@ inline void Class_W25Q64JV::Set_Bolck_Erased_32K(const uint32_t &Address)
     {
         return;
     }
+    Reset_Busy_Timestamp();
     Busy_Flag = true;
-    Busy_Timestamp = SYS_Timestamp.Get_Current_Timestamp();
 
     if (!Write_Enable_Activated_Flag)
     {
@@ -325,8 +340,8 @@ inline void Class_W25Q64JV::Set_Bolck_Erased_64K(const uint32_t &Address)
     {
         return;
     }
+    Reset_Busy_Timestamp();
     Busy_Flag = true;
-    Busy_Timestamp = SYS_Timestamp.Get_Current_Timestamp();
 
     if (!Write_Enable_Activated_Flag)
     {
@@ -364,8 +379,8 @@ inline void Class_W25Q64JV::Set_Chip_Erased()
     {
         return;
     }
+    Reset_Busy_Timestamp();
     Busy_Flag = true;
-    Busy_Timestamp = SYS_Timestamp.Get_Current_Timestamp();
 
     if (!Write_Enable_Activated_Flag)
     {
@@ -400,8 +415,8 @@ inline bool Class_W25Q64JV::Set_Buffer(const uint8_t *Buffer, const uint32_t &Ad
     {
         return false;
     }
+    Reset_Busy_Timestamp();
     Busy_Flag = true;
-    Busy_Timestamp = SYS_Timestamp.Get_Current_Timestamp();
 
     if (!Write_Enable_Activated_Flag)
     {

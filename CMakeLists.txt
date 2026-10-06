@@ -158,6 +158,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Onboard/W25Q64JV/bsp_w25q64jv_register.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Onboard/W25Q64JV/bsp_w25q64jv.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Onboard/Buzzer/bsp_buzzer.cpp
+        ${CMAKE_CURRENT_LIST_DIR}/User_File/Application/BuzzerMusic/BuzzerMusic.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Onboard/Key/bsp_key.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Onboard/WS2812/bsp_ws2812.cpp
         ${CMAKE_CURRENT_LIST_DIR}/User_File/Device/Peripheral/EricTool/dvc_erictool.cpp
@@ -198,6 +199,7 @@ set(H7_CHASSIS_DEVICE_SOURCES
 set(H7_INFANTRY_CHASSIS_DEVICE_SOURCES
     User_File/Task/TIM_1ms_Task.cpp
     User_File/Task/BMI088_Task.cpp
+    User_File/Task/StorageTask.cpp
     User_File/Device/Peripheral/Motor/DMmotor/dmmotor.cpp
     User_File/Device/Peripheral/Remote/sbus.cpp
     User_File/Device/Peripheral/GimbalBoard/gimbal_board.cpp)
@@ -249,7 +251,8 @@ if(H7_APP_GIMBAL)
 endif()
 if(H7_APP_CHASSIS)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
-        User_File/Application/Chassis/Chassis.cpp)
+        User_File/Application/Chassis/Chassis.cpp
+        User_File/Application/Chassis/FlashLog/ChassisFlashLog.cpp)
 endif()
 if(H7_APP_SHOOT)
     target_sources(${CMAKE_PROJECT_NAME} PRIVATE
@@ -346,4 +349,3 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # Add user defined libraries
     "${CMSIS_DSP_LIBRARY}"
 )
-

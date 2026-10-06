@@ -120,6 +120,9 @@ void MX_FDCAN2_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN FDCAN2_Init 2 */
+  /* IOC 已启用自动重发；兼容重新生成前的配置，须在 Start 前清除 DAR。 */
+  hfdcan2.Init.AutoRetransmission = ENABLE;
+  CLEAR_BIT(hfdcan2.Instance->CCCR, FDCAN_CCCR_DAR);
 
   /* USER CODE END FDCAN2_Init 2 */
 
