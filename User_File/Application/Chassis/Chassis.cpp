@@ -88,6 +88,7 @@ struct LegacyChassisContext
 };
 
 LegacyChassisContext ctx;
+Topic<Struct_Yaw_Tuning> yaw_tuning_topic;
 
 /**
  * @brief 麦轮逆运动学：三轴速度直接代数组合成四轮目标。
@@ -466,6 +467,23 @@ void Chassis_Update(void)
             {
                 (void)ctx.yaw_motor.SetMIT(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
             }
+            Struct_Yaw_Tuning tuning{};
+            tuning.target_rad = ctx.yaw_target_rad;
+            tuning.actual_rad = gimbal_ins.yaw_rad;
+            tuning.error_rad = ctx.yaw_target_valid ?
+                std::remainder(ctx.yaw_target_rad - gimbal_ins.yaw_rad, 6.28318530718f) : 0.0f;
+            tuning.stick_rad_s = ctx.yaw_trajectory.Get_Velocity();
+            tuning.pid_rad_s = ctx.yaw_position_pid.Get_Out();
+            tuning.base_rad_s = chassis_ins.gyro_z_rad_s;
+            tuning.ff_rad_s = yaw_ready ? -kInfantryChassisConfig.yaw_motor_to_imu_sign *
+                kInfantryChassisConfig.yaw_rate_feedforward_gain * chassis_ins.gyro_z_rad_s : 0.0f;
+            tuning.command_rad_s = ctx.yaw_speed;
+            tuning.motor_rad_s = ctx.yaw_motor.feedback.velocity;
+            tuning.kd = ctx.yaw_kd;
+            tuning.torque_nm = ctx.yaw_torque_feedforward;
+            tuning.imu_valid = ctx.yaw_imu_valid;
+            tuning.active = yaw_ready && ctx.yaw_target_valid;
+            yaw_tuning_topic.Publish(tuning);
         }
     }
 
@@ -481,4 +499,9 @@ void Chassis_Update(void)
 bool Chassis_GetGimbalImu(INS_State &state)
 {
     return MessageCenter::Gimbal_INS_State_Topic.ReadFresh(state, 100000U);
+}
+
+bool Chassis_ReadYawTuning(Struct_Yaw_Tuning &sample)
+{
+    return yaw_tuning_topic.ReadFresh(sample, 20000U);
 }

@@ -265,3 +265,15 @@ S.BUS 原始通道减去中位 1024 后的值。输出同时包含 `valid`、`ag
 ## WS2812 状态灯
 
 灯色、故障优先级、闪烁次数和验证范围见 [底盘 WS2812 指南](../../../docs/debug_ws2812_chassis.md)。Application/Diagnostics 负责诊断和灯效，Chassis 仅提供状态；ControlTask 调用诊断发布，TIM_1ms_Task 调用灯效刷新；灯效不修改控制许可。
+
+### Yaw 调参 RTT
+
+StatusTask 每 20 ms 在 RTT 通道 0 输出一行 `YAW`，不暂停 MCU、不在控制线程格式化。
+ControlTask 每 2 ms 发布一致的私有 Topic 快照；超过 20 ms 的快照显示 valid=0、active=0。
+`ms` 为输出 HAL 时间戳；valid 表示两路 IMU 有效，active 表示本次控制时 Yaw ready。
+数值字段均放大 1000 后输出整数：target/actual/err 为 mrad；stick/pid/base/ff/cmd/motor
+为 mrad/s；kd 为 MIT Kd×1000；torque 为 mN·m。
+pid 是 IMU 方向修正，ff 是电机方向前馈，cmd 是最终限幅目标，motor 是编码器反馈。
+`drop` 累计本任务 YAW 整行提交失败数。通道仍为 NO_BLOCK_SKIP，满时丢弃，不阻塞；
+主机必须持续消费 RTT，不能仅只读缓冲内容而不推进读指针。现有 RC 日志保持 20 Hz。
+此遥测不改变 PID、前馈、使能或限幅，不能修复主机探针的内存读取错误。
