@@ -7,6 +7,8 @@
 
 namespace
 {
+// 底盘位置闭环要求 10 ms 新鲜度；发送端也拒绝延迟积压的源样本。
+constexpr uint64_t kControlSampleMaxAgeUs = 10000U;
 bool initialized;
 uint8_t divider;
 uint8_t sequence;
@@ -28,7 +30,7 @@ void GimbalImuTransport_Update(void)
     const uint64_t now_us = SYS_Timestamp_Get_Microsecond();
     // 同一传感器样本只提交一次；无新样本时不能靠重复发送维持远端 freshness。
     if (!sample.valid || now_us < sample.timestamp_us ||
-        now_us - sample.timestamp_us > GIMBAL_IMU_MAX_AGE_US ||
+        now_us - sample.timestamp_us > kControlSampleMaxAgeUs ||
         (has_sent && sample.sequence == last_topic_sequence))
     {
         return;
