@@ -193,11 +193,13 @@ ChassisBoard 构建编入老步兵底盘实现（四路 DM 麦轮 + 本板 Yaw �
 1. 输入层给出底盘三轴速度与 Yaw 速度目标（抽象速度量纲，见下）。
 2. Chassis 按 2 ms 分频还原量纲，并用非对称速率规划平滑三轴目标。
 3. 三轴速度按麦轮组合式分解为四轮目标，整轮限幅后以速度模式下发 DM 电机。
-4. Yaw 轴按摇杆速度减去底盘自转角速度前馈，经速率规划后以 MIT 模式下发
-   （位置增益 0，阻尼随摇杆推进变化，力矩前馈由规划加速度换算）。
+4. Yaw 轴用云台回传 IMU Yaw 做位置外环：摇杆速度规划后积分为角目标，
+   位置 PID 修正（输出限幅 ±1 rad/s）与摇杆速度、本板 BMI088 反向角速度前馈合成为 MIT 速度目标；电机 MIT Kp 保持 0。
+   方向未标定或回传 IMU 失效时禁止 Yaw 输出，细节见 [底盘应用说明](Chassis/README.md)。
 
 `ZERO_FORCE`、底盘命令 Topic 过期（100 ms）或遥控失联时四轮与 Yaw 全部请求失能；
-`GimbalCmd.mode` 为 `IMU` 才允许 Yaw 输出，`LOCK`/`DISABLED` 与安全撤销一样保持失能。
+`GimbalCmd.mode` 为 `IMU`、云台 IMU 新鲜且方向已标定才允许 Yaw 输出；
+`LOCK`/`DISABLED` 与安全撤销一样保持失能。
 Yaw 命令按框架云台命令语义只判最新值、不判时效（摇杆保持不动时 RobotCmd 不重复发布），
 安全撤销由 RobotCmd 在失联时发布 `DISABLED` 完成。使能请求是边沿语义，掉线补发由框架
 `Class_DMMotor` 与 StatusTask 负责，应用不手写重发。

@@ -15,6 +15,7 @@
 #include "message_center.h"
 
 #include "alg_trajectory.h"
+#include "alg_pid.h"
 #include "dmmotor.h"
 
 #include <cmath>
@@ -23,8 +24,6 @@ static constexpr uint64_t CHASSIS_COMMAND_MAX_AGE_US = 100000U;
 
 namespace
 {
-/** INS 新鲜度门限；失效时只停用角速度前馈，保留遥控 Yaw 速度控制。 */
-constexpr uint64_t INS_MAX_AGE_US = 10000U;
 /** 电机数量与反馈发布分频（2 ms 控制路径下 10 分频 = 100 Hz）。 */
 constexpr uint8_t MOTOR_COUNT = 4U;
 constexpr uint8_t FEEDBACK_DIVIDER = 10U;
@@ -69,6 +68,7 @@ struct LegacyChassisContext
     bool translation_gimbal_frame = false;
     Class_Trajectory w_trajectory;
     Class_Trajectory yaw_trajectory;
+    Class_PID yaw_position_pid;
     ChassisCmd command{};
     GimbalCmd yaw_command{};
     ChassisFeedback feedback{};
@@ -77,6 +77,9 @@ struct LegacyChassisContext
     float planned_y = 0.0f;
     float planned_w = 0.0f;
     float yaw_speed = 0.0f;
+    float yaw_target_rad = 0.0f;
+    bool yaw_target_valid = false;
+    bool yaw_imu_valid = false;
     float yaw_kd = kInfantryChassisConfig.yaw_mit_kd_center;
     float yaw_torque_feedforward = 0.0f;
     uint8_t control_divider = 0U;
@@ -113,12 +116,27 @@ void ControlWheels(float velocity_x, float velocity_y, float velocity_w)
     }
 }
 
-/**
- * @brief Yaw 轴 MIT 速度环。
- * @details 摇杆速度先用 S 曲线平滑，再叠加底盘自转补偿并限制总速度；MIT 位置增益恒为 0、
- *          位置目标恒为 0，阻尼随摇杆推进减小、反向瞬间提高，力矩前馈由规划加速度换算。
- */
-void ControlYaw(float chassis_yaw_rate_rad_s)
+/** 失能或未就绪时丢弃旧姿态目标与规划，恢复后捕获当前 IMU Yaw。 */
+void ResetYawControl()
+{
+    (void)ctx.yaw_trajectory.Reset(0.0f);
+    ctx.yaw_speed = 0.0f;
+    ctx.yaw_target_rad = 0.0f;
+    ctx.yaw_target_valid = false;
+    // Init 保留历史，先重建以清除失能前的积分与微分状态。
+    ctx.yaw_position_pid = Class_PID{};
+    ctx.yaw_position_pid.Init(kInfantryChassisConfig.yaw_position_kp,
+                             kInfantryChassisConfig.yaw_position_ki,
+                             kInfantryChassisConfig.yaw_position_kd, 0.0f,
+                             kInfantryChassisConfig.yaw_position_speed_max_rad_s,
+                             kInfantryChassisConfig.yaw_position_speed_max_rad_s,
+                             kInfantryChassisConfig.control_dt_s);
+    ctx.yaw_kd = kInfantryChassisConfig.yaw_mit_kd_center;
+    ctx.yaw_torque_feedforward = 0.0f;
+}
+
+/** 云台 IMU 位置外环 + 底盘角速度前馈 → 电机 MIT 速度内环。 */
+void ControlYaw(float imu_yaw_rad, float chassis_yaw_rate_rad_s)
 {
     const float stick_speed = Basic_Math_Constrain(
         ctx.yaw_command.yaw_speed_rad_s,
@@ -126,10 +144,10 @@ void ControlYaw(float chassis_yaw_rate_rad_s)
         kInfantryChassisConfig.yaw_speed_max_rad_s);
 
     float target_speed = stick_speed;
-
     const float stick_ratio =
         std::fabs(stick_speed) / kInfantryChassisConfig.yaw_speed_max_rad_s;
     const float speed_previous = ctx.yaw_speed;
+
     if (std::fabs(target_speed) <= kInfantryChassisConfig.planning_threshold)
     {
         target_speed = 0.0f;
@@ -137,17 +155,34 @@ void ControlYaw(float chassis_yaw_rate_rad_s)
     if (!ctx.yaw_trajectory.Set_Target_Velocity(target_speed) ||
         ctx.yaw_trajectory.TIM_Calculate_PeriodElapsedCallback() == TRAJECTORY_ERROR)
     {
-        (void)ctx.yaw_trajectory.Reset(0.0f);
-        ctx.yaw_speed = 0.0f;
-        ctx.yaw_torque_feedforward = 0.0f;
+        ResetYawControl();
         (void)ctx.yaw_motor.SetMIT(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
         (void)ctx.yaw_motor.RequestEnabled(false);
         return;
     }
-    /* 自转补偿不经过摇杆 S 曲线，避免起转与变速时引入额外规划滞后。 */
+    constexpr float kTwoPi = 6.28318530718f;
+    const float motor_to_imu_sign = kInfantryChassisConfig.yaw_motor_to_imu_sign;
+    const float planned_stick_speed = ctx.yaw_trajectory.Get_Velocity();
+    if (!ctx.yaw_target_valid)
+    {
+        ctx.yaw_target_rad = imu_yaw_rad;
+        ctx.yaw_target_valid = true;
+    }
+    ctx.yaw_target_rad = std::remainder(
+        ctx.yaw_target_rad + motor_to_imu_sign * planned_stick_speed *
+                                 kInfantryChassisConfig.control_dt_s,
+        kTwoPi);
+    const float error_rad = std::remainder(ctx.yaw_target_rad - imu_yaw_rad, kTwoPi);
+    // 把回绕后的误差送入 PID，避免直接对跨 ±π 的绝对角做差。
+    ctx.yaw_position_pid.Set_Target(error_rad);
+    ctx.yaw_position_pid.Set_Now(0.0f);
+    ctx.yaw_position_pid.TIM_Calculate_PeriodElapsedCallback();
+    const float correction_rad_s = ctx.yaw_position_pid.Get_Out();
+    // 底盘 Z 轴为云台 Yaw 正方向；前馈与外环均绕过摇杆 S 曲线。
     ctx.yaw_speed = Basic_Math_Constrain(
-        ctx.yaw_trajectory.Get_Velocity() -
-            kInfantryChassisConfig.yaw_rate_feedforward_gain * chassis_yaw_rate_rad_s,
+        planned_stick_speed + motor_to_imu_sign *
+            (correction_rad_s - kInfantryChassisConfig.yaw_rate_feedforward_gain *
+                                    chassis_yaw_rate_rad_s),
         -kInfantryChassisConfig.yaw_total_speed_max_rad_s,
         kInfantryChassisConfig.yaw_total_speed_max_rad_s);
 
@@ -206,6 +241,8 @@ void PublishFeedback(bool ins_valid)
     ctx.yaw_feedback.ins_valid = ins_valid;
     ctx.yaw_feedback.enabled =
         ctx.initialized && ctx.yaw_command.mode == GimbalMode::IMU &&
+        ctx.yaw_imu_valid && std::isfinite(ctx.yaw_command.yaw_speed_rad_s) &&
+        std::fabs(kInfantryChassisConfig.yaw_motor_to_imu_sign) == 1.0f &&
         ctx.yaw_motor.GetFeedbackSnapshot().ready;
     ctx.yaw_feedback_publisher.Publish(ctx.yaw_feedback);
 }
@@ -218,8 +255,7 @@ Struct_Chassis_Diagnostic_Input Chassis_GetDiagnostic(void)
     d.initialized = ctx.initialized;
     // Fresh = 这份姿态是否可用于当前控制周期；设备 Online（liveness）由
     // 各 Device 内的 Daemon 判定并经 motor[i].online / IsOnline() 暴露。
-    INS_State ins{};
-    d.ins_valid = MessageCenter::INS_State_Topic.ReadFresh(ins, INS_MAX_AGE_US);
+    d.ins_valid = ctx.yaw_imu_valid;
     d.permitted = ctx.command.mode != ChassisMode::ZERO_FORCE ||
                   ctx.yaw_command.mode == GimbalMode::IMU;
     for (uint8_t i = 0U; i < 5U; ++i)
@@ -242,9 +278,8 @@ bool Chassis_Init(void)
 
     ctx.yaw_command = {};
     ctx.yaw_feedback = {};
-    ctx.yaw_speed = 0.0f;
-    ctx.yaw_kd = kInfantryChassisConfig.yaw_mit_kd_center;
-    ctx.yaw_torque_feedforward = 0.0f;
+    ResetYawControl();
+    ctx.yaw_imu_valid = false;
     ctx.control_divider = 0U;
 
     bool initialized = true;
@@ -294,8 +329,7 @@ bool Chassis_Init(void)
 
     /* 上电默认失能：先落 Yaw 安全目标，再对全部已配置电机请求失能；
      * 即使部分电机注册失败也尝试停住它们。 */
-    (void)ctx.yaw_motor.SetMIT(0.0f, 0.0f, kInfantryChassisConfig.yaw_mit_kp,
-                              ctx.yaw_kd, 0.0f);
+    (void)ctx.yaw_motor.SetMIT(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     (void)ctx.yaw_motor.RequestEnabled(false);
     for (uint8_t index = 0U; index < MOTOR_COUNT; ++index)
     {
@@ -327,14 +361,22 @@ void Chassis_Update(void)
     const auto yaw_message = MessageCenter::Gimbal_Command_Topic.ReadWithMeta();
     ctx.yaw_command = yaw_message.valid ? yaw_message.data : GimbalCmd{};
 
-    INS_State ins_state{};
-    const bool ins_valid =
-        MessageCenter::INS_State_Topic.ReadFresh(ins_state, INS_MAX_AGE_US);
+    INS_State gimbal_ins{};
+    INS_State chassis_ins{};
+    ctx.yaw_imu_valid = MessageCenter::Gimbal_INS_State_Topic.ReadFresh(
+        gimbal_ins, kInfantryChassisConfig.yaw_imu_max_age_us) &&
+        std::isfinite(gimbal_ins.yaw_rad) &&
+        MessageCenter::INS_State_Topic.ReadFresh(
+            chassis_ins, kInfantryChassisConfig.yaw_imu_max_age_us) &&
+        std::isfinite(chassis_ins.gyro_z_rad_s);
 
     if (ctx.initialized)
     {
         const bool wheels_enabled = ctx.command.mode != ChassisMode::ZERO_FORCE;
-        const bool yaw_enabled = ctx.yaw_command.mode == GimbalMode::IMU;
+        const bool yaw_enabled = ctx.yaw_command.mode == GimbalMode::IMU &&
+                                 ctx.yaw_imu_valid &&
+                                 std::isfinite(ctx.yaw_command.yaw_speed_rad_s) &&
+                                 std::fabs(kInfantryChassisConfig.yaw_motor_to_imu_sign) == 1.0f;
 
         /* 使能请求是边沿语义：首次请求与状态变化才产生总线流量，
          * 掉线补发由 StatusTask 的 100 Hz ServiceAll 负责。 */
@@ -343,6 +385,11 @@ void Chassis_Update(void)
             (void)ctx.wheel_motor[index].RequestEnabled(wheels_enabled);
         }
         (void)ctx.yaw_motor.RequestEnabled(yaw_enabled);
+        const bool yaw_ready = yaw_enabled && ctx.yaw_motor.GetFeedbackSnapshot().ready;
+        if (!yaw_ready)
+        {
+            ResetYawControl();
+        }
 
         /* 老步兵控制路径按 2 ms 执行：与老工程一致，同时把 DM 速度帧数量
          * 压回 FDCAN1 的承载范围内（周期通道只在目标更新时才发送）。 */
@@ -411,18 +458,13 @@ void Chassis_Update(void)
                 ctx.planned_x = ctx.planned_y = ctx.planned_w = 0.0f;
             }
 
-            if (yaw_enabled)
+            if (yaw_ready)
             {
-                /* INS 不可用时只停用角速度前馈，保留摇杆速度控制。 */
-                ControlYaw(ins_valid ? ins_state.gyro_z_rad_s : 0.0f);
+                ControlYaw(gimbal_ins.yaw_rad, chassis_ins.gyro_z_rad_s);
             }
             else
             {
-                /* 失能期间清掉 Yaw 规划与 MIT 状态，恢复时从零速、中心阻尼起步。 */
-                (void)ctx.yaw_trajectory.Reset(0.0f);
-                ctx.yaw_speed = 0.0f;
-                ctx.yaw_kd = kInfantryChassisConfig.yaw_mit_kd_center;
-                ctx.yaw_torque_feedforward = 0.0f;
+                (void)ctx.yaw_motor.SetMIT(0.0f, 0.0f, 0.0f, 0.0f, 0.0f);
             }
         }
     }
@@ -432,7 +474,7 @@ void Chassis_Update(void)
     if (ctx.feedback_divider >= FEEDBACK_DIVIDER)
     {
         ctx.feedback_divider = 0U;
-        PublishFeedback(ins_valid);
+        PublishFeedback(ctx.yaw_imu_valid);
     }
 }
 

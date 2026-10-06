@@ -15,7 +15,7 @@
 
 云台 ControlTask 在 DM_IMU_InsBridge_Update 后调用发送入口，以 2 ms 分频
 提交新的 INS 快照。同一 Topic 序号在两帧提交成功后不再重发；传感器无更新时
-不会延长底盘状态新鲜度。无新鲜 INS（100 ms）时不提交。
+不会延长底盘状态新鲜度。无新鲜 INS（10 ms）时不提交；源样本只提交一次，不能靠重发延长底盘闭环时效。
 
 底盘 ControlTask 在输入适配前轮询接收。RX 中断只复制固定帧及接收时间，
 任务中校验版本、长度、双帧序号与配对时间；不完整或配对间隔超过 10 ms 的帧
@@ -27,8 +27,11 @@
 完整数据发布到独立 `MessageCenter::Gimbal_INS_State_Topic`。底盘应用可通过
 `Chassis_GetGimbalImu(INS_State &state)` 读取：未收到、断链超过 100 ms 时返回
 false 并保持输出对象不变。接收初始化失败进入现有初始化失败诊断。
-不覆盖底盘 `INS_State_Topic`，底盘 Yaw 自转前馈仍使用本板 BMI088：云台机体系
-角速度包含 Yaw 轴运动，不能直接作为底盘自转角速度。
+不覆盖底盘 `INS_State_Topic`。底盘 Yaw 位置外环使用回传的 `yaw_rad`，闭环
+采用更严格的 10 ms 新鲜度；方向未标定时禁止 Yaw 输出，见
+[底盘控制契约](../../Application/Chassis/README.md#云台-imu-yaw-位置外环)。
+Yaw 控制采用云台 IMU 位置 PID（修正限幅 ±1 rad/s）与底盘 BMI088 反向角速度前馈，
+合成电机 MIT 速度目标；无需云台原生 gyro。两路反馈用于闭环时均要求 10 ms 内新鲜。
 
 ## 当前数据来源限制
 

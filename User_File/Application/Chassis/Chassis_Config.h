@@ -64,13 +64,24 @@ struct InfantryChassisConfig
     float yaw_torque_max_nm = 10.0f;
     /** 摇杆给出的 Yaw 速度上限，rad/s。 */
     float yaw_speed_max_rad_s = 8.0f;
-    /** 底盘自转补偿后的 Yaw 总速度上限，rad/s。 */
+    /** IMU 位置外环比例增益，1/s；初始试验值，须实机调参。 */
+    float yaw_position_kp = 2.0f;
+    /** IMU 位置外环积分 / 微分增益，单位 1/s² / 无量纲；先关闭，逐项调参。 */
+    float yaw_position_ki = 0.0f;
+    float yaw_position_kd = 0.0f;
+    /** PID 输出与积分分量限幅，rad/s；不限制摇杆与底盘角速度前馈。 */
+    float yaw_position_speed_max_rad_s = 1.0f;
+    /** 电机正速度对应 IMU Yaw 增大为 +1、减小为 -1；0 未标定，禁止 Yaw 输出。 */
+    float yaw_motor_to_imu_sign = 1.0f;
+    /** 回传 IMU 用于 Yaw 闭环的新鲜度，us；接收 Topic 本身采用 100 ms 契约。 */
+    uint64_t yaw_imu_max_age_us = 10000U;
+    /** 合成后的电机速度上限，rad/s。 */
     float yaw_total_speed_max_rad_s = 15.0f;
+    /** 本板 BMI088 Z 轴与云台 IMU Yaw 正方向一致时为 +1；安装方向须实测。 */
+    float yaw_rate_feedforward_gain = 1.0f;
     /** Yaw S 曲线试验参数：加速度 rad/s²、jerk rad/s³。 */
     float yaw_trajectory_accel_max = 150.0f;
     float yaw_trajectory_jerk_max = 7500.0f;
-    /** 机体系 Z 轴角速度前馈增益，用于抑制底盘自转耦合。 */
-    float yaw_rate_feedforward_gain = 1.0f;
     /** Yaw 速率限制：加速度上限随摇杆比例在 min/max 之间线性插值。 */
     float yaw_accel_limit_min = 60.0f;
     float yaw_accel_limit_max = 150.0f;
