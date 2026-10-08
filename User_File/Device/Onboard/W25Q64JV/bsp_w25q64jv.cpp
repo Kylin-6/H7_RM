@@ -101,7 +101,9 @@ bool Class_W25Q64JV::Enable_Quad_Mode()
         return false;
     }
     const uint32_t initial_errors = Auto_Polling_Error_Count;
+#if !CHASSIS
     SEGGER_RTT_printf(0, "QE start\n");
+#endif
 
     // 硬件复位 Flash（确保干净状态）
     Command = COMMAND_DEFAULT_CONFIG;
@@ -117,7 +119,9 @@ bool Class_W25Q64JV::Enable_Quad_Mode()
         return false;
     }
     osDelay(50);
+#if !CHASSIS
     SEGGER_RTT_printf(0, "Reset done\n");
+#endif
 
     // 只设置 QE，保留 SR2 其他保护/锁定位。
     Suppress_AutoPolling = true;
@@ -155,7 +159,9 @@ bool Class_W25Q64JV::Enable_Quad_Mode()
         osDelay(1);
     }
 
+#if !CHASSIS
     SEGGER_RTT_printf(0, "QE WE done\n");
+#endif
 
     // 验证 WEL 是否真的置位
     Suppress_AutoPolling = true;
@@ -169,8 +175,10 @@ bool Class_W25Q64JV::Enable_Quad_Mode()
     }
     osDelay(5);
     uint8_t wel_check = OSPI_Manage_Object->Rx_Buffer[0];
+#if !CHASSIS
     SEGGER_RTT_printf(0, "WEL check: SR1=%02X (WEL=%d WIP=%d)\n",
                       wel_check, (wel_check >> 1) & 1, wel_check & 1);
+#endif
 
     if ((wel_check & 0x02U) == 0U || Auto_Polling_Error_Count != initial_errors)
     {
@@ -219,7 +227,9 @@ bool Class_W25Q64JV::Enable_Quad_Mode()
         if (SYS_Timestamp.Get_Current_Timestamp() - Busy_Timestamp > Current_Auto_Polling_Timeout)
         {
             Auto_Polling_Error_Count++;
+#if !CHASSIS
             SEGGER_RTT_printf(0, "QE WIP timeout\n");
+#endif
             break;
         }
     }
@@ -251,14 +261,18 @@ bool Class_W25Q64JV::Enable_Quad_Mode()
     osDelay(5);
     sr2 = OSPI_Manage_Object->Rx_Buffer[0];
 
+#if !CHASSIS
     SEGGER_RTT_printf(0, "SR1=%02X SR2=%02X (WEL=%d BP=%d QE=%d)\n",
                       sr1, sr2,
                       sr1 & 1, (sr1 >> 2) & 0x1F, (sr2 >> 1) & 1);
+#endif
 
     Suppress_AutoPolling = false;
     Busy_Flag = false;
 
+#if !CHASSIS
     SEGGER_RTT_printf(0, "QE done err=%d\n", Auto_Polling_Error_Count);
+#endif
     return (sr2 & 0x02U) != 0U && (sr1 & 0x7cU) == 0U &&
            Auto_Polling_Error_Count == initial_errors;
 }

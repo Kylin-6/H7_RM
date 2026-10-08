@@ -166,7 +166,9 @@ HAL_StatusTypeDef OSPI_Command_Transmit_Receive_Data(OSPI_HandleTypeDef *hospi, 
  */
 extern "C" void HAL_OSPI_StatusMatchCallback(OSPI_HandleTypeDef *hospi)
 {
+#if !CHASSIS
     SEGGER_RTT_printf(0, "OSPI SM IRQ\n");
+#endif
 
     if (hospi->Instance == OCTOSPI1)
     {
@@ -222,7 +224,9 @@ extern "C" void HAL_OSPI_RxCpltCallback(OSPI_HandleTypeDef *hospi)
  */
 extern "C" void HAL_OSPI_TxCpltCallback(OSPI_HandleTypeDef *hospi)
 {
+#if !CHASSIS
     SEGGER_RTT_printf(0, "OSPI TX IRQ\n");
+#endif
 
     if (hospi->Instance == OCTOSPI1)
     {
