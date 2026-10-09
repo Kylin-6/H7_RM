@@ -35,7 +35,7 @@ Ctrl+Shift 组合优先：组合中的 WASD/Q/E 不产生平移、自转或跟�
 
 ## 接收、来源和恢复
 
-云台 UART7 为 921600、8N1，PE7 为 RX、PE8 为 TX，与老工程引脚相同，IOC 与初始化同步。用户确认使用 VT02/VT12 常规版及 2025 国赛 Client；按官方串口协议 V1.9，图传链路为 921600，裁判系统常规链路为 115200。旧版 V1.7 的图传波特率为 115200，不能跨版本套用。参见 [官方串口协议下载](https://www.robomaster.com/en-US/resource/pages/announcement/1768)。
+云台 UART7 当前采用 115200、8N1 测试配置，PE7 为 RX、PE8 为 TX，与老工程引脚相同，IOC 与初始化同步。用户确认使用 VT02/VT12 常规版及 2025 国赛 Client，但客户端年份不能单独确定发送端 UART 波特率。实机在 921600 下出现接收错误及 `0x80` 乱码，尚未收到合法键鼠帧，因此切换到 115200 做对比；该速率仍须以合法 CRC 的 `0x0304` 帧持续刷新验证，不能据此宣称全部 VT02 固件均使用 115200。官方通用协议 V1.9 的图传链路为 921600，旧版 V1.7 为 115200，需结合实际发送端固件核对。参见 [官方串口协议下载](https://www.robomaster.com/en-US/resource/pages/announcement/1768)。
 
 GimbalBoard 使用独立的 `vtm_legacy.c/.h`，保留 `vtm_26.c/.h` 给新图传 VT03/VT13 的 A9 53 协议。Legacy 的静态 255 字节缓冲跨 UART DMA chunk 拼帧，复用官方 CRC8/CRC16；CRC 失败逐字节重同步，拒绝超长声明，不动态分配或增加任务。`VTM_Legacy_ReadKeyboardSnapshot` 在恢复 PRIMASK 的短临界区复制完整快照。
 
