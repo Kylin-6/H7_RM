@@ -1,35 +1,34 @@
 #include "ClientUI.h"
 #include "client_ui_protocol.h"
 #include "client_ui_link.h"
-#include "message_center.h"
 #include "stm32h7xx_hal.h"
 
 #if H7_CLIENT_UI_GIMBAL
-#include "client_ui_config.h"
-extern "C" {
-#include "referee_UI_26.h"
-#include "crc_ref.h"
-}
+#include "message_center.h"
 #include <cmath>
-#include <cstdio>
-#include <cstring>
 #else
+#include "client_ui_config.h"
 #include "input_state.h"
 #include "source_arbitration.h"
 #include "keyboard_link.h"
 #include "keyboard_logic.h"
 #include "sbus.h"
+extern "C" {
+#include "referee_UI_26.h"
+#include "crc_ref.h"
+}
+#include <cstdio>
+#include <cstring>
 #endif
 
 namespace
 {
 bool initialized;
 uint32_t last_send_ms;
-
-#if H7_CLIENT_UI_GIMBAL
-uint8_t friction; // 0 未知，1 停止，2 转动
-uint32_t friction_ms;
-bool uart_bound;
+#if !H7_CLIENT_UI_GIMBAL
+Struct_Client_UI_Chassis chassis;
+uint32_t chassis_ms;
+bool chassis_valid;
 uint8_t slot;
 uint16_t client_robot_id;
 uint32_t rebuild_ms;
@@ -125,12 +124,10 @@ bool Draw(uint16_t robot_id, Struct_Client_UI_Chassis state, bool fresh, uint8_t
 
 bool ClientUI_Init()
 {
-    if (!ClientUILink_Init(H7_CLIENT_UI_GIMBAL != 0))
+    if (!ClientUILink_Init(H7_CLIENT_UI_GIMBAL == 0))
         return false;
-#if H7_CLIENT_UI_GIMBAL
-    auto *uart = BoardConfig_ClientUIUart();
-    uart_bound = uart != nullptr && RefereeInit(uart) != nullptr;
-    if (uart != nullptr && !uart_bound)
+#if !H7_CLIENT_UI_GIMBAL
+    if (RefereeUIInit(BoardConfig_ClientUIUart()) == nullptr)
         return false;
 #endif
     const uint32_t mask = __get_PRIMASK();
@@ -148,7 +145,7 @@ void ClientUI_Capture()
     const bool valid = MessageCenter::Shoot_Feedback_Topic.ReadFresh(feedback, 100000U) && feedback.online;
     const uint8_t next = !valid ? 0U :
         (std::fabs(feedback.friction_left_speed_rad_s) > 1.0f || std::fabs(feedback.friction_right_speed_rad_s) > 1.0f) ? 2U : 1U;
-    const uint32_t now = HAL_GetTick();
+    ClientUILink_Capture(next, HAL_GetTick());
 #else
     const auto input = InputState_Read();
     const auto decision = SourceArbitration_Resolve(input);
@@ -174,16 +171,13 @@ void ClientUI_Capture()
                     command.angular_velocity_rad_s < -0.001f ? 2U : 0U;
     }
     const uint32_t now = HAL_GetTick();
-#endif
-#if H7_CLIENT_UI_GIMBAL
     const uint32_t mask = __get_PRIMASK();
     __disable_irq();
-    friction = next;
-    friction_ms = now;
+    chassis = next;
+    chassis_ms = now;
+    chassis_valid = true;
     __DMB();
     __set_PRIMASK(mask);
-#else
-    ClientUILink_Capture(next, now);
 #endif
 }
 
@@ -192,21 +186,22 @@ void ClientUI_Update()
     const uint32_t mask = __get_PRIMASK();
     __disable_irq();
     const bool ready = initialized;
-#if H7_CLIENT_UI_GIMBAL
-    const uint8_t friction_state = friction;
-    const uint32_t captured_friction_ms = friction_ms;
+#if !H7_CLIENT_UI_GIMBAL
+    const auto state = chassis;
+    const uint32_t captured_ms = chassis_ms;
+    const bool valid = chassis_valid;
 #endif
     __DMB();
     __set_PRIMASK(mask);
-    Struct_Client_UI_Chassis state{};
-    uint32_t captured_ms = 0U;
-    const bool valid = ClientUILink_Read(state, captured_ms);
+    uint8_t friction_state = 0U;
+    uint32_t friction_ms = 0U;
+    const bool friction_valid = ClientUILink_Read(friction_state, friction_ms);
     const uint32_t now = HAL_GetTick();
     if (!ready)
         return;
-#if H7_CLIENT_UI_GIMBAL
+#if !H7_CLIENT_UI_GIMBAL
     uint16_t robot_id;
-    if (!uart_bound || !RefereeReadUIRobotId(&robot_id))
+    if (!RefereeReadUIRobotId(&robot_id))
     {
         client_robot_id = 0U;
         return;
@@ -221,7 +216,7 @@ void ClientUI_Update()
     if (now - last_send_ms < 100U)
         return;
     if (Draw(robot_id, state, valid && now - captured_ms <= CLIENT_UI_MAX_AGE_MS,
-             now - captured_friction_ms <= CLIENT_UI_MAX_AGE_MS ? friction_state : 0U))
+             friction_valid && now - friction_ms <= CLIENT_UI_MAX_AGE_MS ? friction_state : 0U))
     {
         last_send_ms = now;
         if (++slot == 6U)
@@ -233,7 +228,7 @@ void ClientUI_Update()
 #else
     if (now - last_send_ms < 50U)
         return;
-    if (ClientUILink_Send(valid && now - captured_ms <= CLIENT_UI_MAX_AGE_MS ? state : Struct_Client_UI_Chassis{}))
+    if (ClientUILink_Send(friction_valid && now - friction_ms <= CLIENT_UI_MAX_AGE_MS ? friction_state : 0U))
         last_send_ms = now;
 #endif
 }

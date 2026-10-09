@@ -3,11 +3,11 @@
 
 #include "usart.h"
 
-// 未确认接线前不绑定。只能选择独占、已配置 115200 8N1 与 RX/TX DMA 的
-// 裁判系统电源管理模块 User 串口，禁止复用 UART7 图传或其他设备串口。
+// 老步兵底盘裁判 User 串口：USART10，PE2 RX / PE3 TX，115200 8N1。
+// 与 RM_3 down 一致；云台板不绑定此端口。只用于 ID 接收和 UI 发送。
 inline UART_HandleTypeDef *BoardConfig_ClientUIUart()
 {
-    return nullptr;
+    return &huart10;
 }
 
 #endif

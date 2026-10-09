@@ -40,6 +40,8 @@ Legacy parser 用静态 255 字节缓冲跨 DMA chunk 拼帧，校验 CRC8/CRC16
 
 ## 老步兵客户端 UI
 
-老步兵 GimbalBoard 由 ClientUI 显式绑定裁判串口并使用非阻塞 `RefereeTrySend()`；默认串口为空，不发送。
-底盘仅回传显示状态，UI 不参与控制。布局、0x067 协议、调度和启用方式见
-[ClientUI](../../../Application/ClientUI/README.md)。`RefereeReadUIRobotId()` 只接受新鲜 0x0201 的步兵 ID。
+老步兵 ChassisBoard 的 ClientUI 使用 `RefereeUIInit()` 绑定 USART10（PE2 RX / PE3 TX，115200 8N1、RX/TX DMA），
+通过非阻塞 `RefereeTrySend()` 发出 0x0301。该初始化路径只保存合法 0x0201 的机器人 ID，
+不更新功率、热量等裁判业务数据，不接入控制策略；完整业务解析仍由 `RefereeInit()` 显式启用。
+`RefereeReadUIRobotId()` 只接受最近 500 ms 的步兵 ID。发送要求 TX DMA，忙时由 ClientUI 稍后重试。
+云台经 0x068 回传摩擦轮状态；布局、协议与调度见 [ClientUI](../../../Application/ClientUI/README.md)。

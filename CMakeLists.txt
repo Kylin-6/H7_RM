@@ -220,8 +220,6 @@ elseif(H7_BOARD STREQUAL "GimbalBoard")
         User_File/Application/Input/remote_input_forwarded.cpp
         User_File/Application/ClientUI/ClientUI.cpp
         User_File/System/Transport/client_ui_link.cpp
-        User_File/Device/Peripheral/Referee/referee_26.c
-        User_File/Device/Peripheral/Referee/referee_UI_26.c
         User_File/Application/Input/keyboard_input_gimbal.cpp
         User_File/System/Transport/keyboard_protocol.cpp
         User_File/System/Transport/keyboard_link.cpp

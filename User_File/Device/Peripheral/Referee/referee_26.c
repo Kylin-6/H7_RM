@@ -25,12 +25,25 @@ static uint16_t referee_rx_length;
 static uint16_t ui_robot_id;
 static uint32_t ui_robot_id_ms;
 static uint8_t ui_robot_id_valid;
+static uint8_t ui_only;
 
 /* 已校验 CRC 的已知命令必须匹配该命令的固定载荷长度；未知命令只计链路在线。 */
 static uint8_t JudgeStoreFrame(const uint8_t *frame, uint16_t payload_length)
 {
     const uint16_t command_id = (uint16_t)frame[CMD_ID_Offset] |
                                 ((uint16_t)frame[CMD_ID_Offset + 1U] << 8U);
+    if (ui_only)
+    {
+        if (command_id != ID_robot_status)
+            return TRUE;
+        if (payload_length != LEN_robot_status)
+            return FALSE;
+        ui_robot_id = frame[DATA_Offset];
+        ui_robot_id_ms = HAL_GetTick();
+        ui_robot_id_valid = TRUE;
+        if (referee_uart != NULL) { RefereeDaemonFeed(); }
+        return TRUE;
+    }
 #define JUDGE_COPY(cmd, field, expected) \
     case cmd: \
         if (payload_length != (expected) || (expected) != sizeof(referee_info.field)) return FALSE; \
@@ -134,7 +147,7 @@ static void RefereeRxCallback(uint8_t *buffer, uint16_t length)
 }
 
 /* 裁判系统通信初始化 */
-referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle)
+static referee_info_t *RefereeInitMode(UART_HandleTypeDef *referee_usart_handle, uint8_t only_ui)
 {
     if (referee_usart_handle == NULL)
         return NULL;
@@ -148,9 +161,22 @@ referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle)
     referee_rx_length = 0U;
     ui_robot_id_valid = FALSE;
     referee_uart = referee_usart_handle;
+    ui_only = only_ui;
     UART_Init(referee_usart_handle, RefereeRxCallback);
 
     return &referee_info;
+}
+
+referee_info_t *RefereeInit(UART_HandleTypeDef *uart)
+{
+    return RefereeInitMode(uart, FALSE);
+}
+
+referee_info_t *RefereeUIInit(UART_HandleTypeDef *uart)
+{
+    if (uart == NULL || uart->hdmarx == NULL || uart->hdmatx == NULL)
+        return NULL;
+    return RefereeInitMode(uart, TRUE);
 }
 
 /** 提交成功后在调用任务阻塞 115 ms；不适用于中断或 1 kHz 控制循环。 */
@@ -180,7 +206,8 @@ uint8_t RefereeIsHealthy(void) { return RefereeIsEnabled() && RefereeIsDataValid
 /* 非阻塞 UI 提交；HAL_BUSY 时调用方保留当前绘制步骤。 */
 uint8_t RefereeTrySend(uint8_t *data, uint16_t length)
 {
-    return referee_uart != NULL && UART_Transmit_Data(referee_uart, data, length) == HAL_OK;
+    return referee_uart != NULL && referee_uart->hdmatx != NULL &&
+           UART_Transmit_Data(referee_uart, data, length) == HAL_OK;
 }
 
 uint8_t RefereeReadUIRobotId(uint16_t *robot_id)

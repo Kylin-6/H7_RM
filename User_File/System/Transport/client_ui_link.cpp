@@ -6,14 +6,14 @@
 namespace
 {
 FDCAN_HandleTypeDef *bus;
-Struct_Client_UI_Chassis snapshot;
+uint8_t snapshot;
 uint32_t received_ms;
 bool valid;
 uint8_t sequence;
 
 void Receive(FDCAN_HandleTypeDef *rx_bus, uint32_t id, uint8_t *data, uint32_t length, void *)
 {
-    Struct_Client_UI_Chassis next{};
+    uint8_t next{};
     if (rx_bus != bus || id != CLIENT_UI_CAN_ID || !ClientUIProtocol_Decode(data, length, next))
         return;
     const uint32_t now = HAL_GetTick();
@@ -33,7 +33,7 @@ bool ClientUILink_Init(bool receive)
     return bus != nullptr && (!receive || BSP_CAN_RegisterCallback(CLIENT_UI_CAN_ID, bus, Receive, nullptr));
 }
 
-void ClientUILink_Capture(const Struct_Client_UI_Chassis &state, uint32_t timestamp_ms)
+void ClientUILink_Capture(uint8_t state, uint32_t timestamp_ms)
 {
     const uint32_t mask = __get_PRIMASK();
     __disable_irq();
@@ -44,7 +44,7 @@ void ClientUILink_Capture(const Struct_Client_UI_Chassis &state, uint32_t timest
     __set_PRIMASK(mask);
 }
 
-bool ClientUILink_Read(Struct_Client_UI_Chassis &state, uint32_t &timestamp_ms)
+bool ClientUILink_Read(uint8_t &state, uint32_t &timestamp_ms)
 {
     const uint32_t mask = __get_PRIMASK();
     __disable_irq();
@@ -56,7 +56,7 @@ bool ClientUILink_Read(Struct_Client_UI_Chassis &state, uint32_t &timestamp_ms)
     return available;
 }
 
-bool ClientUILink_Send(const Struct_Client_UI_Chassis &state)
+bool ClientUILink_Send(uint8_t state)
 {
     Struct_CAN_Tx_Msg message{};
     message.hfdcan = bus;

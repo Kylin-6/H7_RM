@@ -55,6 +55,8 @@ typedef struct
  * @note 回调在 UART 中断中运行有界流式解析；跨回调保留半帧，已知命令校验固定载荷长度。
  */
 referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle);
+/** UI 专用初始化：要求 RX/TX DMA；CRC 校验后只提取 0x0201 的机器人 ID。 */
+referee_info_t *RefereeUIInit(UART_HandleTypeDef *uart);
 
 /**
  * @brief 提交 UI/交互数据；只有 UART 提交成功才阻塞延时 115 ms。
