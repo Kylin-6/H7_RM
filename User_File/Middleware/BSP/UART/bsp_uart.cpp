@@ -130,21 +130,26 @@ static bool UART_Restart_Receive(Struct_UART_Manage_Object *manage)
         return false;
     }
 
+    // AbortReceive 可等待 DMA 关闭，留在临界区外；启动与状态提交必须避开错误中断。
+    const uint32_t primask = __get_PRIMASK();
+    __disable_irq();
     // AbortReceive 已清除错误位和 RDR；这里再清 IDLE，避免旧空闲标志抢先中断。
     __HAL_UART_CLEAR_FLAG(huart, UART_CLEAR_IDLEF);
     huart->ErrorCode = HAL_UART_ERROR_NONE;
 
+    manage->Rx_Restart_Pending = false;
     manage->Rx_Buffer_Active = manage->Rx_Buffer_0;
     if (UART_Start_Receive_ToIdle(manage) != HAL_OK)
     {
         manage->Rx_Buffer_Active = nullptr;
         manage->Rx_Restart_Pending = true;
         manage->Rx_Restart_Failure_Count++;
+        __set_PRIMASK(primask);
         return false;
     }
 
-    manage->Rx_Restart_Pending = false;
     manage->Rx_Restart_Count++;
+    __set_PRIMASK(primask);
     return true;
 }
 
