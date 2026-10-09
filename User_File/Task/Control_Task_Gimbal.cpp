@@ -8,6 +8,7 @@
  *          由 RemoteInput 输入适配提交，三个 Output 均为本地发布。
  */
 #include "Gimbal.h"
+#include "ClientUI.h"
 #include "RobotCmd.h"
 #include "remote_input.h"
 #include "keyboard_input.h"
@@ -54,6 +55,8 @@ extern "C" void Control_Task(void *)
     (void)DM_IMU_InsBridge_Init();
     (void) Gimbal_Init();
     (void)Shoot_Init();
+    if (!ClientUI_Init())
+        Diagnostics_PublishInitFailure();
 
     for (;;)
     {
@@ -66,6 +69,7 @@ extern "C" void Control_Task(void *)
         RobotCmd_Update();
         Gimbal_Update();
         Shoot_Update();
+        ClientUI_Capture();
         static uint32_t last_diagnostic_ms = 0U;
         const uint32_t now_ms = HAL_GetTick();
         if (now_ms - last_diagnostic_ms >= 10U)

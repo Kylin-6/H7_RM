@@ -218,6 +218,10 @@ elseif(H7_BOARD STREQUAL "GimbalBoard")
         User_File/Application/Diagnostics/Diagnostics_Runtime.cpp
         User_File/Application/RobotCmd/RobotCmd.cpp
         User_File/Application/Input/remote_input_forwarded.cpp
+        User_File/Application/ClientUI/ClientUI.cpp
+        User_File/System/Transport/client_ui_link.cpp
+        User_File/Device/Peripheral/Referee/referee_26.c
+        User_File/Device/Peripheral/Referee/referee_UI_26.c
         User_File/Application/Input/keyboard_input_gimbal.cpp
         User_File/System/Transport/keyboard_protocol.cpp
         User_File/System/Transport/keyboard_link.cpp
@@ -317,6 +321,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         User_File/Application/Shoot/
         User_File/Application/Diagnostics/
         User_File/Application/Input/
+        User_File/Application/ClientUI/
         User_File/Application/Balance/
 )
 
@@ -329,6 +334,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
 # 未装配器件（BMI088/W25Q64JV）的服务由 BoardConfig 能力标志在运行时门控。
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined symbols
+    H7_CLIENT_UI=$<STREQUAL:${H7_BOARD},GimbalBoard>
+    H7_CLIENT_UI_GIMBAL=1
     BALANCE=1
     GIMBAL=$<BOOL:${H7_APP_GIMBAL}>
     CHASSIS=$<BOOL:${H7_APP_CHASSIS}>

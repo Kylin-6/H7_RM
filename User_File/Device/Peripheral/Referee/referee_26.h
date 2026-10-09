@@ -63,6 +63,10 @@ referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle);
  * @note 无返回值，不能用于 ISR 或 1 kHz 控制任务；调用前须先 RefereeInit。
  */
 void RefereeSend(uint8_t *send, uint16_t tx_len);
+/** 非阻塞 DMA 提交，成功只表示 BSP 接受，不保证客户端收到。 */
+uint8_t RefereeTrySend(uint8_t *data, uint16_t length);
+/** 一致快照：最近 500 ms 的 0x0201 中有效步兵 ID；其他帧不能续期。 */
+uint8_t RefereeReadUIRobotId(uint16_t *robot_id);
 
 /** @brief 解析本次 DMA chunk，不注册 UART，与接收回调共用跨调用半帧缓冲。 */
 void RefereeReceiveData(uint8_t *data, uint16_t length);

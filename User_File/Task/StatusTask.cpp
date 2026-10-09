@@ -7,6 +7,9 @@
  */
 
 #include "daemon.h"
+#if H7_CLIENT_UI
+#include "ClientUI.h"
+#endif
 #include "cmsis_os2.h"
 #include "dji_motor.h"
 #if H7_HAS_DM_MOTOR
@@ -26,6 +29,9 @@ extern "C" void Status_Task(void *argument)
         Class_DJIMotor::ServiceAll();
 #if H7_HAS_DM_MOTOR
         Class_DMMotor::ServiceAll();
+#endif
+#if H7_CLIENT_UI
+        ClientUI_Update();
 #endif
         next_wake_tick += 10U;
         osDelayUntil(next_wake_tick);

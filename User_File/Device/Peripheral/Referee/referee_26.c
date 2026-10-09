@@ -22,6 +22,9 @@ static UART_HandleTypeDef *referee_uart; // 裁判系统串口实例
 static referee_info_t referee_info;			  // 裁判系统数据
 static uint8_t referee_rx_buffer[RE_RX_BUFFER_SIZE];
 static uint16_t referee_rx_length;
+static uint16_t ui_robot_id;
+static uint32_t ui_robot_id_ms;
+static uint8_t ui_robot_id_valid;
 
 /* 已校验 CRC 的已知命令必须匹配该命令的固定载荷长度；未知命令只计链路在线。 */
 static uint8_t JudgeStoreFrame(const uint8_t *frame, uint16_t payload_length)
@@ -58,6 +61,12 @@ static uint8_t JudgeStoreFrame(const uint8_t *frame, uint16_t payload_length)
         break;
     }
 #undef JUDGE_COPY
+    if (command_id == ID_robot_status)
+    {
+        ui_robot_id = referee_info.GameRobotState.robot_id;
+        ui_robot_id_ms = HAL_GetTick();
+        ui_robot_id_valid = TRUE;
+    }
     memcpy(&referee_info.FrameHeader, frame, LEN_HEADER);
     referee_info.CmdID = command_id;
     referee_info.init_flag = 1U;
@@ -137,6 +146,7 @@ referee_info_t *RefereeInit(UART_HandleTypeDef *referee_usart_handle)
     }
     memset(&referee_info, 0, sizeof(referee_info));
     referee_rx_length = 0U;
+    ui_robot_id_valid = FALSE;
     referee_uart = referee_usart_handle;
     UART_Init(referee_usart_handle, RefereeRxCallback);
 
@@ -166,3 +176,27 @@ uint8_t RefereeIsOnline(void)
 
 uint8_t RefereeIsDataValid(void) { return RefereeIsOnline(); }
 uint8_t RefereeIsHealthy(void) { return RefereeIsEnabled() && RefereeIsDataValid(); }
+
+/* 非阻塞 UI 提交；HAL_BUSY 时调用方保留当前绘制步骤。 */
+uint8_t RefereeTrySend(uint8_t *data, uint16_t length)
+{
+    return referee_uart != NULL && UART_Transmit_Data(referee_uart, data, length) == HAL_OK;
+}
+
+uint8_t RefereeReadUIRobotId(uint16_t *robot_id)
+{
+    if (robot_id == NULL)
+        return FALSE;
+    const uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    const uint16_t id = ui_robot_id;
+    const uint32_t timestamp = ui_robot_id_ms;
+    const uint8_t valid = ui_robot_id_valid;
+    __DMB();
+    __set_PRIMASK(mask);
+    if (!valid || HAL_GetTick() - timestamp > 500U ||
+        !((id >= 3U && id <= 5U) || (id >= 103U && id <= 105U)))
+        return FALSE;
+    *robot_id = id;
+    return TRUE;
+}

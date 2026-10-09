@@ -37,3 +37,9 @@ Legacy parser 用静态 255 字节缓冲跨 DMA chunk 拼帧，校验 CRC8/CRC16
 ## 历史 UI 示例
 
 旧框架使用 `MyUIInit()`、`MyUIRefresh()`、`UICharDraw()`、`UIRectangleDraw()`、`UIFloatDraw()`、`UILineDraw()` 与 `UIRefresh()` 绘制功率条，并在独立 UI 任务以约 10 Hz 刷新。它仅是移植参考；当前板级任务没有创建该任务，示例中的旧类型和数据源不可直接复制到生产代码。
+
+## 老步兵客户端 UI
+
+老步兵 GimbalBoard 由 ClientUI 显式绑定裁判串口并使用非阻塞 `RefereeTrySend()`；默认串口为空，不发送。
+底盘仅回传显示状态，UI 不参与控制。布局、0x067 协议、调度和启用方式见
+[ClientUI](../../../Application/ClientUI/README.md)。`RefereeReadUIRobotId()` 只接受新鲜 0x0201 的步兵 ID。
