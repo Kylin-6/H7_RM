@@ -25,8 +25,9 @@ struct InfantryChassisConfig
     float angular_velocity_max = 50.0f;
     /** 麦轮单轮目标限幅，与三轴同量纲。 */
     float wheel_speed_max = 30.0f;
-    float keyboard_normal_ratio = 0.6f;
-    float keyboard_shift_ratio = 1.0f;
+    /** WASD / Shift 平移分别对应遥控 CH7 第一 / 第二档。 */
+    float keyboard_normal_ratio = 0.3f;
+    float keyboard_shift_ratio = 0.6f;
     float keyboard_spin_ratio = 0.3f;
     float keyboard_spin_shift_multiplier = 1.5f;
     int16_t keyboard_yaw_mouse_max = 1000;
