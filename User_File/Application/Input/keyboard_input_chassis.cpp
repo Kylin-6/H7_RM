@@ -18,10 +18,11 @@ bool KeyboardInput_Init()
 
 void KeyboardInput_Update()
 {
-    const uint32_t now = HAL_GetTick();
-    InputState_SetTime(now);
     Struct_Keyboard_Frame frame{};
     const bool received = initialized && KeyboardLink_Read(frame);
+    // 先取快照再取时间，避免 RX 中断跨 tick 使新帧被无符号减法误判为超时。
+    const uint32_t now = HAL_GetTick();
+    InputState_SetTime(now);
     ReceiverMode requested = ReceiverMode::Stop;
     const bool receiver_permitted = RemoteInput_GetReceiverState(requested);
     const ReceiverMode forwarded = initialized ? KeyboardInput::SelectMode(received, frame.received_ms, now, static_cast<uint8_t>(frame.mode)) : ReceiverMode::Stop;
