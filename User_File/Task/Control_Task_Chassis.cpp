@@ -16,6 +16,7 @@
 #include "message_center.h"
 #include "output.h"
 #include "remote_input.h"
+#include "keyboard_input.h"
 
 extern "C" void Control_Task(void *)
 {
@@ -37,7 +38,8 @@ extern "C" void Control_Task(void *)
     /* 遥控接收依赖 UART BSP 与 init_finished，放在设备初始化之后。 */
     const bool remote_ready = RemoteInput_Init();
     const bool imu_link_ready = GimbalImuTransport_Init();
-    if (!chassis_ready || !remote_ready || !imu_link_ready)
+    const bool keyboard_ready = KeyboardInput_Init();
+    if (!chassis_ready || !remote_ready || !imu_link_ready || !keyboard_ready)
     {
         Diagnostics_PublishInitFailure();
     }
@@ -49,6 +51,7 @@ extern "C" void Control_Task(void *)
         /* 输入适配先于 RobotCmd，保证本周期发布的命令来自本周期通道。 */
         GimbalImuTransport_Update();
         RemoteInput_Update();
+        KeyboardInput_Update();
         RobotCmd_Update();
         Chassis_Update();
         if (++diagnostic_divider >= 10U)

@@ -1,6 +1,8 @@
 #ifndef RM_REMOTE_INPUT_H
 #define RM_REMOTE_INPUT_H
 
+#include "keyboard_protocol.h"
+
 /**
  * 初始化 Remote 输入；应在 RobotCmd 初始化之前调用一次。
  *
@@ -32,7 +34,10 @@ void RemoteInput_Update(void);
  *       （50 ms 帧新鲜度、失控位、回中解锁）仍由 RemoteInput_Update 独立判断。
  */
 bool RemoteInput_IsLinkOnline(void);
-/** 最近新鲜遥控帧的 CH5 手动保护状态；仅供 ControlTask 诊断，不改变许可。 */
+/** CH5 已用于来源切换，当前无单独手动停机开关；本接口返回 false。 */
 bool RemoteInput_IsManualProtection(void);
+
+/* CH5 来源选择及连续健康解锁许可，过期返回 Stop/false。 */
+bool RemoteInput_GetReceiverState(ReceiverMode &mode);
 
 #endif // RM_REMOTE_INPUT_H

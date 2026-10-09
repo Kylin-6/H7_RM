@@ -31,7 +31,7 @@ namespace
 /* ============================== 遥控通道约定 ============================== */
 /* 索引对应 SBUS 原始通道（解析后已减中位 1024），与老工程 sbus_channel_bsp.c 一致。 */
 
-/** CH5 手动保护开关：< 0 时按遥控失联锁定输入。 */
+/** CH5 来源开关：< 0 选择键鼠，其余档位选择遥控。 */
 constexpr unsigned kChannelSafetySwitch = 4U;
 /** CH8 跟随开关：> 0 时允许底盘跟随云台。 */
 constexpr unsigned kChannelFollowSwitch = 7U;
@@ -82,7 +82,8 @@ constexpr uint8_t kBoardDivider = 2U;
 
 Class_GimbalBoard gimbal_board;
 bool initialized;
-bool manual_protection;
+bool keyboard_selected;
+ReceiverMode receiver_mode = ReceiverMode::Stop;
 /** 上电默认锁定；连续健康 200 ms 才解锁，失联立即锁定。 */
 bool armed;
 bool ever_healthy;
@@ -140,7 +141,7 @@ void RotateVelocityByGimbal(float angle_rad, float *velocity_x, float *velocity_
  * @note 0x070 的地面系 Yaw 目前没有独立陀螺仪来源，与老工程一致暂用 Yaw 电机角度；
  *       0x075 的裁判数据未接入，按老工程填 0。
  */
-void ForwardBoardFrames(const Struct_SBUS_Frame *frame)
+void ForwardBoardFrames(const Struct_SBUS_Frame *frame, ReceiverMode mode, bool permitted)
 {
     int16_t fire_switch = 0;
     int16_t shoot_speed = 0;
@@ -155,7 +156,7 @@ void ForwardBoardFrames(const Struct_SBUS_Frame *frame)
         shoot_speed = frame->channels[kChannelShootSpeed];
         pitch = frame->channels[kChannelPitch];
     }
-    (void)gimbal_board.SendRemoteChannels(fire_switch, shoot_speed, pitch);
+    (void)gimbal_board.SendRemoteChannels(fire_switch, shoot_speed, pitch, mode, permitted);
 
     GimbalFeedback yaw_feedback{};
     const float yaw_rad = RobotCmd_GetGimbalFeedback(yaw_feedback) && yaw_feedback.enabled
@@ -170,7 +171,8 @@ void ForwardBoardFrames(const Struct_SBUS_Frame *frame)
 bool RemoteInput_Init(void)
 {
     initialized = false;
-    manual_protection = false;
+    keyboard_selected = false;
+    receiver_mode = ReceiverMode::Stop;
     armed = false;
     ever_healthy = false;
     last_healthy_ms = HAL_GetTick();
@@ -202,10 +204,19 @@ void RemoteInput_Update(void)
     const bool frame_healthy = SBUS_ReadLatest(&frame) &&
                                now - frame.timestamp_ms <= kFrameFreshMs &&
                                !frame.frame_lost && !frame.failsafe;
-    manual_protection = frame_healthy && frame.channels[kChannelSafetySwitch] < 0;
-    const bool healthy = frame_healthy && !manual_protection;
+    keyboard_selected = frame_healthy && frame.channels[kChannelSafetySwitch] < 0;
+    const ReceiverMode requested = !frame_healthy ? ReceiverMode::Stop :
+                                   keyboard_selected ? ReceiverMode::Keyboard : ReceiverMode::Remote;
+    if (requested != receiver_mode)
+    {
+        armed = false;
+        ever_healthy = false;
+        last_unhealthy_ms = now;
+        receiver_mode = requested;
+    }
+    const bool healthy = frame_healthy;
 
-    /* 维护武装互锁：连续健康 200 ms 才解锁，坏帧、失联或 CH5 保护立即锁定。 */
+    /* 两种来源均要求连续健康 200 ms；切源、坏帧或失联立即锁定。 */
     if (healthy)
     {
         last_healthy_ms = now;
@@ -230,10 +241,11 @@ void RemoteInput_Update(void)
     if (board_divider >= kBoardDivider)
     {
         board_divider = 0U;
-        ForwardBoardFrames(healthy && armed ? &frame : nullptr);
+        ForwardBoardFrames(healthy && armed && receiver_mode == ReceiverMode::Remote ? &frame : nullptr,
+                           receiver_mode, healthy && armed);
     }
 
-    if (!armed)
+    if (!armed || receiver_mode != ReceiverMode::Remote)
     {
         /* 未解锁：提交空输入，由 SourceArbitration 输出 safe state。 */
         InputState_SubmitRemote({});
@@ -351,5 +363,13 @@ bool RemoteInput_IsLinkOnline(void)
 
 bool RemoteInput_IsManualProtection(void)
 {
-    return initialized && manual_protection;
+    // CH5 已改为来源切换，不再报告手动停机保护。
+    return false;
+}
+
+
+bool RemoteInput_GetReceiverState(ReceiverMode &mode)
+{
+    mode = initialized ? receiver_mode : ReceiverMode::Stop;
+    return initialized && armed && mode != ReceiverMode::Stop;
 }

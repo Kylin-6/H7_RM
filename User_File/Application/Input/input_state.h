@@ -9,7 +9,7 @@
 constexpr float INPUT_MAX_TRANSLATION_M_S = 0.5f;
 constexpr float INPUT_MAX_ROTATION_RAD_S = 1.0f;
 
-/** 固定来源选择；只有遥控模式切换逻辑应调用 InputState_Select。 */
+/** 固定来源选择；仅 ControlTask 的接收器模式适配调用 InputState_Select。 */
 enum class InputSource : uint8_t
 {
     Remote,
@@ -46,6 +46,8 @@ struct InputState
     uint32_t selected_at_ms = 0U;
     uint32_t now_ms = 0U;
     bool vision_enabled = false;
+    bool run_permitted = true;
+    bool require_remote_permit = true;
 };
 
 /** 以下接口仅供同一 ControlTask 上下文调用，不从 UART/CAN ISR 写入。 */
@@ -56,6 +58,8 @@ void InputState_SubmitVtm(const ControlInput &input);
 void InputState_SubmitKeyboard(const ControlInput &input);
 void InputState_SubmitVision(const VisionAimInput &input);
 void InputState_Select(InputSource source, bool vision_enabled, uint32_t now_ms);
+/** ControlTask 运行许可；默认仍要求 Remote 健康。切换许可时清除旧输入边界。 */
+void InputState_SetPermission(bool permitted, bool require_remote);
 InputState InputState_Read();
 
 #endif

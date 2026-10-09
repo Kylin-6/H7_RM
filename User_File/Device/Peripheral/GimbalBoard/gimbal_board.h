@@ -7,7 +7,7 @@
  * rm/demo（User/bsp/bsp_CAN.c 的 CAN_BSP_SendGimbalPitch / SendGimbalYaw /
  * SendRobotStatus）的三个下行帧：
  *
- * - 0x065 遥控关键通道（火控开关 / 发射速度 / Pitch 轴，三个大端 int16，6 字节）
+ * - 0x065 遥控关键通道（火控开关 / 发射速度 / Pitch 轴，三个大端 int16，byte6 版本/模式/许可、byte7 序号）
  * - 0x070 底盘 Yaw（Yaw 电机角度与地面系 Yaw，两个大端 int16，单位 0.01°）
  * - 0x075 机器人状态（枪管热量上限 / 冷却值 / 机器人 ID，裁判系统未接入时为 0）
  *
@@ -23,6 +23,7 @@
 
 #include "bsp_can.h"
 #include "fdcan.h"
+#include "keyboard_protocol.h"
 
 #include <stdint.h>
 
@@ -54,9 +55,9 @@ public:
      * @param shoot_speed 发射速度（拨盘）通道，语义同上。
      * @param pitch       云台俯仰轴通道，语义同上。
      * @details 三个通道按大端 int16 依次写入 byte 0~5；链路失效时由调用方传 0，
-     *          避免云台板继续使用最后一帧旧摇杆值。
+     *          byte6 标记版本 1、所选来源及健康许可，byte7 递增序号；非遥控档通道为零。
      */
-    bool SendRemoteChannels(int16_t fire_switch, int16_t shoot_speed, int16_t pitch);
+    bool SendRemoteChannels(int16_t fire_switch, int16_t shoot_speed, int16_t pitch, ReceiverMode mode, bool permitted);
 
     /**
      * @brief 发送 0x070：底盘 Yaw 角度。
@@ -82,6 +83,7 @@ private:
     bool Transmit(uint32_t id, const uint8_t data[8]);
 
     FDCAN_HandleTypeDef* hfdcan = nullptr;
+    uint8_t remote_sequence = 0U;
 };
 
 #endif /* GIMBAL_BOARD_H */

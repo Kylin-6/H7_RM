@@ -2,7 +2,11 @@
 
 Input 将设备解析结果转换为 SI 命令，保存固定来源状态，再由 SourceArbitration 选择本周期目标。
 RobotCmd 根据仲裁结果发布命令；Input 不直接控制电机，不另建消息总线。
-当前仅绑定 UART5 S.BUS，且只映射底盘；VTM、Keyboard、Vision 有提交接口，尚未绑定实际设备。
+SingleBoard 保留 UART5 S.BUS 底盘模板；老步兵双板键鼠、参数、来源许可与配套协议见 [老步兵键鼠控制](KEYBOARD_CONTROL.md)。VTM 解析提供接收快照，Vision 仍未绑定设备。
+
+老步兵新增输入适配：[keyboard_input_chassis.cpp](keyboard_input_chassis.cpp)。默认仲裁仍要求 Remote 许可；显式所选接收源许可由 `InputState_SetPermission` 设置。下文 S.BUS 映射与示例描述 SingleBoard 的默认规则。
+
+CH5<0 选择键鼠，其余档位选择遥控；键鼠仍要求 SBUS 健康解锁，图传失联停机，不自动回退。实际协议使用 VT02/VT12 的 0x0304，详见上述键鼠控制文档。
 
 ## 文件与职责
 
@@ -29,7 +33,7 @@ UART/DMA → S.BUS Device 完整帧快照
   → 各机构 Update
 ```
 
-新增输入适配应放在 RemoteInput_Update 后、RobotCmd_Update 前，当前任务没有这些额外调用。
+输入适配均在 RobotCmd_Update 前；老步兵云台先更新 INS 和键鼠模式/许可，再更新 Remote，底盘先更新 Remote 再更新键鼠。具体顺序见 [老步兵键鼠控制](KEYBOARD_CONTROL.md)。
 InputState 是一个静态结构体，没有锁或临界区；所有读写和选择接口必须在同一 ControlTask 上下文调用。
 不要从 ISR 或另一个任务直接 Submit。异步解析器应先提供同步完整快照，再由 ControlTask 转换和提交。
 
@@ -37,7 +41,7 @@ InputState 是一个静态结构体，没有锁或临界区；所有读写和选
 接收时戳应保留实际新帧到达时间，不要在每次 Update 时给旧帧重新盖时间戳。
 若替换 RemoteInput，仍需每周期调用 InputState_SetTime，避免仲裁时钟停在旧值。
 
-## 当前 S.BUS 映射
+## 当前 S.BUS 映射（SingleBoard 模板）
 
 通道数组为零基索引，代码中的 index 0 对应遥控 CH1。
 
@@ -86,7 +90,7 @@ VisionAimInput 的 yaw/pitch 为 INS 坐标系绝对 rad，不是像素偏移或
 SourceArbitration_Resolve 是纯决策入口，不修改 InputState、不发布 Topic、不访问设备。
 默认结果 armed=false，机构命令均为安全默认值。
 
-1. Remote 必须 valid、年龄不超过 50 ms 且命令合法；VTM/键鼠不能绕过 Remote 安全许可。
+1. 默认要求 Remote 必须 valid、年龄不超过 50 ms 且命令合法；VTM/键鼠不能绕过 Remote 安全许可。
 2. selected 只能是 Remote/Vtm/Keyboard，读取被选中的完整 ControlInput。
 3. 选中 Remote 的时效为 50 ms，VTM/Keyboard 为 100 ms；接收时戳不得早于 selected_at_ms。
 4. 选中输入失效时保持安全结果，不自动退回其他来源。

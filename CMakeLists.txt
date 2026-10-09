@@ -238,6 +238,9 @@ else()
         User_File/Task/Control_Task_Chassis.cpp
         User_File/Application/RobotCmd/RobotCmd.cpp
         User_File/Application/Input/remote_input_forwarding.cpp
+        User_File/Application/Input/keyboard_input_chassis.cpp
+        User_File/System/Transport/keyboard_protocol.cpp
+        User_File/System/Transport/keyboard_link.cpp
         User_File/Application/Input/input_state.cpp
         User_File/Application/Input/source_arbitration.cpp
         # Chassis 由 H7_APP_CHASSIS 构建期选择统一装配。

@@ -48,9 +48,10 @@ InputDecision SourceArbitration_Resolve(const InputState &state)
     // 默认结果不授予控制许可；遥控或选中控制来源校验失败时返回该安全结果。
     InputDecision decision{};
     decision.source = state.selected;
-    /* Remote 失联始终停机，VTM/键鼠不能绕过 Remote 安全许可。 */
-    if (!Fresh(state.remote.valid, state.remote.received_ms,
-               state.now_ms, REMOTE_MAX_AGE_MS) || !CommandValid(state.remote))
+    // 默认保留 Remote 互锁；所选键鼠接收源可以独立授予运行许可。
+    if (!state.run_permitted || (state.require_remote_permit &&
+        (!Fresh(state.remote.valid, state.remote.received_ms,
+                state.now_ms, REMOTE_MAX_AGE_MS) || !CommandValid(state.remote))))
     {
         return decision;
     }

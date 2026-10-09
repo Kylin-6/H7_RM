@@ -50,6 +50,14 @@ void InputState_Select(InputSource source, bool vision_enabled, uint32_t now_ms)
     state.vision_enabled = vision_enabled;
 }
 
+void InputState_SetPermission(bool permitted, bool require_remote)
+{
+    if (permitted != state.run_permitted || require_remote != state.require_remote_permit)
+        state.selected_at_ms = state.now_ms;
+    state.run_permitted = permitted;
+    state.require_remote_permit = require_remote;
+}
+
 InputState InputState_Read()
 {
     return state;

@@ -41,7 +41,7 @@ bool Class_GimbalBoard::Transmit(uint32_t id, const uint8_t data[8])
 
 bool Class_GimbalBoard::SendRemoteChannels(int16_t fire_switch,
                                            int16_t shoot_speed,
-                                           int16_t pitch)
+                                           int16_t pitch, ReceiverMode mode, bool permitted)
 {
     uint8_t data[8] = {0};
 
@@ -55,6 +55,8 @@ bool Class_GimbalBoard::SendRemoteChannels(int16_t fire_switch,
     data[4] = (uint8_t)((uint16_t)pitch >> 8);
     data[5] = (uint8_t)pitch;
 
+    data[6] = 0x10U | (static_cast<uint8_t>(mode) << 1U) | (permitted ? 1U : 0U);
+    data[7] = ++remote_sequence;
     return Transmit(GIMBAL_BOARD_ID_REMOTE_CHANNELS, data);
 }
 

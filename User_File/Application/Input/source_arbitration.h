@@ -12,7 +12,7 @@ struct InputDecision
     bool armed = false;
 };
 
-/** 固定优先级：Remote 安全许可 → 显式选中且新鲜的控制来源 → 可选 Vision 云台瞄准。 */
+/** 固定优先级：运行许可 → 按设置要求 Remote 健康 → 新鲜所选来源 → 可选 Vision。 */
 InputDecision SourceArbitration_Resolve(const InputState &state);
 
 #endif
