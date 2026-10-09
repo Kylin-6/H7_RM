@@ -123,6 +123,8 @@ DMA TX 会先复制
 错误中断只设置恢复标志；`TIM1msTask` 调用
 `UART_TIM_1ms_Recover_PeriodElapsedCallback()` 在任务上下文清理 DMA，并每 10 ms
 重试待恢复的接收通道。就绪缓冲只保证在当前回调期间有效。
+恢复时 DMA Abort 保持在临界区外；非阻塞接收启动和状态提交使用短临界区，
+恢复中发生的错误中断在退出临界区后重新置位恢复请求，避免启动成功后覆盖请求而永久停收。
 
 当前管理对象覆盖 UART5、UART7、USART1/2/3/6/10。其他 UART 若要使用 DMA 路径，必须
 先补齐管理对象、CubeMX DMA 配置和回调映射。
