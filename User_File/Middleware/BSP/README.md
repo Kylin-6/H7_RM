@@ -190,3 +190,5 @@ UART、OSPI 等 DMA 管理对象放入 `.dma_buffer`。修改链接脚本、MPU 
 - [Application](../../Application/README.md)
 - [Message Center](../../System/MessageCenter/README.md)
 - [交互式架构图](../../../Assets/Architecture/H7_BSP.html)
+
+UART BSP 的函数声明提供 C linkage，供 VTM/C 协议解析器注册接收回调；老步兵 UART7 的 921600、8N1 与拼帧接口见 [键鼠控制](../../Application/Input/KEYBOARD_CONTROL.md)。

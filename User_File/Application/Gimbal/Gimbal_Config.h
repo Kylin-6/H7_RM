@@ -60,6 +60,9 @@ struct Struct_Gimbal_Config
     float pitch_min = -0.6981317f; // -40 deg。
     float pitch_max = 0.2617994f;  // +15 deg。
     uint64_t ins_max_age_us = 100000U;
+    int16_t keyboard_pitch_mouse_max = 500;
+    int16_t keyboard_pitch_mouse_divisor = 5;
+    uint32_t keyboard_pitch_max_dt_ms = 10U;
 };
 
 inline Struct_Gimbal_Config Gimbal_Default_Config()

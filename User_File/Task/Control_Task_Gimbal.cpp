@@ -10,6 +10,7 @@
 #include "Gimbal.h"
 #include "RobotCmd.h"
 #include "remote_input.h"
+#include "keyboard_input.h"
 #include "Shoot.h"
 #include "Init.h"
 #include "gimbal_imu_transport.h"
@@ -43,6 +44,8 @@ extern "C" void Control_Task(void *)
         for (;;) osDelay(1000U);
     }
     (void)RemoteInput_Init();
+    if (!KeyboardInput_Init())
+        Diagnostics_PublishInitFailure();
     if (!GimbalImuTransport_Init())
     {
         Diagnostics_PublishInitFailure();
@@ -56,8 +59,9 @@ extern "C" void Control_Task(void *)
     {
         osThreadFlagsWait(0x0001, osFlagsWaitAny, osWaitForever);
         /* 输入适配先于 RobotCmd，保证本周期发布的命令来自本周期通道。 */
-        RemoteInput_Update();
         DM_IMU_InsBridge_Update();
+        KeyboardInput_Update();
+        RemoteInput_Update();
         GimbalImuTransport_Update();
         RobotCmd_Update();
         Gimbal_Update();

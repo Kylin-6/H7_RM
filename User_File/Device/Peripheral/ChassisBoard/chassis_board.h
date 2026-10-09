@@ -8,6 +8,7 @@
  * - byte 0~1 火控开关（扳机）
  * - byte 2~3 拨弹盘速度（波轮）
  * - byte 4~5 Pitch 轴通道
+ * - byte 6 高四位版本 1，bit0 所选来源许可，bit1~2 模式 0/1/2，bit3 零；byte 7 序号
  *
  * 三个通道均为大端 int16。底盘板侧对应的下发实现在
  * `Device/Peripheral/GimbalBoard/gimbal_board.*`（老步兵底盘板配置分支）。
@@ -21,6 +22,7 @@
 #define CHASSIS_BOARD_H
 
 #include "bsp_can.h"
+#include "keyboard_protocol.h"
 #include "daemon.h"
 #include "fdcan.h"
 
@@ -38,6 +40,9 @@ struct Struct_ChassisBoard_Channels
     int16_t fire = 0;
     int16_t dial = 0;
     int16_t pitch = 0;
+    bool permitted = false;
+    ReceiverMode mode = ReceiverMode::Stop;
+    uint8_t sequence = 0U;
     uint32_t timestamp_ms = 0U; ///< 接收时间；用于输入 freshness 与调试，不参与在线判断。
 };
 
@@ -81,7 +86,7 @@ private:
                            uint32_t len,
                            void *context);
 
-    /** 解析 0x065 的三个大端 int16 通道并刷新时间戳。 */
+    /** 校验配套 8 字节格式与新序号后，缓存通道、许可和实际接收时间。 */
     void OnRemoteChannels(const uint8_t *data, uint32_t len);
 
     /** 判断某个通道值的时效性，成功时写出数值。 */
@@ -97,6 +102,10 @@ private:
     volatile int16_t pitch_channel = 0;
     volatile uint32_t last_rx_ms = 0U; ///< 接收时间戳，用于 freshness 与调试。
     volatile bool received = false;
+    volatile bool remote_permitted = false;
+    volatile ReceiverMode receiver_mode = ReceiverMode::Stop;
+    volatile uint8_t rx_sequence = 0U;
+    Class_ControlSequence sequence;
 };
 
 #endif /* CHASSIS_BOARD_H */

@@ -14,6 +14,8 @@
 #include "input_state.h"
 
 #include "Gimbal_Config.h"
+#include "Shoot_Config.h"
+#include "Gimbal.h"
 #include "board_config.h"
 #include "chassis_board.h"
 #include "fdcan.h"
@@ -44,11 +46,7 @@ constexpr int16_t kFireReleasedThreshold = 500;
 /* 波轮档位 -> 拨弹盘输出速度（M2006，减速比 36，转子上限 4500 rpm）。 */
 constexpr int16_t kDialMin = -780;
 constexpr int16_t kDialMax = 740;
-constexpr float kLoaderMaxRotorRpm = 4500.0f;
-constexpr float kM2006GearRatio = 36.0f;
-constexpr float kShootTwoPi = 6.283185307179586f;
-constexpr float kLoaderMaxOutputRadS =
-    kLoaderMaxRotorRpm * kShootTwoPi / 60.0f / kM2006GearRatio;
+constexpr float kLoaderMaxOutputRadS = InfantryShootConfig::LOADER_BURST_OUTPUT_RAD_S;
 
 Class_ChassisBoard chassis_board;
 bool remote_input_initialized;
@@ -146,19 +144,30 @@ void RemoteInput_Update(void)
     Remote_Pitch_Channel = pitch;
     Remote_Pitch_Valid = channels_valid;
 
-    if (!channels_valid)
+    const auto state = InputState_Read();
+    if (!channels_valid || !channels.permitted || channels.mode != ReceiverMode::Remote ||
+        now_ms - channels.timestamp_ms > KEYBOARD_CONTROL_MAX_AGE_MS ||
+        !state.run_permitted || state.selected != InputSource::Remote)
     {
         /* 安全互锁：提交空输入由仲裁输出 safe state；不再清除滤波历史，
          * 链路恢复后目标由限速率路径平滑过渡。 */
         fire_trigger_pressed = false;
         require_fire_release = true;
         trigger_start_ms = now_ms;
-        InputState_SubmitRemote({});
+        ControlInput safe{};
+        safe.shoot_event_sequence = shoot_event_sequence;
+        InputState_SubmitRemote(safe);
         return;
     }
 
+    const auto status = Gimbal_GetStatus();
+    if (status != Gimbal_Status_READY)
+    {
+        fire_trigger_pressed = false;
+        require_fire_release = true;
+    }
     const bool was_pressed = fire_trigger_pressed;
-    if (fire >= kFireReleasedThreshold)
+    if (status == Gimbal_Status_READY && fire >= kFireReleasedThreshold)
     {
         fire_trigger_pressed = false;
         require_fire_release = false;
@@ -201,8 +210,8 @@ void RemoteInput_Update(void)
     remote_input.gimbal = gimbal_command;
 
     ShootCmd shoot_command{};
-    // ON 表示健康输入授予输出许可；松扳机不撤销单发/延时停轮，失联才 OFF。
-    shoot_command.shoot_mode = ShootMode::ON;
+    // ON 表示健康且 Pitch 就绪；松扳机不撤销延时停轮，失联/未就绪为 OFF。
+    shoot_command.shoot_mode = status == Gimbal_Status_READY ? ShootMode::ON : ShootMode::OFF;
     /* 输入层识别长短按：短按为事件，长按为持续 BURST。 */
     shoot_command.friction_mode =
         trigger_pressed ? FrictionMode::ON : FrictionMode::OFF;
@@ -211,7 +220,7 @@ void RemoteInput_Update(void)
     shoot_command.loader_speed_rad_s = MapDialToLoaderSpeed(dial);
     remote_input.shoot = shoot_command;
 
-    remote_input.received_ms = now_ms;
+    remote_input.received_ms = channels.timestamp_ms;
     remote_input.valid = true;
     InputState_SubmitRemote(remote_input);
 }
@@ -245,4 +254,15 @@ bool RemoteInput_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch)
         *pitch = channels.pitch;
     }
     return valid;
+}
+
+bool RemoteInput_GetReceiverState(ReceiverMode &mode)
+{
+    mode = ReceiverMode::Stop;
+    Struct_ChassisBoard_Channels channels{};
+    if (!remote_input_initialized || !chassis_board.ReadChannels(channels) ||
+        HAL_GetTick() - channels.timestamp_ms > KEYBOARD_CONTROL_MAX_AGE_MS)
+        return false;
+    mode = channels.mode;
+    return channels.permitted;
 }

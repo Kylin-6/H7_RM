@@ -27,6 +27,10 @@ constexpr float DM3519_VELOCITY_MAX_RAD_S = 200.0f;
 constexpr float DM3519_TORQUE_MAX_NM = 10.0f;
 constexpr float DM3519_POSITION_MAX_RAD = 12.5f;
 constexpr float M2006_GEAR_RATIO = 36.0f;
+constexpr uint32_t KEYBOARD_LONG_PRESS_MS = 150U;
+constexpr float LOADER_BURST_ROTOR_RPM = 4500.0f;
+constexpr float LOADER_BURST_OUTPUT_RAD_S =
+    LOADER_BURST_ROTOR_RPM * 2.0f * SHOOT_PI / 60.0f / M2006_GEAR_RATIO;
 constexpr float M2006_RPM_PER_OUTPUT_RAD_S =
     M2006_GEAR_RATIO * 60.0f / (2.0f * SHOOT_PI);
 constexpr float LOADER_SPEED_KP = 17.0f * M2006_RPM_PER_OUTPUT_RAD_S;

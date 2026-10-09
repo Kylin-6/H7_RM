@@ -56,7 +56,7 @@ bool Class_ChassisBoard::ReadChannels(Struct_ChassisBoard_Channels &channels) co
     __disable_irq();
     __DMB();
     const Struct_ChassisBoard_Channels snapshot{fire_channel, dial_channel,
-                                               pitch_channel, last_rx_ms};
+                                               pitch_channel, remote_permitted, receiver_mode, rx_sequence, last_rx_ms};
     const bool valid = initialized && received;
     __DMB();
     __set_PRIMASK(interrupt_state);
@@ -110,19 +110,21 @@ void Class_ChassisBoard::RxCallback(FDCAN_HandleTypeDef *callback_hfdcan,
 
 void Class_ChassisBoard::OnRemoteChannels(const uint8_t *data, uint32_t len)
 {
-    /* 帧内至少包含火控、波轮、Pitch 三个通道。 */
-    if (len < 6U)
-    {
+    if (!RemoteChannelsProtocol_Valid(data, len))
         return;
-    }
-
+    const uint32_t now = HAL_GetTick();
+    link_daemon.Feed();
+    if (!sequence.Accept(data[7], now))
+        return;
+    remote_permitted = (data[6] & 1U) != 0U;
+    receiver_mode = static_cast<ReceiverMode>((data[6] >> 1U) & 3U);
+    rx_sequence = data[7];
     fire_channel = DecodeI16BigEndian(&data[0]);
     dial_channel = DecodeI16BigEndian(&data[2]);
     pitch_channel = DecodeI16BigEndian(&data[4]);
-    last_rx_ms = HAL_GetTick();
+    last_rx_ms = now;
     received = true;
-    /* 总线、ID、长度校验和三通道解码全部完成后才喂狗，非法帧不能续期。 */
-    link_daemon.Feed();
+    // 业务快照仅在新序号通过后更新，合法重复帧只能维持链路诊断。
 }
 
 bool Class_ChassisBoard::ReadChannel(const volatile int16_t &source,

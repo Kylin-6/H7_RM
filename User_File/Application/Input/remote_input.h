@@ -2,6 +2,7 @@
 #define RM_REMOTE_INPUT_H
 
 #include <stdint.h>
+#include "keyboard_protocol.h"
 
 /**
  * Remote 输入源适配，按板型选择实现（构建期源码选择，同一接口）：
@@ -47,5 +48,8 @@ bool RemoteInput_IsLinkOnline(void);
  *       S.BUS 输入实现（SingleBoard）恒返回 false 并清零输出。
  */
 bool RemoteInput_GetRawChannels(int16_t *fire, int16_t *dial, int16_t *pitch);
+
+/* 老步兵双板：读取 SBUS/0x065 的 CH5 来源选择和健康许可；过期返回 Stop/false。 */
+bool RemoteInput_GetReceiverState(ReceiverMode &mode);
 
 #endif // RM_REMOTE_INPUT_H

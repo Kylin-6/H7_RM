@@ -20,6 +20,14 @@ Referee 只有完整 CRC8/CRC16、长度检查通过的帧才 Feed；已知命�
 
 VTM 的 `VTMIsEnabled/Online/DataValid/Healthy()` 与上述通信设备语义一致。完整 CRC16 合法遥控帧，或 CRC8/CRC16 与完整声明长度校验通过的图传链路帧才 Feed；坏帧、半帧不 Feed。图传业务载荷仍未实现，DataValid/Online 不保证遥控字段都已更新。门限暂定 300 ms，需按实际图传帧周期上车验证。保留当前 chunk 内解析方式，本轮不实现跨 chunk 重组；长度计算使用宽整数，避免溢出后错误地 Feed。未来业务接入仍须独立检查对应载荷 freshness。参见 [Daemon](../../../System/Daemon/README.md)。
 
+## VT02 / VT12 键鼠接收
+
+老步兵 GimbalBoard 在 UART7 使用 `vtm_legacy.c/.h`，接收常规版 VT02/VT12 的 `A5` 裁判协议 `0x0304`；`vtm_26.c/.h` 保留给新图传 VT03/VT13 的 `A9 53` 协议。两个解析器不可同时占用同一 UART。
+
+2025 国赛使用串口协议 V1.9：图传串口为 921600、8N1，裁判系统常规串口仍为 115200。`0x0304` 为 12 字节载荷，包含小端 int16 鼠标 X/Y/Z、左右键、完整 16 位键盘及两个保留字节；不包含遥控挡位或暂停字段。参见 [官方串口协议下载](https://www.robomaster.com/en-US/resource/pages/announcement/1768)。
+
+Legacy parser 用静态 255 字节缓冲跨 DMA chunk 拼帧，校验 CRC8/CRC16，拒绝超长声明并逐字节重同步。快照记录实际接收时间、帧头序号与本地发布序号，通过恢复 PRIMASK 的短临界区一致读取。只有长度和按钮值合法的 `0x0304` 更新键鼠快照；其他合法帧仅更新链路诊断。Input 单独检查键鼠 50 ms 时效，不能用 300 ms Daemon 在线状态替代。模式选择与参数见 [键鼠控制](../../../Application/Input/KEYBOARD_CONTROL.md)。
+
 ## Known Issues
 
 - `referee_info_t` 仍由中断更新，任务直接读取多个字段可能跨帧；消费前需增加业务快照。

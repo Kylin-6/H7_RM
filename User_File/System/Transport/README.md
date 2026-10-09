@@ -85,3 +85,7 @@ INS、Gimbal 和 Shoot 板内控制不经过此 Transport。扩展第三块板�
 
 两板 FDCAN2 新增 0x143/0x144 回传，协议、源数据限制与底盘读取接口见
 [云台 INS 回传底盘](GIMBAL_IMU.md)。此入口独立于框架的 0x141/0x222 Transport。
+
+## 老步兵键鼠与遥控许可
+
+FDCAN2 的 0x066 和带版本、许可及序号的 0x065 由配套双板固件使用，格式、50 ms 时效与序号恢复见 [老步兵键鼠控制](../../Application/Input/KEYBOARD_CONTROL.md)。此路径独立于框架 0x141/0x222，不新增任务或消息通道。

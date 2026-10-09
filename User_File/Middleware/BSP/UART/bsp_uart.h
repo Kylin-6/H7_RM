@@ -84,6 +84,9 @@ extern struct Struct_UART_Manage_Object USART10_Manage_Object;
 
 /* Exported function declarations --------------------------------------------*/
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 void UART_Init(UART_HandleTypeDef *huart, UART_Callback Callback_Function);
 
 void UART_Reinit(UART_HandleTypeDef *huart);
@@ -96,5 +99,9 @@ void UART_TIM_1ms_Recover_PeriodElapsedCallback(void);
  *       同一路 TX 统一经本接口提交；UART_Init 仅用于无在途传输的初始化。
  */
 uint8_t UART_Transmit_Data(UART_HandleTypeDef *huart, uint8_t *Data, uint16_t Length);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // !BSP_UART_H

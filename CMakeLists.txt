@@ -218,6 +218,12 @@ elseif(H7_BOARD STREQUAL "GimbalBoard")
         User_File/Application/Diagnostics/Diagnostics_Runtime.cpp
         User_File/Application/RobotCmd/RobotCmd.cpp
         User_File/Application/Input/remote_input_forwarded.cpp
+        User_File/Application/Input/keyboard_input_gimbal.cpp
+        User_File/System/Transport/keyboard_protocol.cpp
+        User_File/System/Transport/keyboard_link.cpp
+        User_File/Device/Peripheral/Referee/vtm_legacy.c
+        User_File/Device/Peripheral/Referee/crc_ref.c
+        User_File/Device/Peripheral/Referee/referee_daemon.cpp
         User_File/Application/Input/input_state.cpp
         User_File/Application/Input/source_arbitration.cpp
         # 老步兵云台板设备适配：DM-IMU（BMI088 损坏）、
