@@ -34,12 +34,13 @@ bool KeyboardInput_Init()
 
 void KeyboardInput_Update()
 {
+    Struct_VTM_Legacy_Keyboard_Snapshot rc{};
+    const bool received = initialized && VTM_Legacy_ReadKeyboardSnapshot(&rc);
+    // 先取快照再取时间，避免 RX 中断跨 tick 使新帧被无符号减法误判为超时。
     const uint32_t now = HAL_GetTick();
     const uint32_t elapsed = now - last_update_ms;
     last_update_ms = now;
     InputState_SetTime(now);
-    Struct_VTM_Legacy_Keyboard_Snapshot rc{};
-    const bool received = initialized && VTM_Legacy_ReadKeyboardSnapshot(&rc);
     ReceiverMode requested = ReceiverMode::Stop;
     const bool receiver_permitted = RemoteInput_GetReceiverState(requested);
     const bool keyboard_fresh = received && now - rc.received_ms <= KEYBOARD_CONTROL_MAX_AGE_MS;

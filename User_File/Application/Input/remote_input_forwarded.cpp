@@ -129,15 +129,14 @@ void RemoteInput_Update(void)
         return;
     }
 
-    /* 仲裁时钟只在 ControlTask 上下文推进。 */
-    const uint32_t now_ms = HAL_GetTick();
-    InputState_SetTime(now_ms);
-
     // 三个通道必须来自同一帧，不能在独立 getter 之间被 CAN ISR 更新。
     // ReadChannels 的 100 ms 判断是数据 freshness（本帧是否仍可用于控制），
     // 与 ChassisBoard Daemon 的链路在线结论相互独立，二者都保留。
     Struct_ChassisBoard_Channels channels{};
     const bool channels_valid = chassis_board.ReadChannels(channels);
+    /* 先取接收快照，再推进仲裁时钟，避免跨 tick 的新帧被误判为过期。 */
+    const uint32_t now_ms = HAL_GetTick();
+    InputState_SetTime(now_ms);
     const int16_t fire = channels.fire;
     const int16_t dial = channels.dial;
     const int16_t pitch = channels.pitch;
