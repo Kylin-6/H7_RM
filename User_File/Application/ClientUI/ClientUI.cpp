@@ -213,8 +213,8 @@ void ClientUI_Update()
     }
     if (robot_id != client_robot_id || now - rebuild_ms >= 5000U)
     {
+        slot = robot_id != client_robot_id ? 0U : 1U;
         client_robot_id = robot_id;
-        slot = 0U;
         adding = true;
         rebuild_ms = now;
     }
