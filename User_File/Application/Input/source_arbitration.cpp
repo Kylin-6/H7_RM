@@ -73,8 +73,10 @@ InputDecision SourceArbitration_Resolve(const InputState &state)
     }
 
     // 命令时间戳须不早于来源切换时刻；过期或无效时不自动回退到其他来源。
+    const uint32_t max_age_ms = selected == &state.remote ? REMOTE_MAX_AGE_MS :
+                                selected == &state.keyboard ? INPUT_KEYBOARD_MAX_AGE_MS : OTHER_MAX_AGE_MS;
     if (!Fresh(selected->valid, selected->received_ms, state.now_ms,
-               selected == &state.remote ? REMOTE_MAX_AGE_MS : OTHER_MAX_AGE_MS) ||
+               max_age_ms) ||
         !AtOrAfter(selected->received_ms, state.selected_at_ms) || !CommandValid(*selected))
     {
         return decision;

@@ -90,7 +90,7 @@ SourceArbitration_Resolve 是纯决策入口，不修改 InputState、不发布 
 
 1. 默认要求 Remote 必须 valid、年龄不超过 50 ms 且命令合法；VTM/键鼠不能绕过 Remote 安全许可。
 2. selected 只能是 Remote/Vtm/Keyboard，读取被选中的完整 ControlInput。
-3. 选中 Remote 的时效为 50 ms，VTM/Keyboard 为 100 ms；接收时戳不得早于 selected_at_ms。
+3. 选中 Remote 的时效为 50 ms，VTM 为 100 ms，Keyboard 为 `INPUT_KEYBOARD_MAX_AGE_MS`（200 ms）；接收时戳不得早于 selected_at_ms。板间 CAN 和 SBUS 仍由输入适配保留各自 50 ms 门限。
 4. 选中输入失效时保持安全结果，不自动退回其他来源。
 5. 条件通过后复制三类命令并设置 armed=true，再处理可选 Vision 云台覆盖。
 

@@ -8,6 +8,8 @@
 /** 当前底盘调试限幅；Remote 映射与来源仲裁使用同一组 SI 边界。 */
 constexpr float INPUT_MAX_TRANSLATION_M_S = 0.5f;
 constexpr float INPUT_MAX_ROTATION_RAD_S = 1.0f;
+/** 图传键鼠允许的最大帧年龄；UART 适配与命令仲裁必须一致。 */
+constexpr uint32_t INPUT_KEYBOARD_MAX_AGE_MS = 200U;
 
 /** 固定来源选择；仅 ControlTask 的接收器模式适配调用 InputState_Select。 */
 enum class InputSource : uint8_t

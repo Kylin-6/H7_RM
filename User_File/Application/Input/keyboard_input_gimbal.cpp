@@ -9,6 +9,8 @@
 #include "usart.h"
 #include "vtm_legacy.h"
 
+Struct_Keyboard_Input_Debug Keyboard_Input_Debug{};
+
 namespace
 {
 bool initialized;
@@ -43,7 +45,7 @@ void KeyboardInput_Update()
     InputState_SetTime(now);
     ReceiverMode requested = ReceiverMode::Stop;
     const bool receiver_permitted = RemoteInput_GetReceiverState(requested);
-    const bool keyboard_fresh = received && now - rc.received_ms <= KEYBOARD_CONTROL_MAX_AGE_MS;
+    const bool keyboard_fresh = received && now - rc.received_ms <= INPUT_KEYBOARD_MAX_AGE_MS;
     const ReceiverMode mode = !initialized || (requested == ReceiverMode::Keyboard && !keyboard_fresh)
                                   ? ReceiverMode::Stop : requested;
     const auto config = Gimbal_Default_Config();
@@ -55,7 +57,36 @@ void KeyboardInput_Update()
     InputState_Select(mode == ReceiverMode::Keyboard ? InputSource::Keyboard : InputSource::Remote, false, now);
     InputState_SetPermission(permitted, mode != ReceiverMode::Keyboard);
 
-    const bool ready = permitted && mode == ReceiverMode::Keyboard && Gimbal_GetStatus() == Gimbal_Status_READY;
+    const auto gimbal_status = Gimbal_GetStatus();
+    const bool ready = permitted && mode == ReceiverMode::Keyboard && gimbal_status == Gimbal_Status_READY;
+    // 记录撤销键鼠许可的边沿，保留最近多次原因，避免后续停机覆盖第一次故障。
+    auto &debug = Keyboard_Input_Debug;
+    const uint32_t keyboard_age = received ? now - rc.received_ms : UINT32_MAX;
+    if (debug.mode == static_cast<uint8_t>(ReceiverMode::Keyboard) && debug.permitted &&
+        !(mode == ReceiverMode::Keyboard && permitted))
+    {
+        uint32_t reason = 0U;
+        if (requested == ReceiverMode::Remote)
+            reason |= KEYBOARD_STOP_SOURCE_CHANGE;
+        if (!receiver_permitted || requested == ReceiverMode::Stop)
+            reason |= KEYBOARD_STOP_RECEIVER;
+        if (requested == ReceiverMode::Keyboard && !keyboard_fresh)
+            reason |= KEYBOARD_STOP_FRAME;
+        if (requested == ReceiverMode::Keyboard && !ins_valid)
+            reason |= KEYBOARD_STOP_INS;
+        debug.stops[debug.stop_count % 8U] = {now, reason, keyboard_age, rc.sequence};
+        ++debug.stop_count;
+    }
+    debug.tick_ms = now;
+    debug.keyboard_age_ms = keyboard_age;
+    debug.keyboard_sequence = rc.sequence;
+    debug.requested_mode = static_cast<uint8_t>(requested);
+    debug.mode = static_cast<uint8_t>(mode);
+    debug.gimbal_status = static_cast<uint8_t>(gimbal_status);
+    debug.receiver_permitted = receiver_permitted;
+    debug.keyboard_fresh = keyboard_fresh;
+    debug.ins_valid = ins_valid;
+    debug.permitted = permitted;
     if (transition || !ready)
     {
         trigger.Reset();
