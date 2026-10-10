@@ -15,6 +15,17 @@ typedef struct
     uint32_t received_ms, sequence;
 } Struct_VTM_Legacy_Keyboard_Snapshot;
 
+#define VTM_LEGACY_KEYBOARD_QUEUE_SIZE 16U
+
+typedef struct
+{
+    Struct_VTM_Legacy_Keyboard_Snapshot frames[VTM_LEGACY_KEYBOARD_QUEUE_SIZE];
+    Struct_VTM_Legacy_Keyboard_Snapshot latest;
+    uint32_t overflow_count;
+    uint8_t count;
+    bool received;
+} Struct_VTM_Legacy_Keyboard_Batch;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -25,6 +36,8 @@ bool VTM_Legacy_Init(UART_HandleTypeDef *uart);
 void VTM_Legacy_ReceiveData(uint8_t *data, uint16_t length);
 /** 首次收到合法 0x0304 才返回 true；时效由 Input 按 received_ms 检查。 */
 bool VTM_Legacy_ReadKeyboardSnapshot(Struct_VTM_Legacy_Keyboard_Snapshot *snapshot);
+/** ControlTask 单消费者；一致取出本批完整帧并清空队列，先取批次再读时钟。 */
+void VTM_Legacy_TakeKeyboardBatch(Struct_VTM_Legacy_Keyboard_Batch* batch);
 /** 链路诊断包含合法普通图传帧，不能替代键鼠业务时效。 */
 bool VTM_Legacy_IsOnline(void);
 

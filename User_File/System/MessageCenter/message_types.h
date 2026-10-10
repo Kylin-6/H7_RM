@@ -69,6 +69,7 @@ struct GimbalCmd
     float yaw_speed_rad_s = 0.0f;
     float pitch_speed_rad_s = 0.0f;
     GimbalMode mode = GimbalMode::DISABLED;
+    bool yaw_absolute_target = false; ///< 老步兵键鼠：INS 绝对 Yaw；遥控仍使用速度积分。
 };
 
 struct ChassisCmd
@@ -77,6 +78,7 @@ struct ChassisCmd
     float velocity_y_m_s = 0.0f;
     float angular_velocity_rad_s = 0.0f;
     ChassisMode mode = ChassisMode::ZERO_FORCE;
+    bool input_shaped = false; ///< Input 已完成速率整形，机构侧不重复规划。
 };
 
 /** 内部物理量采用 SI：发射转速 rad/s，射频 Hz。 */

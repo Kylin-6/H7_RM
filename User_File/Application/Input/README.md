@@ -88,7 +88,7 @@ VisionAimInput 的 yaw/pitch 为 INS 坐标系绝对 rad，不是像素偏移或
 SourceArbitration_Resolve 是纯决策入口，不修改 InputState、不发布 Topic、不访问设备。
 默认结果 armed=false，机构命令均为安全默认值。
 
-1. 默认要求 Remote 必须 valid、年龄不超过 50 ms 且命令合法；VTM/键鼠不能绕过 Remote 安全许可。
+1. 默认要求 Remote 必须 valid、年龄不超过 50 ms 且命令合法；老步兵键鼠由 `InputState_SetPermission(permitted, false)` 使用 SBUS 所选接收源许可，具体条件见 [键鼠控制](KEYBOARD_CONTROL.md)。
 2. selected 只能是 Remote/Vtm/Keyboard，读取被选中的完整 ControlInput。
 3. 选中 Remote 的时效为 50 ms，VTM 为 100 ms，Keyboard 为 `INPUT_KEYBOARD_MAX_AGE_MS`（200 ms）；接收时戳不得早于 selected_at_ms。板间 CAN 和 SBUS 仍由输入适配保留各自 50 ms 门限。
 4. 选中输入失效时保持安全结果，不自动退回其他来源。

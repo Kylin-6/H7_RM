@@ -17,7 +17,7 @@ struct Struct_Keyboard_Frame
 {
     ReceiverMode mode = ReceiverMode::Stop;
     uint8_t sequence = 0U;
-    int16_t mouse_x = 0;
+    uint16_t yaw_counts = 0U; // 版本 2：累计鼠标 X，按模 65536 差分。
     uint16_t keyboard = 0U;
     bool permitted = false;
     uint32_t received_ms = 0U;

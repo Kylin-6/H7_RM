@@ -3,11 +3,9 @@
 void KeyboardProtocol_Encode(const Struct_Keyboard_Frame& frame, uint8_t data[8])
 {
     const bool permitted = frame.permitted && frame.mode != ReceiverMode::Stop;
-    const int16_t x = !permitted ? 0 : frame.mouse_x > 1000 ? 1000
-                                   : frame.mouse_x < -1000  ? -1000
-                                                            : frame.mouse_x;
+    const uint16_t x = permitted ? frame.yaw_counts : 0U;
     const uint16_t keys = permitted ? frame.keyboard : 0U;
-    data[0] = 0x10U | static_cast<uint8_t>(frame.mode);
+    data[0] = 0x20U | static_cast<uint8_t>(frame.mode);
     data[1] = frame.sequence;
     data[2] = static_cast<uint16_t>(x) >> 8U;
     data[3] = static_cast<uint8_t>(x);
@@ -19,18 +17,17 @@ void KeyboardProtocol_Encode(const Struct_Keyboard_Frame& frame, uint8_t data[8]
 
 bool KeyboardProtocol_Decode(const uint8_t* data, uint32_t length, Struct_Keyboard_Frame& frame)
 {
-    if (data == nullptr || length != 8U || (data[0] & 0xF0U) != 0x10U ||
+    if (data == nullptr || length != 8U || (data[0] & 0xF0U) != 0x20U ||
         (data[0] & 0x0FU) > 2U || (data[6] & 0xFEU) != 0U || data[7] != 0U)
         return false;
     Struct_Keyboard_Frame decoded{};
     decoded.mode = static_cast<ReceiverMode>(data[0] & 0x0FU);
     decoded.sequence = data[1];
-    decoded.mouse_x = static_cast<int16_t>((static_cast<uint16_t>(data[2]) << 8U) | data[3]);
+    decoded.yaw_counts = (static_cast<uint16_t>(data[2]) << 8U) | data[3];
     decoded.keyboard = (static_cast<uint16_t>(data[4]) << 8U) | data[5];
     decoded.permitted = data[6] != 0U;
-    if (decoded.mouse_x < -1000 || decoded.mouse_x > 1000 ||
-        (decoded.mode == ReceiverMode::Stop && decoded.permitted) ||
-        (!decoded.permitted && (decoded.mouse_x != 0 || decoded.keyboard != 0U)))
+    if ((decoded.mode == ReceiverMode::Stop && decoded.permitted) ||
+        (!decoded.permitted && (decoded.yaw_counts != 0U || decoded.keyboard != 0U)))
         return false;
     frame = decoded;
     return true;

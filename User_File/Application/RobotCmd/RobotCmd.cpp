@@ -44,6 +44,7 @@ static void RobotCmd_DiscardShootEvents()
 static bool GimbalChanged(const GimbalCmd &next)
 {
     return Gimbal_Command.mode != next.mode ||
+           Gimbal_Command.yaw_absolute_target != next.yaw_absolute_target ||
            Gimbal_Command.yaw_angle_rad != next.yaw_angle_rad ||
            Gimbal_Command.pitch_angle_rad != next.pitch_angle_rad ||
            Gimbal_Command.yaw_speed_rad_s != next.yaw_speed_rad_s ||
@@ -130,7 +131,10 @@ void RobotCmd_Update(void)
             decision.shoot_event_sequence != Last_Shoot_Event_Sequence)
         {
             // 队列满时拒绝该动作并由 OverflowCount 记录；不延迟补射。
-            (void) RobotCmd_PushShootEvent(decision.shoot_event);
+            // 一批最多 16 个输入帧；保留同批多个释放边沿，队列满时拒绝且不补射。
+            const uint32_t count = decision.shoot_event_sequence - Last_Shoot_Event_Sequence;
+            for (uint32_t i = 0U; i < count && i < 16U; ++i)
+                (void) RobotCmd_PushShootEvent(decision.shoot_event);
         }
         Last_Shoot_Event_Sequence = decision.shoot_event_sequence;
         if (ShootChanged(decision.shoot)) // 发射持续状态变化才发布，事件独立排队。
@@ -204,13 +208,20 @@ void RobotCmd_SetGimbal(const GimbalCmd& command)
 }
 
 /**
- * @brief 缓存底盘目标，由 Update 的固定分频发布，不设置变化标志。
+ * @brief 缓存底盘目标，普通目标按固定分频发布，整形切换/归零边沿立即发布。
  * @note 仅输入许可成立时接受，普通调用最长等待剩余 10 周期分频。
  */
 void RobotCmd_SetChassis(const ChassisCmd& command)
 {
     if (!Input_Armed) // 输入许可关闭时拒绝外部设置，不能覆盖失联安全目标。
         return;
+    // 已整形命令的归零边沿立即发布，反馈失效/未就绪不等待 10 ms 周期。
+    const bool shaped_zero = command.input_shaped &&
+                             ((command.velocity_x_m_s == 0.0f && Chassis_Command.velocity_x_m_s != 0.0f) ||
+                              (command.velocity_y_m_s == 0.0f && Chassis_Command.velocity_y_m_s != 0.0f) ||
+                              (command.angular_velocity_rad_s == 0.0f && Chassis_Command.angular_velocity_rad_s != 0.0f));
+    if (Chassis_Command.input_shaped != command.input_shaped || shaped_zero)
+        Chassis_Command_Dirty = true;
     Chassis_Command = command;
 }
 

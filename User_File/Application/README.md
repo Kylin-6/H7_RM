@@ -90,7 +90,8 @@ RobotCmd 不直接访问电机、CAN 或 IMU。输入链现在是：
 ```text
 UART5 S.BUS → RemoteInput_Update → InputState(Remote)（底盘板 / 单板）
 底盘板 0x065 转发 → RemoteInput_Update（remote_input_forwarded）→ InputState(Remote)（老步兵云台板）
-VTM / Keyboard / Vision → InputState_Submit*（接入接口，当前未绑定设备）
+VT02/VT12 → 老步兵 KeyboardInput → InputState_SubmitKeyboard
+Vision → InputState_SubmitVision（当前未绑定设备）
 InputState → SourceArbitration_Resolve → RobotCmd_Update → Output
 ```
 
@@ -99,7 +100,7 @@ InputState → SourceArbitration_Resolve → RobotCmd_Update → Output
 调用 `InputState_Select()` 后，才选择 VTM 或 Keyboard。新来源必须在切换后提供新鲜
 命令（100 ms 门限），否则进入安全态，不自动回退。Vision 只有在显式允许、目标新鲜
 且当前来源允许云台控制时，才覆盖云台角目标；目标失效后云台进入 `LOCK`。
-VTM、Keyboard、Vision 当前没有绑定 UART/协议，生产固件不会自动选择或启用它们。
+老步兵双板已接通 VT02/VT12 键鼠，CH5 选择、当前任务顺序与来源许可见 [老步兵键鼠控制](Input/KEYBOARD_CONTROL.md)。上面的框架默认 Remote 互锁规则不替代老步兵键鼠所选接收源许可；Vision 仍未绑定设备。
 
 以下设置接口保留供已有调用方使用；控制任务运行时，仲裁结果在每次
 `RobotCmd_Update()` 中覆盖缓存目标：

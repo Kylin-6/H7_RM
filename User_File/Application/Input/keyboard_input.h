@@ -8,7 +8,9 @@ enum Enum_Keyboard_Stop_Reason : uint32_t
     KEYBOARD_STOP_SOURCE_CHANGE = 1U << 0,
     KEYBOARD_STOP_RECEIVER = 1U << 1,
     KEYBOARD_STOP_FRAME = 1U << 2,
-    KEYBOARD_STOP_INS = 1U << 3
+    KEYBOARD_STOP_INS = 1U << 3,
+    KEYBOARD_STOP_OVERFLOW = 1U << 4,
+    KEYBOARD_RESET_NOT_READY = 1U << 5
 };
 
 struct Struct_Keyboard_Stop_Record
@@ -19,6 +21,9 @@ struct Struct_Keyboard_Stop_Record
 struct Struct_Keyboard_Input_Debug
 {
     uint32_t tick_ms, keyboard_age_ms, keyboard_sequence, stop_count;
+    uint32_t consumed_sequence, overflow_count, reset_reason;
+    uint16_t yaw_counts;
+    float pitch_delta_rad, pitch_target_rad;
     uint8_t requested_mode, mode, gimbal_status;
     bool receiver_permitted, keyboard_fresh, ins_valid, permitted;
     Struct_Keyboard_Stop_Record stops[8];

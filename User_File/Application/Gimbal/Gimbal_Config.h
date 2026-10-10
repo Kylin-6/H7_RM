@@ -62,7 +62,8 @@ struct Struct_Gimbal_Config
     uint64_t ins_max_age_us = 100000U;
     int16_t keyboard_pitch_mouse_max = 500;
     int16_t keyboard_pitch_mouse_divisor = 5;
-    uint32_t keyboard_pitch_max_dt_ms = 10U;
+    float keyboard_pitch_rad_per_count = -0.00020f;
+    int16_t keyboard_yaw_mouse_max = 1000; // 跨板只限幅计数，不在云台缩放 Yaw。
 };
 
 inline Struct_Gimbal_Config Gimbal_Default_Config()

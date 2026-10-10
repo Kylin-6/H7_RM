@@ -19,7 +19,12 @@ bool last_permitted;
 bool was_ready;
 bool captured;
 float pitch_target;
-uint32_t last_update_ms;
+uint16_t yaw_counts;
+uint32_t seen_overflows;
+uint32_t blocked_sequence;
+bool overflow_blocked;
+bool had_received;
+uint32_t last_frame_ms;
 uint32_t last_send_ms;
 uint32_t event_sequence;
 KeyboardInput::Class_MouseTrigger trigger;
@@ -30,22 +35,33 @@ bool KeyboardInput_Init()
     if (initialized)
         return true;
     initialized = VTM_Legacy_Init(&huart7) && KeyboardLink_Init(false);
-    last_update_ms = HAL_GetTick();
     return initialized;
 }
 
 void KeyboardInput_Update()
 {
-    Struct_VTM_Legacy_Keyboard_Snapshot rc{};
-    const bool received = initialized && VTM_Legacy_ReadKeyboardSnapshot(&rc);
-    // 先取快照再取时间，避免 RX 中断跨 tick 使新帧被无符号减法误判为超时。
+    Struct_VTM_Legacy_Keyboard_Batch batch{};
+    if (initialized)
+        VTM_Legacy_TakeKeyboardBatch(&batch);
+    const auto& rc = batch.latest;
+    const bool received = initialized && batch.received;
+    // 批次与最新快照一次复制，再取时钟，避免跨 tick 误判超时。
     const uint32_t now = HAL_GetTick();
-    const uint32_t elapsed = now - last_update_ms;
-    last_update_ms = now;
+    if (batch.overflow_count != seen_overflows)
+    {
+        seen_overflows = batch.overflow_count;
+        blocked_sequence = rc.sequence;
+        overflow_blocked = true;
+    }
+    else if (overflow_blocked && rc.sequence != blocked_sequence)
+        overflow_blocked = false;
+    const bool input_gap = received && had_received && rc.received_ms - last_frame_ms > INPUT_KEYBOARD_MAX_AGE_MS;
+    had_received = received;
+    last_frame_ms = rc.received_ms;
     InputState_SetTime(now);
     ReceiverMode requested = ReceiverMode::Stop;
     const bool receiver_permitted = RemoteInput_GetReceiverState(requested);
-    const bool keyboard_fresh = received && now - rc.received_ms <= INPUT_KEYBOARD_MAX_AGE_MS;
+    const bool keyboard_fresh = received && !overflow_blocked && now - rc.received_ms <= INPUT_KEYBOARD_MAX_AGE_MS;
     const ReceiverMode mode = !initialized || (requested == ReceiverMode::Keyboard && !keyboard_fresh)
                                   ? ReceiverMode::Stop : requested;
     const auto config = Gimbal_Default_Config();
@@ -72,11 +88,23 @@ void KeyboardInput_Update()
             reason |= KEYBOARD_STOP_RECEIVER;
         if (requested == ReceiverMode::Keyboard && !keyboard_fresh)
             reason |= KEYBOARD_STOP_FRAME;
+        if (overflow_blocked)
+            reason |= KEYBOARD_STOP_OVERFLOW;
         if (requested == ReceiverMode::Keyboard && !ins_valid)
             reason |= KEYBOARD_STOP_INS;
         debug.stops[debug.stop_count % 8U] = {now, reason, keyboard_age, rc.sequence};
         ++debug.stop_count;
     }
+    debug.reset_reason = (transition ? KEYBOARD_STOP_SOURCE_CHANGE : 0U) |
+                         (!receiver_permitted ? KEYBOARD_STOP_RECEIVER : 0U) |
+                         (!keyboard_fresh || input_gap ? KEYBOARD_STOP_FRAME : 0U) |
+                         (!ins_valid ? KEYBOARD_STOP_INS : 0U) |
+                         (!ready ? KEYBOARD_RESET_NOT_READY : 0U) |
+                         (overflow_blocked ? KEYBOARD_STOP_OVERFLOW : 0U);
+    debug.overflow_count = batch.overflow_count;
+    if (batch.count != 0U)
+        debug.consumed_sequence = batch.frames[batch.count - 1U].sequence;
+    debug.pitch_delta_rad = 0.0f;
     debug.tick_ms = now;
     debug.keyboard_age_ms = keyboard_age;
     debug.keyboard_sequence = rc.sequence;
@@ -87,7 +115,7 @@ void KeyboardInput_Update()
     debug.keyboard_fresh = keyboard_fresh;
     debug.ins_valid = ins_valid;
     debug.permitted = permitted;
-    if (transition || !ready)
+    if (transition || !ready || input_gap)
     {
         trigger.Reset();
         captured = false;
@@ -103,19 +131,26 @@ void KeyboardInput_Update()
             pitch_target = std::fmax(config.pitch_min, std::fmin(config.pitch_max, ins.pitch_rad));
             captured = true;
         }
-        else
+        // 进入/恢复的批次只建立基准；未 ready 不积累任何鼠标或发射动作。
+        for (uint8_t i = 0U; i < batch.count; ++i)
         {
-            const float speed = KeyboardInput::PitchSpeed(rc.mouse_y, config.keyboard_pitch_mouse_max,
-                                                          config.keyboard_pitch_mouse_divisor, config.pitch_torque.target_rate_rad_s);
-            pitch_target = KeyboardInput::IntegratePitch(pitch_target, speed, elapsed,
-                                                         config.keyboard_pitch_max_dt_ms, config.pitch_min, config.pitch_max);
+            const auto& sample = batch.frames[i];
+            if (!ready || entering || now - sample.received_ms > INPUT_KEYBOARD_MAX_AGE_MS)
+                continue;
+            const float delta = KeyboardInput::PitchIncrement(sample.mouse_y, config.keyboard_pitch_mouse_max,
+                                                              config.keyboard_pitch_mouse_divisor, config.keyboard_pitch_rad_per_count);
+            pitch_target = std::fmax(config.pitch_min, std::fmin(config.pitch_max, pitch_target + delta));
+            debug.pitch_delta_rad += delta;
+            const int16_t x = sample.mouse_x > config.keyboard_yaw_mouse_max ? config.keyboard_yaw_mouse_max : sample.mouse_x < -config.keyboard_yaw_mouse_max ? -config.keyboard_yaw_mouse_max
+                                                                                                                                                               : sample.mouse_x;
+            yaw_counts = static_cast<uint16_t>(yaw_counts + x);
+            if (trigger.Update(sample.mouse_left != 0U, sample.received_ms, InfantryShootConfig::KEYBOARD_LONG_PRESS_MS))
+                ++event_sequence;
         }
         input.gimbal.mode = GimbalMode::IMU;
         input.gimbal.pitch_angle_rad = pitch_target;
         if (ready)
         {
-            if (trigger.Update(rc.mouse_left != 0U, now, InfantryShootConfig::KEYBOARD_LONG_PRESS_MS))
-                ++event_sequence;
             input.shoot_event_sequence = event_sequence;
             input.shoot.shoot_mode = ShootMode::ON;
             input.shoot.friction_mode = trigger.Pressed() ? FrictionMode::ON : FrictionMode::OFF;
@@ -125,13 +160,17 @@ void KeyboardInput_Update()
         input.received_ms = rc.received_ms;
         input.valid = true;
     }
+    // 内部累计值跨停机保留；仅协议编码清零安全帧。
+    // 即使瞬态 STOP 帧被最新值槽覆盖，对端也不会把计数复位误当成反向鼠标。
+    debug.yaw_counts = yaw_counts;
+    debug.pitch_target_rad = pitch_target;
     InputState_SubmitKeyboard(input);
     // 模式/许可变化立即提交；失败时下个控制周期重试，不当作对端确认。
     if (transition || now - last_send_ms >= 10U)
     {
         Struct_Keyboard_Frame frame{};
         frame.mode = mode;
-        frame.mouse_x = rc.mouse_x;
+        frame.yaw_counts = yaw_counts;
         frame.keyboard = rc.keyboard;
         frame.permitted = permitted;
         if (KeyboardLink_Send(frame))

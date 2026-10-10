@@ -16,6 +16,9 @@ static uint8_t stream[VTM_LEGACY_BUFFER_SIZE];
 static uint16_t stream_used;
 static Struct_VTM_Legacy_Keyboard_Snapshot keyboard_snapshot;
 static bool keyboard_received;
+static Struct_VTM_Legacy_Keyboard_Snapshot keyboard_queue[VTM_LEGACY_KEYBOARD_QUEUE_SIZE];
+static uint8_t keyboard_count;
+static uint32_t keyboard_overflow_count;
 static bool has_valid_frame;
 
 static uint16_t DecodeLittleU16(const uint8_t *data)
@@ -41,6 +44,14 @@ static void DecodeKeyboard(const uint8_t *frame)
     next.sequence = keyboard_snapshot.sequence + 1U;
     keyboard_snapshot = next;
     keyboard_received = true;
+    if (keyboard_count == VTM_LEGACY_KEYBOARD_QUEUE_SIZE)
+    {
+        // 不执行残缺的动作序列；消费者观察溢出后撤销许可，等待后续新帧。
+        keyboard_count = 0U;
+        ++keyboard_overflow_count;
+    }
+    else
+        keyboard_queue[keyboard_count++] = next;
 }
 
 /** 有界跨 DMA chunk 拼帧；坏帧跳过一字节，以保留后续可能的帧头。 */
@@ -94,6 +105,8 @@ bool VTM_Legacy_Init(UART_HandleTypeDef *uart)
         return false;
     stream_used = 0U;
     keyboard_received = false;
+    keyboard_count = 0U;
+    keyboard_overflow_count = 0U;
     has_valid_frame = false;
     memset(&keyboard_snapshot, 0, sizeof(keyboard_snapshot));
     vtm_uart = uart;
@@ -113,6 +126,22 @@ bool VTM_Legacy_ReadKeyboardSnapshot(Struct_VTM_Legacy_Keyboard_Snapshot *snapsh
     __DMB();
     __set_PRIMASK(mask);
     return valid;
+}
+
+void VTM_Legacy_TakeKeyboardBatch(Struct_VTM_Legacy_Keyboard_Batch* batch)
+{
+    if (batch == NULL)
+        return;
+    const uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    batch->received = keyboard_received;
+    batch->latest = keyboard_snapshot;
+    batch->overflow_count = keyboard_overflow_count;
+    batch->count = keyboard_count;
+    memcpy(batch->frames, keyboard_queue, keyboard_count * sizeof(keyboard_queue[0]));
+    keyboard_count = 0U;
+    __DMB();
+    __set_PRIMASK(mask);
 }
 
 bool VTM_Legacy_IsOnline(void)

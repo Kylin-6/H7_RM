@@ -404,3 +404,7 @@ TIM_1ms_Task 读取以驱动 WS2812；它只传递诊断快照，不参与安全
 
 `Gimbal_INS_State_Topic` 是云台板回传 INS 的独立最新值状态，不覆盖本板
 `INS_State_Topic`；来源与时效见 [回传协议](../Transport/GIMBAL_IMU.md)。
+
+## 老步兵键鼠目标标记
+
+`ChassisCmd.input_shaped` 默认 false；老步兵键鼠在 Input 完成速度整形后置 true，Chassis 只执行运动学和单轮限幅，遥控仍使用原规划。`GimbalCmd.yaw_absolute_target` 默认 false；老步兵底盘键鼠置 true 后使用 INS 绝对 Yaw，遥控仍使用速度积分。RobotCmd 比较并发布目标类型变化，切换时机构重置规划/控制器历史。标记是板内契约，不改变框架 0x141/0x222 格式；老步兵使用本地命令输出和独立 0x066 链路，见 [键鼠控制](../../Application/Input/KEYBOARD_CONTROL.md)。

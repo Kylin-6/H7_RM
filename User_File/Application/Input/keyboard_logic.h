@@ -33,19 +33,52 @@ inline bool Combination(uint16_t keys)
     return (keys & (Ctrl | Shift)) == (Ctrl | Shift);
 }
 
-inline float PitchSpeed(int16_t mouse, int16_t maximum, int16_t divisor, float speed_max)
+/** 保留整数 /5 量化；计数仅在新 UART 帧到达时转换，不乘控制周期。 */
+inline float PitchIncrement(int16_t mouse, int16_t maximum, int16_t divisor, float rad_per_count)
 {
     const int16_t bounded = mouse > maximum ? maximum : mouse < -maximum ? -maximum
                                                                          : mouse;
-    // 保留旧工程整数 /5 截断；速度只在这里换算一次。
-    return -static_cast<float>(bounded / divisor) / (maximum / divisor) * speed_max;
+    return static_cast<float>((bounded / divisor) * divisor) * rad_per_count;
 }
 
-inline float IntegratePitch(float target, float speed, uint32_t elapsed_ms, uint32_t max_dt_ms, float minimum, float maximum)
+/** 跨板累计计数差分；未就绪/恢复首帧只捕获姿态与计数基准。 */
+class Class_MouseYaw
 {
-    const uint32_t dt = elapsed_ms < max_dt_ms ? elapsed_ms : max_dt_ms;
-    return std::fmax(minimum, std::fmin(maximum, target + speed * static_cast<float>(dt) * 0.001f));
-}
+  public:
+    void Reset()
+    {
+        captured = false;
+        last_delta = 0;
+    }
+    float Update(uint16_t counts, float actual_rad, bool ready, float rad_per_count, float sign)
+    {
+        if (!ready || !captured)
+        {
+            target_rad = actual_rad;
+            previous = counts;
+            captured = ready;
+            last_delta = 0;
+        }
+        else
+        {
+            const uint16_t difference = static_cast<uint16_t>(counts - previous);
+            last_delta = difference < 0x8000U ? static_cast<int32_t>(difference) : static_cast<int32_t>(difference) - 65536;
+            previous = counts;
+            target_rad = std::remainder(target_rad + sign * rad_per_count * last_delta, 6.283185307179586f);
+        }
+        return target_rad;
+    }
+    int32_t Delta() const
+    {
+        return last_delta;
+    }
+
+  private:
+    bool captured = false;
+    uint16_t previous = 0U;
+    int32_t last_delta = 0;
+    float target_rad = 0.0f;
+};
 
 /** 仅识别输入动作；发射达速、热量和卡弹仍由 Shoot 管理。 */
 class Class_MouseTrigger
