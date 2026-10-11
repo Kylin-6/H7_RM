@@ -56,8 +56,22 @@ struct Struct_Gimbal_Motor_Config
     float torque_max = 18.0f;
 };
 
+struct Struct_Pitch_AccelFeedforward_Config
+{
+    // X 枪口、Y 左、Z 上；下面系数对应 m*r_z 与 m*r_x（kg·m），需实测标定。
+    // 未标定保持零，不根据未知重心猜测补偿方向和大小。
+    float mass_height_kg_m = 0.0f;
+    float mass_forward_kg_m = 0.0f;
+    float filter_tau_s = 0.020f;
+    float accel_limit_m_s2 = 6.0f;
+    float torque_limit_nm = 0.050f;
+    float torque_slew_nm_s = 1.0f;
+    uint64_t max_age_us = 20000U;
+};
+
 struct Struct_Gimbal_Config
 {
+    Struct_Pitch_AccelFeedforward_Config pitch_accel;
     Struct_Gimbal_Motor_Config pitch;
     Struct_Gimbal_PitchTorque_Config pitch_torque;
     float pitch_min = -0.6981317f; // -40 deg。

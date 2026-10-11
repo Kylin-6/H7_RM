@@ -33,6 +33,14 @@ struct Struct_Gimbal_Debug
     bool pitch_cascaded_control = false;
     float actual_rad = 0.0f;
     float actual_speed_rad_s = 0.0f;
+    float accel_raw_m_s2[3]{};
+    float accel_linear_m_s2[3]{};
+    float accel_filtered_m_s2[3]{};
+    float accel_ff_torque_nm = 0.0f; ///< IMU 正方向，独立限幅后参与最终总力矩限幅。
+    uint64_t accel_age_us = UINT64_MAX;
+    uint32_t accel_sequence = 0U;
+    bool accel_fresh = false;
+    bool accel_ff_enabled = false; ///< 仅表示标定系数非零且数据新鲜，不代表方向验证通过。
     float position_error_rad = 0.0f;
     float unclamped_torque_nm = 0.0f; ///< 最终总限幅前的合力矩，IMU 正方向；PID 自有限幅仍生效。
     bool torque_saturated = false; ///< 最终合力矩是否超出总限幅。

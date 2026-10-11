@@ -11,6 +11,7 @@
 #include "dvc_dm_imu.h"
 
 #include "daemon.h"
+#include "sys_timestamp.h"
 #include "stm32h7xx_hal.h"
 
 #include <stddef.h>
@@ -58,6 +59,7 @@ volatile float dm_imu_roll_deg;
 volatile float dm_imu_gyro_rad_s[3];
 volatile bool dm_imu_gyro_valid;
 volatile uint32_t dm_imu_gyro_sequence;
+Struct_DM_IMU_Accel_Snapshot accel_snapshot{};
 
 /** 把 uint16 原始值按线性量程还原为物理解码值。 */
 float DecodeUint16(uint16_t value, float minimum, float span)
@@ -102,6 +104,20 @@ void DM_IMU_RxCallback(FDCAN_HandleTypeDef *hfdcan,
         dm_imu_pitch_valid = true;
         /* 只有完整合法欧拉角帧刷新链路在线；角速度帧与非法帧不能续期。 */
         dm_imu_daemon.Feed();
+    }
+    else if (data[0] == DM_IMU_REG_ACCEL)
+    {
+        // 老工程映射：DATA[2..7] 为 X/Y/Z 小端 uint16，±235.2 m/s²。
+        for (uint32_t axis = 0U; axis < 3U; ++axis)
+        {
+            const uint16_t raw = static_cast<uint16_t>(data[2U + axis * 2U]) |
+                                 (static_cast<uint16_t>(data[3U + axis * 2U]) << 8U);
+            accel_snapshot.accel_m_s2[axis] = DecodeUint16(raw, -235.2f, 470.4f);
+        }
+        accel_snapshot.timestamp_us = SYS_Timestamp_Get_Microsecond();
+        ++accel_snapshot.sequence;
+        accel_snapshot.valid = true;
+        // 加速度应答不能给欧拉角/Daemon 续期。
     }
     else if (data[0] == kGyroRegister)
     {
@@ -159,6 +175,7 @@ extern "C" bool DM_IMU_Init(FDCAN_HandleTypeDef *hfdcan,
     dm_imu_gyro_rad_s[0] = dm_imu_gyro_rad_s[1] = dm_imu_gyro_rad_s[2] = 0.0f;
     dm_imu_gyro_valid = false;
     dm_imu_gyro_sequence = 0U;
+    accel_snapshot = {};
 
     /* 链路守护器只在首次初始化注册；重复 Init 不改已配置门限。 */
     if (!dm_imu_daemon_registered)
@@ -185,6 +202,22 @@ extern "C" bool DM_IMU_RequestEuler(void)
 extern "C" bool DM_IMU_RequestGyro(void)
 {
     return RequestFrame(kGyroRegister);
+}
+
+extern "C" bool DM_IMU_RequestAccel(void)
+{
+    return RequestFrame(DM_IMU_REG_ACCEL);
+}
+
+extern "C" Struct_DM_IMU_Accel_Snapshot DM_IMU_GetAccelSnapshot(void)
+{
+    const uint32_t interrupt_state = __get_PRIMASK();
+    __disable_irq();
+    __DMB();
+    const auto snapshot = accel_snapshot;
+    __DMB();
+    __set_PRIMASK(interrupt_state);
+    return snapshot;
 }
 
 extern "C" bool DM_IMU_GetPitch(float *pitch_deg)

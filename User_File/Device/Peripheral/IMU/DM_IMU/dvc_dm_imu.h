@@ -8,6 +8,8 @@
  *            均为小端 uint16，DATA[1] 保留；
  *          - 角速度帧（DATA[0]=0x02）：DATA[2..7]=X/Y/Z 角速度，
  *            uint16 线性还原，物理范围 ±34.88 rad/s。
+ *          - 加速度帧（DATA[0]=0x01）：DATA[2..7]=X/Y/Z 比力，
+ *            沿用老工程小端 uint16 映射 ±235.2 m/s²，含重力。
  *          请求帧与数据帧使用两个固定 ID，接收方向经框架 CAN BSP 的回调注册。
  *          Pitch 解码路径与老步兵云台板原工程逐字节一致。
  * @author  Kylin-6（原始实现）/ H7_BSP 移植
@@ -35,6 +37,8 @@ extern "C"
 #define DM_IMU_REG_EULER (0x03U)
 /** 角速度数据帧寄存器号（说明书附录 C 表 B-1）。 */
 #define DM_IMU_REG_GYRO (0x02U)
+/** 加速度寄存器，CAN 映射量程 ±235.2 m/s²，沿用老工程 DMIMU.h。 */
+#define DM_IMU_REG_ACCEL (0x01U)
 
 /**
  * @brief 把一路 DM-IMU 绑定到 CAN 总线并注册接收回调。
@@ -59,6 +63,17 @@ bool DM_IMU_RequestEuler(void);
  * @note 与欧拉角请求共用同一请求帧格式；需要角速度时与欧拉角请求交替发出。
  */
 bool DM_IMU_RequestGyro(void);
+/** 请求原始比力（含重力），不改变欧拉角在线状态。 */
+bool DM_IMU_RequestAccel(void);
+typedef struct
+{
+    float accel_m_s2[3];
+    uint32_t sequence;
+    uint64_t timestamp_us;
+    bool valid;
+} Struct_DM_IMU_Accel_Snapshot;
+/** 接收中断写入、ControlTask 一致读取；无数据与过期数据不等同于零加速度。 */
+Struct_DM_IMU_Accel_Snapshot DM_IMU_GetAccelSnapshot(void);
 
 /**
  * @brief 读取最近一次收到的 Pitch 角。

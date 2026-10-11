@@ -2,6 +2,7 @@
 #define DM_IMU_INS_H
 
 #include <stdbool.h>
+#include <stdint.h>
 #ifdef __cplusplus
 extern "C"
 {
@@ -10,6 +11,8 @@ extern "C"
     bool DM_IMU_InsBridge_Init(void);
     /** 1 kHz 请求欧拉角；仅新鲜的新帧发布 INS，Pitch 差分速度放 gyro_y_rad_s。 */
     void DM_IMU_InsBridge_Update(void);
+    /** 加速度请求未提交次数，仅 ControlTask 写；计满保持。 */
+    extern uint32_t DM_IMU_Accel_Request_Failures;
     /** 最近 100 ms 是否收到合法欧拉角；其他寄存器帧不能续期。 */
     bool DM_IMU_InsBridge_IsFresh(void);
 #ifdef __cplusplus
