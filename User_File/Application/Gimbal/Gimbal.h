@@ -33,6 +33,10 @@ struct Struct_Gimbal_Debug
     bool pitch_cascaded_control = false;
     float actual_rad = 0.0f;
     float actual_speed_rad_s = 0.0f;
+    float position_error_rad = 0.0f;
+    float unclamped_torque_nm = 0.0f; ///< 最终总限幅前的合力矩，IMU 正方向；PID 自有限幅仍生效。
+    bool torque_saturated = false; ///< 最终合力矩是否超出总限幅。
+    uint32_t torque_saturation_count = 0U; ///< 自初始化以来饱和控制周期数，停机保留，计满保持。
     float command_torque_nm = 0.0f; // 电机协议方向；提交成功不等于执行成功。
     float feedback_torque_nm = 0.0f; // 电机协议方向。
     bool submitted = false;

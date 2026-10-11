@@ -230,6 +230,13 @@ void Control()
         Stop();
         return;
     }
+    ctx.debug.position_error_rad = error_rad;
+    ctx.debug.unclamped_torque_nm = torque_nm;
+    ctx.debug.torque_saturated = std::fabs(torque_nm) > c.torque_limit_nm;
+    if (ctx.debug.torque_saturated && ctx.debug.torque_saturation_count != UINT32_MAX)
+    {
+        ++ctx.debug.torque_saturation_count;
+    }
     torque_nm = Clamp(torque_nm, -c.torque_limit_nm, c.torque_limit_nm);
     // kp/kd 恒为 0：电机侧只执行 t_ff，位置闭环由本板 IMU 外环完成。
     // 发布失败由下一 1 ms 周期提交最新目标，不阻塞等待 CAN。
@@ -338,6 +345,9 @@ void Gimbal_Update(void)
     ctx.debug.controlling = false;
     ctx.debug.submitted = false;
     ctx.debug.command_torque_nm = 0.0f;
+    ctx.debug.position_error_rad = 0.0f;
+    ctx.debug.unclamped_torque_nm = 0.0f;
+    ctx.debug.torque_saturated = false;
     ctx.debug.target_speed_rad_s = 0.0f;
     ctx.debug.speed_setpoint_rad_s = 0.0f;
     ctx.debug.speed_error_rad_s = 0.0f;

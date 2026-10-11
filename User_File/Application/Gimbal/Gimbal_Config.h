@@ -9,17 +9,17 @@
 struct Struct_Gimbal_PitchTorque_Config
 {
     /** IMU 外环位置刚度，N·m/rad。 */
-    float position_kp = 0.52f;
+    float position_kp = 0.65f;
     /** 键鼠串级初值按现有位置刚度 / 速度阻尼等效拆分，单位 1/s、N·m·s/rad。 */
-    float keyboard_position_kp = 0.52f / 0.060f;
-    float keyboard_speed_kp = 0.060f;
+    float keyboard_position_kp = 0.65f / 0.075f;
+    float keyboard_speed_kp = 0.075f;
     /** 目标斜坡限速，rad/s（Class_Slope）。 */
     float target_rate_rad_s = 3.0f;
     /** 目标速度前馈：正 / 负方向增益不对称，N·m·s/rad。 */
     float ff_velocity_positive = 0.012f;
     float ff_velocity_negative = 0.018f;
     /** IMU 角速度阻尼系数，N·m·s/rad。 */
-    float imu_velocity_damping = 0.060f;
+    float imu_velocity_damping = 0.075f;
     /** IMU 角速度低通时间常数，s（Class_Filter_IIR_First_Order）。 */
     float imu_velocity_filter_tau_s = 0.010f; // 0：INS 来源已滤波，直接使用。
     /** Stribeck 摩擦：静摩擦 / 库仑摩擦力矩（正负方向不对称），N·m。 */

@@ -47,9 +47,9 @@ Pitch 电机和外环状态，不向外暴露电机指针。独立 `Application/
 - 扰动补偿上限为 0.15 N·m，总力矩仍限幅 0.5 N·m，用于补偿静止重力偏差。
 - 运动时冻结扰动学习并保持补偿，不再按 0.2 s 时间常数衰减支撑力矩；停稳后继续学习。
   输入撤销、INS 失效或电机掉线等停机路径仍清零补偿，恢复从当前姿态重新起步。
-- 静止学习增益为 0.8 N·m/(rad·s)，速度阻尼为 0.060 N·m·s/rad，位置刚度为
-  0.52 N·m/rad；速度前馈保持正向 0.012、负向 0.018 N·m·s/rad，目标限速保持原值。
-  当前机构的采样结果与验证边界见
+- 静止学习增益为 0.8 N·m/(rad·s)，速度阻尼候选为 0.075 N·m·s/rad，位置刚度候选为
+  0.65 N·m/rad；速度前馈保持正向 0.012、负向 0.018 N·m·s/rad，目标限速保持原值。
+  本轮刚度与阻尼均提高 25%，尚需实机加减速对比；此前机构的采样结果与验证边界见
   [2026-10-04 Pitch 调参记录](../../../sysid/reports/pitch_tuning_2026-10-04.md)。
 - DM-IMU 桥沿用欧拉角差分速度：序号差乘标称 1 ms，限幅 ±3 rad/s，变间隔一阶低通
   tau=10 ms，结果放在 INS 的 `gyro_y_rad_s`。它是 Pitch 姿态速度，不是原始机体系陀螺。
@@ -72,6 +72,10 @@ EmberProbe 可只读采样 `Remote_Pitch_Channel`、`Remote_Pitch_Valid` 和
 `target_speed_rad_s` 为限速后的闭环目标，`actual_rad` / `actual_speed_rad_s`
 为实际 INS 反馈，`command_torque_nm` 为电机协议方向的提交力矩，
 `feedback_torque_nm` 为电机报告的反馈力矩。两者不能视为精确测力结果。
+`position_error_rad` 为限速目标与 INS 的差值；`unclamped_torque_nm` 为最终总限幅前的
+合力矩（IMU 正方向，PID 内部限幅仍生效）；`torque_saturated` 表示合力矩超出 ±0.5 N·m。
+`torque_saturation_count` 累计饱和控制周期，停机保留、计满保持；其余新增控制值停机清零。
+这组统计只反映最终合力矩限幅，不能推断电机实际电流或机械输出能力。
 检查 `controlling`、`ins_valid`、`motor_ready` 与 `submitted`；提交成功不代表执行确认。
 停机时指令力矩显示零，不表示电机已确认失能或机械已停止。
 
@@ -85,11 +89,22 @@ USART1 的原 24 通道发射遥测格式保持不变。调参前保持发射关
 本板 WS2812 的颜色、闪烁次数、故障优先级和排查步骤见
 [WS2812 debug 指南](../../../docs/debug_ws2812.md)。灯效只观察，不修改控制许可。
 
-## 验证边界
+## 本轮增刚验证（2026-10-11）
+
+按用户确认，本轮只调整主控刚度与阻尼并增加诊断，不修改 IMU 采集、测速或原生 gyro 路径。
+`/tmp/h7-pitch-stiffness/run.py` 编译实际 Gimbal/PID/Slope/Input/RobotCmd，2728 项主机检查通过，
+ASan/UBSan 检查通过；覆盖两种模式增益、保持/制动、总力矩限幅、饱和累计、积分防饱和、
+停机清零及恢复等待。只构建本目录 GimbalBoard，未烧录、未进行加减速实机验收。
+构建有既存 PID 类型声明警告；本轮未修改该类型。
+
+实机应在相同负载和中部 Pitch 角度对比起步、刹车的峰值偏差、恢复时间、饱和次数及外部画面。
+出现持续振荡或峰值增大时回退增益；不能以主机测试通过作为抗扰效果已改善的结论。
+
+## 历史验证边界
 
 主机回归位于独立测试工作区的 `Tests/InfantryMigration`，编译迁移后的实际应用、DM/DJI
 驱动、输入适配和消息中心，检查单轴注册、2 s 延迟、恢复、INS 断线和发射事件。
 固件验证覆盖 SingleBoard / GimbalBoard / ChassisBoard。原双轴主机测试不再适用于此单轴 App。
 实机尚需核对方向、量程、2 s 时序、断线恢复和 Pitch 阻尼；主机测试不替代上板闭环验证。
 
-键鼠输入与参数边界见 [老步兵键鼠控制](../Input/KEYBOARD_CONTROL.md)；本机构的现有闭环标定保持不变。
+键鼠输入与参数边界见 [老步兵键鼠控制](../Input/KEYBOARD_CONTROL.md)；本轮仅调整主控刚度和阻尼候选，IMU 采集与反馈处理保持原实现。

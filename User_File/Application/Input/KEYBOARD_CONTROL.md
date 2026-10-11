@@ -130,16 +130,18 @@ git diff --check
 停止移动后角度目标保持，控制器仍可追踪未到达的目标；本实现不承诺松手机械立即停止。
 
 `GimbalCmd.pitch_cascaded_control` 默认关闭，仅云台本地键鼠打开，不改变线上 CAN 协议。
-串级初值为位置 Kp=0.52/0.060≈8.667 1/s、速度 Kp=0.060 N·m·s/rad，速度 Ki/Kd=0。
+串级候选为位置 Kp=0.65/0.075≈8.667 1/s、速度 Kp=0.075 N·m·s/rad，速度 Ki/Kd=0。
+本轮等效位置刚度与速度阻尼均提高 25%，用于底盘加减速时的 Pitch 抗扰试验，尚未实机验收。
+候选参数回归与构建结果见 [本轮增刚验证](../Gimbal/README.md#本轮增刚验证2026-10-11)。
 位置修正叠加不对称速度前馈（原 0.012/0.018 按速度 Kp 换算），速度环输出力矩；
-原重力/摩擦补偿、±0.5 N·m 限幅、2 s 使能等待及故障清零保留，遥控仍走已标定的原力矩控制律。
+原重力/摩擦补偿、±0.5 N·m 限幅、2 s 使能等待及故障清零保留，遥控仍走原力矩控制律，位置刚度/速度阻尼同步改为 0.65/0.075。
 切换目标类型时从新鲜姿态重建斜坡与两级 PID，进入/未就绪/失联/溢出仍丢弃旧鼠标动作。
 
 调试新增 `Keyboard_Input_Debug.pitch_speed_rad_s`、`Gimbal_Debug.speed_setpoint_rad_s`、
-`speed_error_rad_s` 与 `pitch_cascaded_control`。初始增益主要是既有控制律的等效拆分，
+`speed_error_rad_s` 与 `pitch_cascaded_control`。串级结构仍是主控力矩控制律的等效拆分，
 不能据此认定闭环带宽提高或实机滞后已经解决；需比较细瞄、停稳和往返曲线。
 
-本轮主机检查：`python3 /tmp/h7-pitch-experience/run.py` 使用实际 Input、仲裁、RobotCmd、
+此前细瞄版本主机检查：`python3 /tmp/h7-pitch-experience/run.py` 使用实际 Input、仲裁、RobotCmd、
 Gimbal、PID、Slope、IIR 源码和硬件接口桩，通过 2690 项断言及 AddressSanitizer/UBSan 检查。
 覆盖 ±1～4 细瞄、逐帧累加、同毫秒粘包/零输入、时间回绕、帧周期和前馈超时、限位、
 等效控制增益、位置保持/速度制动、力矩限幅、模式复位、2 s 使能、INS 过期、
