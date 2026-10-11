@@ -54,7 +54,7 @@ constexpr float LOADER_STOP_SPEED_RAD_S = 0.2f;
 constexpr int16_t JAM_CURRENT_THRESHOLD = 3800;
 constexpr uint32_t JAM_CONFIRM_MS = 300U;
 // 回退未到位的超时上限，不作为固定回退时长。
-constexpr uint32_t JAM_HANDLE_MS = 200U;
+constexpr uint32_t JAM_HANDLE_MS = 300U;
 constexpr float JAM_DONE_ANGLE_RAD = 2.0f * SHOOT_PI / 180.0f;
 // 卡弹时从当前位置反向回退半个弹位，输出轴角度 rad。
 constexpr float JAM_BACKOFF_RAD = 0.5f * ONE_BULLET_MOTOR_OUTPUT_RAD;

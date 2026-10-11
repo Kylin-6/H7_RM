@@ -205,7 +205,7 @@ void UpdateHeat(uint32_t now, bool loader_active)
  * @brief 卡弹状态机（框架 Class_FSM 驱动）。
  *
  * NORMAL --(电流超阈值)--> SUSPECT --(持续 300 ms)--> HANDLING；
- * HANDLING 编码器到位后回 NORMAL，200 ms 未到位则进入 FAILED，撤销许可后复位。
+ * HANDLING 编码器到位后回 NORMAL，300 ms 未到位则进入 FAILED，撤销许可后复位。
  * SUSPECT 期间条件消失直接回 NORMAL。状态驻留时间用 HAL tick 差写入 Count_Time，
  * 由框架 FSM 管理状态切换；真实时间判定与老工程一致，漏拍不会延后保护。
  *
