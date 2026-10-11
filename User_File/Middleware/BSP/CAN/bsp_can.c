@@ -523,7 +523,7 @@ void BSP_CAN_GetTxStats(Struct_CAN_Tx_Stats *stats)
 }
 
 /**
- * @brief 每条总线最多发送一帧插入消息。
+ * @brief FDCAN1/2 最多发送一帧、FDCAN3 最多发送两帧插入消息。
  * @details 每条总线各自保留一帧待重试消息；失败不阻塞其他总线。
  * @note 只能由同一个 CAN 发送任务调用，不支持并发或重入。
  */
@@ -549,19 +549,26 @@ void BSP_CAN_SendAsync(void)
     BSP_CAN_RecoverBusOff(&hfdcan3);
     for (bus = 0U; bus < CAN_BUS_COUNT; ++bus)
     {
-        if (Can_TxPending[bus] == 0U)
+        /* FDCAN3 同时承载 1 kHz 欧拉角与 200 Hz 加速度请求。
+         * 固定预算避免生产快于消费；硬件拒绝立即退出，保留原待重试帧。 */
+        const uint8_t budget = bus == 2U ? 2U : 1U;
+        for (uint8_t attempt = 0U; attempt < budget; ++attempt)
         {
-            if (osMessageQueueGet(Can_TxQueue[bus],
-                                  &Can_TxPendingMessage[bus],
-                                  NULL,
-                                  0) != osOK)
+            if (Can_TxPending[bus] == 0U)
             {
-                continue;
+                if (osMessageQueueGet(Can_TxQueue[bus],
+                                      &Can_TxPendingMessage[bus],
+                                      NULL,
+                                      0) != osOK)
+                {
+                    break;
+                }
+                Can_TxPending[bus] = 1U;
             }
-            Can_TxPending[bus] = 1U;
-        }
-        if (BSP_CAN_SendMsg(&Can_TxPendingMessage[bus]))
-        {
+            if (!BSP_CAN_SendMsg(&Can_TxPendingMessage[bus]))
+            {
+                break;
+            }
             Can_TxPending[bus] = 0U;
         }
     }
