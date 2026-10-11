@@ -7,8 +7,6 @@
  *          保留功能条件编译；关闭时不编译、不调度、不发布云台反馈。
  */
 #include "Gimbal.h"
-#include "pitch_accel_feedforward.h"
-#include "sys_timestamp.h"
 #include "message_center.h"
 
 #include "alg_filter_iir.h"
@@ -36,7 +34,6 @@ struct GimbalContext
     Struct_DMMotor_Snapshot motor_snapshot{};
     Class_PID position_pid;
     Class_PID speed_pid;
-    Class_PitchAccelFeedforward accel_feedforward;
     bool pitch_cascaded = false;
     Class_Slope target_slope;
     Class_Filter_IIR_First_Order velocity_filter;
@@ -91,13 +88,6 @@ bool ConfigValid(const Struct_Gimbal_Config& config)
             return false;
         }
     }
-    const auto &a = config.pitch_accel;
-    if (!std::isfinite(a.mass_height_kg_m) || !std::isfinite(a.mass_forward_kg_m) ||
-        !std::isfinite(a.filter_tau_s) || a.filter_tau_s <= 0.0f ||
-        !std::isfinite(a.accel_limit_m_s2) || a.accel_limit_m_s2 <= 0.0f ||
-        !std::isfinite(a.torque_limit_nm) || a.torque_limit_nm <= 0.0f || a.torque_limit_nm > c.torque_limit_nm ||
-        !std::isfinite(a.torque_slew_nm_s) || a.torque_slew_nm_s <= 0.0f || a.max_age_us == 0U)
-        return false;
     return (c.torque_sign == 1.0f || c.torque_sign == -1.0f) &&
            c.torque_limit_nm <= config.pitch.torque_max && config.ins_max_age_us > 0U &&
            std::isfinite(config.pitch_min) && std::isfinite(config.pitch_max) &&
@@ -119,7 +109,6 @@ void Stop()
     ctx.control_started = false;
     ctx.path_initialized = false;
     ctx.disturbance_torque_nm = 0.0f;
-    ctx.accel_feedforward.Reset();
 }
 
 /**
@@ -151,7 +140,6 @@ void Control()
     if (!ctx.path_initialized)
     {
         // 恢复时从当前姿态起步，清除外环历史与旧扰动估计，目标通过限速斜坡接入。
-        ctx.accel_feedforward.Reset();
         ctx.position_pid = Class_PID{};
         ctx.position_pid.Init(ctx.pitch_cascaded ? c.keyboard_position_kp : c.position_kp,
                               0, 0, 0, 0, ctx.pitch_cascaded ? c.torque_limit_nm / c.keyboard_speed_kp : c.torque_limit_nm);
@@ -219,33 +207,10 @@ void Control()
     torque_nm += (coulomb_friction + (static_friction - coulomb_friction) *
                                          std::exp(-(speed_ratio * speed_ratio))) *
                  std::tanh(direction / c.stribeck_smooth_rad_s);
-    auto accel = DM_IMU_GetAccelSnapshot();
-    const auto attitude = MessageCenter::INS_State_Topic.ReadWithMeta();
-    const uint64_t now_us = SYS_Timestamp_Get_Microsecond();
-    if (!attitude.valid || now_us < attitude.timestamp_us ||
-        now_us - attitude.timestamp_us > ctx.config.pitch_accel.max_age_us)
-        accel.valid = false; // 保角仍走原时效；前馈单独拒绝陈旧姿态。
-    const float accel_torque_nm = ctx.accel_feedforward.Update(accel, attitude.data.pitch_rad, attitude.data.roll_rad,
-                                                               now_us, CONTROL_PERIOD_S, ctx.config.pitch_accel);
-    torque_nm += accel_torque_nm;
-    ctx.debug.accel_ff_torque_nm = accel_torque_nm;
-    ctx.debug.accel_fresh = ctx.accel_feedforward.fresh;
-    ctx.debug.accel_ff_enabled = ctx.accel_feedforward.enabled;
-    ctx.debug.accel_sequence = accel.sequence;
-    ctx.debug.accel_age_us = accel.valid && now_us >= accel.timestamp_us ? now_us - accel.timestamp_us : UINT64_MAX;
-    for (unsigned i = 0; i < 3; ++i)
-    {
-        ctx.debug.accel_raw_m_s2[i] = accel.valid ? accel.accel_m_s2[i] : 0.0f;
-        ctx.debug.accel_linear_m_s2[i] = ctx.accel_feedforward.linear_m_s2[i];
-        ctx.debug.accel_filtered_m_s2[i] = ctx.accel_feedforward.filtered_m_s2[i];
-    }
     // 静止时学习重力/负载；运动时保持支撑力矩，故障恢复时不重用旧补偿。
     if (std::fabs(target_velocity_rad_s) < c.disturbance_target_speed_rad_s &&
         std::fabs(feedforward_speed) < c.disturbance_target_speed_rad_s &&
-        std::fabs(velocity_rad_s) < c.disturbance_actual_speed_rad_s &&
-        (!ctx.accel_feedforward.enabled ||
-         (std::fabs(ctx.accel_feedforward.filtered_m_s2[0]) < 0.2f &&
-          std::fabs(ctx.accel_feedforward.filtered_m_s2[2]) < 0.2f)))
+        std::fabs(velocity_rad_s) < c.disturbance_actual_speed_rad_s)
     {
         const float candidate = Clamp(ctx.disturbance_torque_nm +
                                               c.disturbance_integral_gain * error_rad * CONTROL_PERIOD_S,
@@ -380,12 +345,6 @@ void Gimbal_Update(void)
     ctx.debug.controlling = false;
     ctx.debug.submitted = false;
     ctx.debug.command_torque_nm = 0.0f;
-    ctx.debug.accel_ff_torque_nm = 0.0f;
-    ctx.debug.accel_fresh = ctx.debug.accel_ff_enabled = false;
-    ctx.debug.accel_sequence = 0U;
-    ctx.debug.accel_age_us = UINT64_MAX;
-    for (unsigned i = 0; i < 3; ++i)
-        ctx.debug.accel_raw_m_s2[i] = ctx.debug.accel_linear_m_s2[i] = ctx.debug.accel_filtered_m_s2[i] = 0.0f;
     ctx.debug.position_error_rad = 0.0f;
     ctx.debug.unclamped_torque_nm = 0.0f;
     ctx.debug.torque_saturated = false;

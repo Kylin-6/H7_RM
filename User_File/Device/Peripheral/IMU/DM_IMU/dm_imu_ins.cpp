@@ -11,8 +11,6 @@
 #include "message_center.h"
 #include "stm32h7xx_hal.h"
 
-uint32_t DM_IMU_Accel_Request_Failures = 0U;
-
 namespace
 {
 constexpr float kDegToRad = 0.0174532925f;
@@ -24,7 +22,6 @@ bool has_sample;
 uint32_t last_sequence;
 float last_pitch_rad;
 float velocity_rad_s;
-uint8_t accel_request_divider;
 } // namespace
 
 extern "C" bool DM_IMU_InsBridge_Init(void)
@@ -55,14 +52,6 @@ extern "C" void DM_IMU_InsBridge_Update(void)
     }
     // 单次提交失败在下一周期重试；不阻塞、不循环等待应答。
     (void) DM_IMU_RequestEuler();
-    // 欧拉角仍每周期请求，避免改变既有差分测速的标称采样约定。
-    // 额外每 5 ms 请求一次加速度；入队失败不积压补发，下一调度点再试。
-    if (++accel_request_divider >= 5U)
-    {
-        accel_request_divider = 0U;
-        if (!DM_IMU_RequestAccel() && DM_IMU_Accel_Request_Failures != UINT32_MAX)
-            ++DM_IMU_Accel_Request_Failures;
-    }
     const auto sample = DM_IMU_GetEulerSnapshot();
     if (!sample.valid || HAL_GetTick() - sample.timestamp_ms > kInsTimeoutMs)
     {

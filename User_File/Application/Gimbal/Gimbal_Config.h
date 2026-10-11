@@ -9,17 +9,17 @@
 struct Struct_Gimbal_PitchTorque_Config
 {
     /** IMU 外环位置刚度，N·m/rad。 */
-    float position_kp = 0.78f;
+    float position_kp = 0.94f;
     /** 键鼠串级初值按现有位置刚度 / 速度阻尼等效拆分，单位 1/s、N·m·s/rad。 */
-    float keyboard_position_kp = 0.78f / 0.090f;
-    float keyboard_speed_kp = 0.090f;
+    float keyboard_position_kp = 0.94f / 0.108f;
+    float keyboard_speed_kp = 0.108f;
     /** 目标斜坡限速，rad/s（Class_Slope）。 */
     float target_rate_rad_s = 3.0f;
     /** 目标速度前馈：正 / 负方向增益不对称，N·m·s/rad。 */
     float ff_velocity_positive = 0.012f;
     float ff_velocity_negative = 0.018f;
     /** IMU 角速度阻尼系数，N·m·s/rad。 */
-    float imu_velocity_damping = 0.090f;
+    float imu_velocity_damping = 0.108f;
     /** IMU 角速度低通时间常数，s（Class_Filter_IIR_First_Order）。 */
     float imu_velocity_filter_tau_s = 0.010f; // 0：INS 来源已滤波，直接使用。
     /** Stribeck 摩擦：静摩擦 / 库仑摩擦力矩（正负方向不对称），N·m。 */
@@ -56,22 +56,8 @@ struct Struct_Gimbal_Motor_Config
     float torque_max = 18.0f;
 };
 
-struct Struct_Pitch_AccelFeedforward_Config
-{
-    // X 枪口、Y 左、Z 上；下面系数对应 m*r_z 与 m*r_x（kg·m），需实测标定。
-    // 未标定保持零，不根据未知重心猜测补偿方向和大小。
-    float mass_height_kg_m = 0.0f;
-    float mass_forward_kg_m = 0.0f;
-    float filter_tau_s = 0.020f;
-    float accel_limit_m_s2 = 6.0f;
-    float torque_limit_nm = 0.050f;
-    float torque_slew_nm_s = 1.0f;
-    uint64_t max_age_us = 20000U;
-};
-
 struct Struct_Gimbal_Config
 {
-    Struct_Pitch_AccelFeedforward_Config pitch_accel;
     Struct_Gimbal_Motor_Config pitch;
     Struct_Gimbal_PitchTorque_Config pitch_torque;
     float pitch_min = -0.6981317f; // -40 deg。

@@ -89,7 +89,7 @@ CAN 按消息语义选择通道，不应按消息频率混用：
 软件通道成功”等同于“电机已经执行”。
 
 `Can_Tx_Task` 每 1 ms 依次调用 `BSP_CAN_SendAsync()` 和 `BSP_CAN_SendPer()`。
-FDCAN1/2/3 各有静态 FIFO 和 pending 帧，每次轮询 FDCAN1/2 最多一帧、FDCAN3 最多两帧；同总线
+FDCAN1/2/3 各有静态 FIFO 和 pending 帧，每次轮询每条总线最多尝试一帧；同总线
 pending 先于队列后续帧重试。某条总线暂时不可写只阻塞本总线的后续离散命令，
 其他总线和周期槽仍独立处理。软件接受、HAL 写入硬件 FIFO、总线发送、对端收到、
 设备执行并非同一事件。
@@ -194,8 +194,3 @@ UART、OSPI 等 DMA 管理对象放入 `.dma_buffer`。修改链接脚本、MPU 
 - [交互式架构图](../../../Assets/Architecture/H7_BSP.html)
 
 UART BSP 的函数声明提供 C linkage，供 VTM/C 协议解析器注册接收回调；老步兵 UART7 的 921600、8N1 与拼帧接口见 [键鼠控制](../../Application/Input/KEYBOARD_CONTROL.md)。
-
-
-老步兵云台的 FDCAN3 每 1 ms 最多取两帧插入 FIFO，支持并行的 1 kHz 欧拉角与
-200 Hz 加速度请求；FDCAN1/2 仍最多一帧。硬件拒绝时立即停止该总线本轮处理并保留待重试帧，
-不阻塞其他总线，不增加任务。此预算是软件提交上限，不代表传感器应答吞吐。

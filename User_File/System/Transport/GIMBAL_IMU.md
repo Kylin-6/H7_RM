@@ -38,11 +38,9 @@ Yaw 控制采用云台 IMU 位置 PID（修正不单独限幅）与底盘 BMI088
 
 ## 当前数据来源限制
 
-老步兵云台当前 DM-IMU bridge 每周期请求欧拉角，并每 5 周期额外请求加速度；INS 的 `gyro_y_rad_s` 为滤波后的
+老步兵云台当前 DM-IMU bridge 只请求欧拉角，INS 的 `gyro_y_rad_s` 为滤波后的
 Pitch 欧拉角差分速度（限幅 ±3 rad/s），并非原始机体系陀螺仪；X/Z 角速度为 0。
 本回传保持这些源字段语义，没有新增原生 gyro 采集或改变 Pitch 控制反馈。
-加速度只在云台本地用于待标定前馈与观测，不进入 INS 或跨板报文，也不能给欧拉角续期；
-参数与验证边界见 [Pitch 加速度前馈](../../Application/Gimbal/README.md#加速度计-pitch-前馈待标定)。
 
 ## 验证入口
 

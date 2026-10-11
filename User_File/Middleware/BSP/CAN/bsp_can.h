@@ -112,7 +112,7 @@ bool CAN_Tx_SubmitPair(const Struct_CAN_Tx_Msg *first, const Struct_CAN_Tx_Msg *
 bool CAN_Tx_Perform(const Struct_CAN_Tx_Msg *tx_msg);
 
 /**
- * @brief FDCAN1/2 至多一帧、FDCAN3 至多两帧插入发送消息。
+ * @brief 每条总线各处理至多一帧插入发送消息。
  * @details FIFO 满或 HAL 写入失败时保留当前总线帧，下次调用先重试；
  *          其他总线仍独立发送，同一总线保持入队顺序。
  * @note 只能由同一个 CAN 发送任务周期调用，不支持并发或重入。
