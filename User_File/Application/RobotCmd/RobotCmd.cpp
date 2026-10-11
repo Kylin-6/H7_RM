@@ -45,6 +45,7 @@ static bool GimbalChanged(const GimbalCmd &next)
 {
     return Gimbal_Command.mode != next.mode ||
            Gimbal_Command.yaw_absolute_target != next.yaw_absolute_target ||
+           Gimbal_Command.pitch_cascaded_control != next.pitch_cascaded_control ||
            Gimbal_Command.yaw_angle_rad != next.yaw_angle_rad ||
            Gimbal_Command.pitch_angle_rad != next.pitch_angle_rad ||
            Gimbal_Command.yaw_speed_rad_s != next.yaw_speed_rad_s ||

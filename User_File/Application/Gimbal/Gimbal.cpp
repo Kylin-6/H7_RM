@@ -33,6 +33,8 @@ struct GimbalContext
     Class_DMMotor pitch_motor;
     Struct_DMMotor_Snapshot motor_snapshot{};
     Class_PID position_pid;
+    Class_PID speed_pid;
+    bool pitch_cascaded = false;
     Class_Slope target_slope;
     Class_Filter_IIR_First_Order velocity_filter;
     GimbalCmd command{};
@@ -63,7 +65,7 @@ float Clamp(float value, float minimum, float maximum)
 bool ConfigValid(const Struct_Gimbal_Config& config)
 {
     const auto& c = config.pitch_torque;
-    const float positive[] = {c.position_kp, c.target_rate_rad_s,
+    const float positive[] = {c.position_kp, c.keyboard_position_kp, c.keyboard_speed_kp, c.target_rate_rad_s,
                               c.stribeck_velocity_rad_s, c.stribeck_smooth_rad_s,
                               c.torque_limit_nm};
     for (float value : positive)
@@ -117,24 +119,32 @@ bool ControlPermitted()
 {
     // 单轴 LOCK 沿用老步兵安全语义：失能；只有显式 IMU 目标允许输出。
     return ctx.initialized && ctx.command.mode == GimbalMode::IMU &&
-           std::isfinite(ctx.command.pitch_angle_rad) && ctx.ins_valid &&
+           std::isfinite(ctx.command.pitch_angle_rad) && std::isfinite(ctx.command.pitch_speed_rad_s) && ctx.ins_valid &&
            std::isfinite(ctx.ins.pitch_rad) && std::isfinite(ctx.ins.gyro_y_rad_s) &&
            !ctx.motor_snapshot.fault;
 }
 
 /**
  * @brief 计算本周期 Pitch 力矩并以 MIT 纯前馈模式提交。
- * @note 控制律：位置环 + 不对称目标速度前馈 - IMU 速度阻尼 + Stribeck 摩擦补偿
- *       + 低带宽扰动估计；仅在功能许可且电机 ready 后调用。
+ * @note 键鼠采用位置/速度串级，遥控保留位置力矩环；共同叠加不对称速度前馈、
+ *       摩擦与低带宽扰动补偿，仅在功能许可且电机 ready 后调用。
  */
 void Control()
 {
     const auto &c = ctx.config.pitch_torque;
+    if (ctx.pitch_cascaded != ctx.command.pitch_cascaded_control)
+    {
+        ctx.pitch_cascaded = ctx.command.pitch_cascaded_control;
+        ctx.path_initialized = false;
+    }
     if (!ctx.path_initialized)
     {
         // 恢复时从当前姿态起步，清除外环历史与旧扰动估计，目标通过限速斜坡接入。
         ctx.position_pid = Class_PID{};
-        ctx.position_pid.Init(c.position_kp, 0, 0, 0, 0, c.torque_limit_nm);
+        ctx.position_pid.Init(ctx.pitch_cascaded ? c.keyboard_position_kp : c.position_kp,
+                              0, 0, 0, 0, ctx.pitch_cascaded ? c.torque_limit_nm / c.keyboard_speed_kp : c.torque_limit_nm);
+        ctx.speed_pid = Class_PID{};
+        ctx.speed_pid.Init(c.keyboard_speed_kp, 0, 0, 0, 0, c.torque_limit_nm);
         ctx.target_slope.Reset(ctx.ins.pitch_rad);
         ctx.velocity_filter = Class_Filter_IIR_First_Order{};
         if (c.imu_velocity_filter_tau_s > 0.0f)
@@ -163,14 +173,31 @@ void Control()
     ctx.position_pid.Set_Now(ctx.ins.pitch_rad);
     ctx.position_pid.TIM_Calculate_PeriodElapsedCallback();
 
-    // 原实车控制律：位置环 + 不对称目标速度前馈 - IMU 速度阻尼。
-    const float ff_gain = target_velocity_rad_s >= 0.0f
-                              ? c.ff_velocity_positive
-                              : c.ff_velocity_negative;
-    float torque_nm = ctx.position_pid.Get_Out() + ff_gain * target_velocity_rad_s -
-                      c.imu_velocity_damping * velocity_rad_s;
+    // 键鼠速度前馈来自接收帧的计数/时间，避免以 1 kHz 目标台阶差分生成短促脉冲。
+    const float feedforward_speed = ctx.pitch_cascaded
+                                        ? Clamp(ctx.command.pitch_speed_rad_s, -c.target_rate_rad_s, c.target_rate_rad_s)
+                                        : target_velocity_rad_s;
+    const float ff_gain = feedforward_speed >= 0.0f ? c.ff_velocity_positive : c.ff_velocity_negative;
+    float torque_nm;
+    if (ctx.pitch_cascaded)
+    {
+        // 现有刚度/阻尼等效拆分，不新增速度积分；重力/静差继续由既有扰动估计补偿。
+        const float speed_target = Clamp(ctx.position_pid.Get_Out() + ff_gain / c.keyboard_speed_kp * feedforward_speed,
+                                         -ctx.config.pitch.velocity_max, ctx.config.pitch.velocity_max);
+        ctx.speed_pid.Set_Target(speed_target);
+        ctx.speed_pid.Set_Now(velocity_rad_s);
+        ctx.speed_pid.TIM_Calculate_PeriodElapsedCallback();
+        torque_nm = ctx.speed_pid.Get_Out();
+        ctx.debug.speed_setpoint_rad_s = speed_target;
+        ctx.debug.speed_error_rad_s = speed_target - velocity_rad_s;
+    }
+    else
+    {
+        // 遥控保留已标定的力矩控制律。
+        torque_nm = ctx.position_pid.Get_Out() + ff_gain * feedforward_speed - c.imu_velocity_damping * velocity_rad_s;
+    }
     const float speed_ratio = std::fabs(velocity_rad_s) / c.stribeck_velocity_rad_s;
-    const float direction = target_velocity_rad_s + c.stribeck_error_gain * error_rad;
+    const float direction = feedforward_speed + c.stribeck_error_gain * error_rad;
     const float static_friction = direction >= 0.0f
                                       ? c.static_friction_positive_nm
                                       : c.static_friction_negative_nm;
@@ -182,6 +209,7 @@ void Control()
                  std::tanh(direction / c.stribeck_smooth_rad_s);
     // 静止时学习重力/负载；运动时保持支撑力矩，故障恢复时不重用旧补偿。
     if (std::fabs(target_velocity_rad_s) < c.disturbance_target_speed_rad_s &&
+        std::fabs(feedforward_speed) < c.disturbance_target_speed_rad_s &&
         std::fabs(velocity_rad_s) < c.disturbance_actual_speed_rad_s)
     {
         const float candidate = Clamp(ctx.disturbance_torque_nm +
@@ -210,6 +238,7 @@ void Control()
     ctx.debug.command_torque_nm = c.torque_sign * torque_nm;
     ctx.debug.submitted = ctx.pitch_motor.SetMIT(0.0f, 0.0f, 0.0f, 0.0f,
                                                   ctx.debug.command_torque_nm);
+    ctx.debug.pitch_cascaded_control = ctx.pitch_cascaded;
     ctx.debug.controlling = true;
 }
 
@@ -310,6 +339,9 @@ void Gimbal_Update(void)
     ctx.debug.submitted = false;
     ctx.debug.command_torque_nm = 0.0f;
     ctx.debug.target_speed_rad_s = 0.0f;
+    ctx.debug.speed_setpoint_rad_s = 0.0f;
+    ctx.debug.speed_error_rad_s = 0.0f;
+    ctx.debug.pitch_cascaded_control = false;
     // Fresh = 这份姿态是否可用于当前控制周期；设备 Online（liveness）由
     // 各 Device 内的 Daemon 判定，两个概念独立，不做重复的掉线计算。
     ctx.ins_valid = MessageCenter::INS_State_Topic.ReadFresh(ctx.ins, ctx.config.ins_max_age_us);

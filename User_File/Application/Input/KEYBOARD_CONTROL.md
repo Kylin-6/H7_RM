@@ -1,6 +1,6 @@
 # 老步兵键鼠控制
 
-配套固件为「老步兵云台」的 GimbalBoard（Pitch、发射、UART7 接收）与「老步兵测试」的 ChassisBoard（四轮、Yaw）。SingleBoard 保持原模板。本次优化保留闭环 PID、力矩标定和 2 s Pitch 使能延迟；键鼠在 Input 中独立整形，遥控保留原 S 曲线。输入优化不能据此判断云台闭环滞后已解决。
+配套固件为「老步兵云台」的 GimbalBoard（Pitch、发射、UART7 接收）与「老步兵测试」的 ChassisBoard（四轮、Yaw）。SingleBoard 保持原模板。键鼠 Pitch 采用现有标定等效拆分的位置/速度串级，保留力矩限幅和 2 s 使能延迟；键鼠在 Input 中独立整形，遥控保留原 S 曲线。输入优化不能据此判断云台闭环滞后已解决。
 
 ## 知识库键位
 
@@ -23,10 +23,10 @@ Ctrl+Shift 组合优先：组合中的 WASD/Q/E 不产生平移、自转或跟�
 
 | 目标 | 参数与换算 |
 | --- | --- |
-| Pitch | `Gimbal_Config.h`：原始鼠标限幅 ±500 后按整数 /5 再 ×5 量化，`keyboard_pitch_rad_per_count=-0.00020 rad/count`；每新 UART 帧只累加一次，不乘控制周期。±500 对应 ∓0.1 rad/帧，按 30 Hz 换算约 ∓3 rad/s；角度限位 −40°～+15°，机构目标斜坡仍为 3 rad/s |
-| Yaw | 云台只限幅原始 X 至 ±1000 并累计；底盘 `Chassis_Config.h` 的 `keyboard_yaw_rad_per_count=-0.000266667 rad/count`，每段累计计数差只消费一次。满输入约 ∓0.266667 rad/帧，30 Hz 下约 ∓8 rad/s；生成 INS 绝对目标并复用位置闭环，不经过摇杆速度积分 |
+| Pitch | `Gimbal_Config.h`：原始鼠标限幅 ±500，完整计数 × `keyboard_pitch_rad_per_count=-0.00020 rad/count`，不再 `/5×5` 丢弃细瞄输入；每新 UART 帧只累加一次，不乘控制周期。±500 对应 ∓0.1 rad/帧，按 30 Hz 换算约 ∓3 rad/s；角度限位 −40°～+15°，机构目标斜坡仍为 3 rad/s；键鼠使用位置外环＋速度内环，松手保持角度 |
+| Yaw | 云台只限幅原始 X 至 ±1000 并累计；底盘 `Chassis_Config.h` 的 `keyboard_yaw_rad_per_count=-0.000333333 rad/count`，较原灵敏度提高 25%，每段累计计数差只消费一次。满输入约 ∓0.333333 rad/帧，30 Hz 下目标累计速率约 ∓10 rad/s；生成 INS 绝对目标并复用位置闭环，不经过摇杆速度积分，电机总速度上限仍为 15 rad/s |
 | 平移 | 对应遥控 CH7 第一 / 第二档：当前轴上限 ×普通比例 0.3 / Shift 比例 0.6，当前抽象目标模长 9 / 18；WASD 先归一化，直行与斜行同速，松开 Shift 恢复第一档 |
-| 自转 | 当前旋转上限 ×0.3，Shift 再乘知识库倍率 1.5，当前 ±15 / ±22.5 |
+| 自转 | 当前旋转上限 ×0.2，Shift 再乘知识库倍率 1.5，当前 ±10 / ±15 |
 | 发射 | `Shoot_Config.h`：键鼠长按 150 ms；小于 150 ms 的释放产生 ShootOnce，达到阈值提交 BURST，释放提交 STOP；原遥控开关仍用 300 ms |
 | 摩擦轮 | 复用 Shoot 的 −25 / +25 rad/s、达速检查、热量、卡弹和 300 ms 延时停轮 |
 | 拨弹盘 | 4500 rpm 转子速度 ×2π/60/减速比 36 = 13.08997 rad/s 输出轴速度；遥控波轮也引用这份换算 |
@@ -37,11 +37,11 @@ Ctrl+Shift 组合优先：组合中的 WASD/Q/E 不产生平移、自转或跟�
 
 底盘 `Class_KeyboardChassis` 由 ControlTask 单独持有；原始按键、二维归一化意图、平移/旋转目标和整形状态均归 Input。默认参数在 `Chassis_Config.h`：平移速率为最大抽象速度 /0.22 s（加速）、/0.10 s（减速）、2 倍最大速度 /0.16 s（反向）；旋转使用独立的同名时间参数。当前对应 136.36 /300 /375 与 227.27 /500 /625 抽象速度每秒。反向锁存保持到新目标到达，改变按键方向或释放时取消。
 
-二维平移限制速度变化向量的模，不按 X/Y 分别加速；先在第一人称坐标整形，再转为底盘坐标。旋转独立整形，随后以 `1 - keyboard_turn_speed_reduce * abs(shaped_w) / angular_velocity_max` 缩放平移目标，默认倍率 0.25。因此普通 Q 小陀螺下 W 稳态目标约 8.325，Shift 小陀螺下约 15.975；直行仍为 9/18。单次实际 dt 上限 `keyboard_max_dt_ms=10`，不补积长暂停，无输入低通或新增 jerk。
+二维平移限制速度变化向量的模，不按 X/Y 分别加速；先在第一人称坐标整形，再转为底盘坐标。旋转独立整形，随后以 `1 - keyboard_turn_speed_reduce * abs(shaped_w) / angular_velocity_max` 缩放平移目标，默认倍率 0.25。因此普通 Q 小陀螺下 W 稳态目标约 8.55，Shift 小陀螺下约 16.65；直行仍为 9/18。单次实际 dt 上限 `keyboard_max_dt_ms=10`，不补积长暂停，无输入低通或新增 jerk。
 
-`ChassisCmd.input_shaped` 默认 false；键鼠置 true，Chassis 不重复三轴 S 曲线，保留运动学和同比单轮限幅。切换标记重置规划，遥控路径保持原实现。已整形命令的归零边沿由 RobotCmd 立即发布，其他底盘目标仍按 10 ms 刷新。轮未就绪清整形状态但保留零目标使能流程，不积累待执行运动。
+`ChassisCmd.input_shaped` 默认 false；键鼠置 true，Chassis 不重复三轴 S 曲线，保留运动学和同比单轮限幅。切换标记重置规划，遥控路径保持原实现。已整形命令由 RobotCmd 每个 1 ms 控制周期发布到本板 Topic，Chassis 仍每 2 ms 下发轮速，避免 10 ms 发布保持形成速度台阶；遥控目标仍按 10 ms 刷新。轮未就绪清整形状态但保留零目标使能流程，不积累待执行运动。
 
-`GimbalCmd.yaw_absolute_target` 默认 false；底盘键鼠置 true，ControlYaw 使用绝对目标，遥控仍使用原速度 S 曲线与积分。键鼠没有额外鼠标速度前馈；位置 PID、底盘角速度补偿、±15 rad/s 总限幅、MIT 阻尼选择/变化率和力矩限幅保留。目标类型切换清 PID 与规划历史。
+`GimbalCmd.yaw_absolute_target` 默认 false；底盘键鼠置 true，ControlYaw 使用绝对目标，遥控仍使用原速度 S 曲线与积分。键鼠没有额外鼠标速度前馈；P/I 使用回绕后的角误差，D 仅作用于实际 INS Yaw 变化，不对鼠标目标阶跃求导。沿用 Kp=3.5、Ki=0、Kd=0.3；D 按完整 INS 快照的实际接收时间间隔差分，重复样本保持该速率，首帧/恢复/断档重建基准，角差跨 ±π 回绕。源 gyro_z 当前为零，不能替代实测差分。底盘角速度补偿、±15 rad/s 总限幅、MIT 阻尼选择/变化率和力矩限幅保留；调试 `pid_rad_s` 为 P/I 与实测 D 合成后的修正。遥控继续使用原误差微分和速度积分，目标类型切换清 PID 与规划历史。
 
 ## 接收、来源和恢复
 
@@ -108,8 +108,40 @@ cmake --build --preset ChassisBoard
 git diff --check
 ```
 
-主机检查在 `/tmp/h7-keyboard-tests` 临时目录执行，不保留 Tests/KeyboardControl。运行 `python3 /tmp/h7-keyboard-tests/run.py` 可检查二维速率/反向过零/周期等效、知识库键位、9/18 与 15/22.5 档位、鼠标量化/累计回绕、真实 VT02 拆帧/粘包/CRC/溢出、真实云台与底盘 Input→RobotCmd 的 200/201 ms 与 50/51 ms 边界、释放门及恢复姿态捕获；真实 Chassis/PID/Trajectory 搭配电机接口桩检查绝对 Yaw 保持、无重复整形、遥控路径和输出约束。临时测试不随固件分支提交。
+此前逐帧消费与驾驶整形的主机检查使用 `/tmp/h7-keyboard-tests` 临时目录，覆盖二维整形、知识库键位、鼠标累计、协议解析及时效/恢复；临时目录不长期保留，也不随固件提交。当前 Pitch 修改的验证记录见下文，不以历史测试结果代替本轮检查。
 
 构建和内存占用以本次实际日志为准；不以历史构建结果代替当前检查。固件构建仍有既有 PID linkage 等警告。
 
 实机尚未验收：先确认方向、Pitch 限位及使能等待，再依次确认普通跟随、Q/E 自转、双键停止、松开恢复、Shift 加速和发射；测试 UART/CAN 拔线、CH5 切源、SBUS failsafe、单板重启与持住火控恢复。测量 1 kHz 周期耗时与链路刷新周期。尚未进行实机验收或烧录。
+
+### 鼠标 Yaw 转向冲击回归
+
+实际 Chassis/PID 源码的主机复现：姿态不动，鼠标目标单帧增加 0.266667 rad，旧误差微分在 2 ms 周期算出约 40.93 rad/s，电机指令被截到 15 rad/s。改为实测姿态微分后，同条件输出约 0.9333 rad/s（仅 P），不会把鼠标帧阶跃当作实测角速度。`/tmp/h7-yaw-regression/run.py` 还检查 INS 新样本间隔、重复样本、角度回绕、10 ms 时效/恢复、遥控路径、底盘补偿、目标发布周期和 9/18 档位。主机回归只确认控制指令行为，尚需实机确认转向震动及跟随手感。
+
+### 键鼠 Pitch 细瞄与串级控制
+
+`Class_MousePitch` 保留每个新帧的全部 Y 计数和角度限位。速度前馈使用本地实际接收间隔；
+首帧或超过 50 ms 的间隔按 VT02 标称 33 ms 估计，同毫秒粘包累计本段增量，限幅 ±3 rad/s。
+前馈最多保持一个估计帧周期（1～50 ms），新零输入帧归零；不再由 1 kHz 角目标斜坡的差分产生前馈脉冲。
+停止移动后角度目标保持，控制器仍可追踪未到达的目标；本实现不承诺松手机械立即停止。
+
+`GimbalCmd.pitch_cascaded_control` 默认关闭，仅云台本地键鼠打开，不改变线上 CAN 协议。
+串级初值为位置 Kp=0.52/0.060≈8.667 1/s、速度 Kp=0.060 N·m·s/rad，速度 Ki/Kd=0。
+位置修正叠加不对称速度前馈（原 0.012/0.018 按速度 Kp 换算），速度环输出力矩；
+原重力/摩擦补偿、±0.5 N·m 限幅、2 s 使能等待及故障清零保留，遥控仍走已标定的原力矩控制律。
+切换目标类型时从新鲜姿态重建斜坡与两级 PID，进入/未就绪/失联/溢出仍丢弃旧鼠标动作。
+
+调试新增 `Keyboard_Input_Debug.pitch_speed_rad_s`、`Gimbal_Debug.speed_setpoint_rad_s`、
+`speed_error_rad_s` 与 `pitch_cascaded_control`。初始增益主要是既有控制律的等效拆分，
+不能据此认定闭环带宽提高或实机滞后已经解决；需比较细瞄、停稳和往返曲线。
+
+本轮主机检查：`python3 /tmp/h7-pitch-experience/run.py` 使用实际 Input、仲裁、RobotCmd、
+Gimbal、PID、Slope、IIR 源码和硬件接口桩，通过 2690 项断言及 AddressSanitizer/UBSan 检查。
+覆盖 ±1～4 细瞄、逐帧累加、同毫秒粘包/零输入、时间回绕、帧周期和前馈超时、限位、
+等效控制增益、位置保持/速度制动、力矩限幅、模式复位、2 s 使能、INS 过期、
+200/201 ms 时效、未就绪/溢出恢复、149/150 ms 发射和释放门。
+`python3 /tmp/h7-pitch-experience/chassis_run.py` 验证底盘实际 RobotCmd/仲裁的默认标记、
+仅标记变化发布、Vision 清标记和安全输出。临时测试不加入仓库。
+两分支 SingleBoard、GimbalBoard、ChassisBoard 均构建通过，`git diff --check` 通过。
+实用固件：云台 GimbalBoard Flash 138164 B、DTCM 116800 B（89.11%）；
+底盘 ChassisBoard Flash 150120 B、DTCM 110304 B（84.16%）。本轮未烧录，手感与机械响应待实机验收。

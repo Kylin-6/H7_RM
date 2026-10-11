@@ -100,6 +100,7 @@ InputDecision SourceArbitration_Resolve(const InputState &state)
             decision.gimbal.pitch_angle_rad = vision.pitch_angle_rad;
             decision.gimbal.yaw_speed_rad_s = 0.0f;
             decision.gimbal.pitch_speed_rad_s = 0.0f;
+            decision.gimbal.pitch_cascaded_control = false;
         }
         else
         {

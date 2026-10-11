@@ -33,13 +33,65 @@ inline bool Combination(uint16_t keys)
     return (keys & (Ctrl | Shift)) == (Ctrl | Shift);
 }
 
-/** 保留整数 /5 量化；计数仅在新 UART 帧到达时转换，不乘控制周期。 */
-inline float PitchIncrement(int16_t mouse, int16_t maximum, int16_t divisor, float rad_per_count)
+/** 完整计数仅在新 UART 帧到达时转换，不乘控制周期，不丢弃细瞄增量。 */
+inline float PitchIncrement(int16_t mouse, int16_t maximum, float rad_per_count)
 {
     const int16_t bounded = mouse > maximum ? maximum : mouse < -maximum ? -maximum
                                                                          : mouse;
-    return static_cast<float>((bounded / divisor) * divisor) * rad_per_count;
+    return static_cast<float>(bounded) * rad_per_count;
 }
+
+/** Pitch 每帧累加角度，以实际帧间隔估计速度前馈；控制周期不重复消费计数。 */
+class Class_MousePitch
+{
+  public:
+    void Reset(float actual, float minimum, float maximum)
+    {
+        target = std::fmax(minimum, std::fmin(maximum, actual));
+        received = false;
+        interval_delta = velocity = 0.0f;
+        period_ms = 33U; // VT02 标称 30 Hz；首帧及异常间隔仅用标称周期估计前馈。
+    }
+    float Update(int16_t mouse, uint32_t timestamp, int16_t maximum, float rad_per_count,
+                 float minimum, float upper, float speed_limit)
+    {
+        const float next = std::fmax(minimum, std::fmin(upper, target + PitchIncrement(mouse, maximum, rad_per_count)));
+        const float delta = next - target;
+        target = next;
+        const uint32_t elapsed = timestamp - last_ms;
+        if (!received || elapsed > 50U)
+            period_ms = 33U;
+        else if (elapsed != 0U)
+            period_ms = elapsed;
+        // 同一 DMA chunk 的帧可能具有相同毫秒时间戳；累加而不是除以零或覆盖。
+        if (delta == 0.0f || !received || elapsed != 0U)
+            interval_delta = delta;
+        else
+            interval_delta += delta;
+        const float estimate = interval_delta / (0.001f * static_cast<float>(period_ms));
+        velocity = std::fmax(-speed_limit, std::fmin(speed_limit, estimate));
+        last_ms = timestamp;
+        received = true;
+        return delta;
+    }
+    float Target() const
+    {
+        return target;
+    }
+    float Velocity(uint32_t now) const
+    {
+        // 无后续帧时只保留一个估计帧周期的前馈；角度目标仍保持，失联保护由 Input 仲裁。
+        return received && now - last_ms <= period_ms ? velocity : 0.0f;
+    }
+
+  private:
+    float target = 0.0f;
+    float interval_delta = 0.0f;
+    float velocity = 0.0f;
+    uint32_t last_ms = 0U;
+    uint32_t period_ms = 33U;
+    bool received = false;
+};
 
 /** 跨板累计计数差分；未就绪/恢复首帧只捕获姿态与计数基准。 */
 class Class_MouseYaw

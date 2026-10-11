@@ -18,7 +18,7 @@ ReceiverMode last_mode = ReceiverMode::Stop;
 bool last_permitted;
 bool was_ready;
 bool captured;
-float pitch_target;
+KeyboardInput::Class_MousePitch mouse_pitch;
 uint16_t yaw_counts;
 uint32_t seen_overflows;
 uint32_t blocked_sequence;
@@ -128,7 +128,7 @@ void KeyboardInput_Update()
         const bool entering = !captured || !was_ready;
         if (entering)
         {
-            pitch_target = std::fmax(config.pitch_min, std::fmin(config.pitch_max, ins.pitch_rad));
+            mouse_pitch.Reset(ins.pitch_rad, config.pitch_min, config.pitch_max);
             captured = true;
         }
         // 进入/恢复的批次只建立基准；未 ready 不积累任何鼠标或发射动作。
@@ -137,9 +137,9 @@ void KeyboardInput_Update()
             const auto& sample = batch.frames[i];
             if (!ready || entering || now - sample.received_ms > INPUT_KEYBOARD_MAX_AGE_MS)
                 continue;
-            const float delta = KeyboardInput::PitchIncrement(sample.mouse_y, config.keyboard_pitch_mouse_max,
-                                                              config.keyboard_pitch_mouse_divisor, config.keyboard_pitch_rad_per_count);
-            pitch_target = std::fmax(config.pitch_min, std::fmin(config.pitch_max, pitch_target + delta));
+            const float delta = mouse_pitch.Update(sample.mouse_y, sample.received_ms, config.keyboard_pitch_mouse_max,
+                                                   config.keyboard_pitch_rad_per_count, config.pitch_min, config.pitch_max,
+                                                   config.pitch_torque.target_rate_rad_s);
             debug.pitch_delta_rad += delta;
             const int16_t x = sample.mouse_x > config.keyboard_yaw_mouse_max ? config.keyboard_yaw_mouse_max : sample.mouse_x < -config.keyboard_yaw_mouse_max ? -config.keyboard_yaw_mouse_max
                                                                                                                                                                : sample.mouse_x;
@@ -148,7 +148,9 @@ void KeyboardInput_Update()
                 ++event_sequence;
         }
         input.gimbal.mode = GimbalMode::IMU;
-        input.gimbal.pitch_angle_rad = pitch_target;
+        input.gimbal.pitch_angle_rad = mouse_pitch.Target();
+        input.gimbal.pitch_cascaded_control = true;
+        input.gimbal.pitch_speed_rad_s = ready && !entering ? mouse_pitch.Velocity(now) : 0.0f;
         if (ready)
         {
             input.shoot_event_sequence = event_sequence;
@@ -163,7 +165,8 @@ void KeyboardInput_Update()
     // 内部累计值跨停机保留；仅协议编码清零安全帧。
     // 即使瞬态 STOP 帧被最新值槽覆盖，对端也不会把计数复位误当成反向鼠标。
     debug.yaw_counts = yaw_counts;
-    debug.pitch_target_rad = pitch_target;
+    debug.pitch_target_rad = mouse_pitch.Target();
+    debug.pitch_speed_rad_s = input.gimbal.pitch_speed_rad_s;
     InputState_SubmitKeyboard(input);
     // 模式/许可变化立即提交；失败时下个控制周期重试，不当作对端确认。
     if (transition || now - last_send_ms >= 10U)

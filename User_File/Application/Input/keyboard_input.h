@@ -23,7 +23,7 @@ struct Struct_Keyboard_Input_Debug
     uint32_t tick_ms, keyboard_age_ms, keyboard_sequence, stop_count;
     uint32_t consumed_sequence, overflow_count, reset_reason;
     uint16_t yaw_counts;
-    float pitch_delta_rad, pitch_target_rad;
+    float pitch_delta_rad, pitch_target_rad, pitch_speed_rad_s;
     uint8_t requested_mode, mode, gimbal_status;
     bool receiver_permitted, keyboard_fresh, ins_valid, permitted;
     Struct_Keyboard_Stop_Record stops[8];

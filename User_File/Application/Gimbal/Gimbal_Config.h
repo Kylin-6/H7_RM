@@ -10,6 +10,9 @@ struct Struct_Gimbal_PitchTorque_Config
 {
     /** IMU 外环位置刚度，N·m/rad。 */
     float position_kp = 0.52f;
+    /** 键鼠串级初值按现有位置刚度 / 速度阻尼等效拆分，单位 1/s、N·m·s/rad。 */
+    float keyboard_position_kp = 0.52f / 0.060f;
+    float keyboard_speed_kp = 0.060f;
     /** 目标斜坡限速，rad/s（Class_Slope）。 */
     float target_rate_rad_s = 3.0f;
     /** 目标速度前馈：正 / 负方向增益不对称，N·m·s/rad。 */
@@ -61,7 +64,6 @@ struct Struct_Gimbal_Config
     float pitch_max = 0.2617994f;  // +15 deg。
     uint64_t ins_max_age_us = 100000U;
     int16_t keyboard_pitch_mouse_max = 500;
-    int16_t keyboard_pitch_mouse_divisor = 5;
     float keyboard_pitch_rad_per_count = -0.00020f;
     int16_t keyboard_yaw_mouse_max = 1000; // 跨板只限幅计数，不在云台缩放 Yaw。
 };

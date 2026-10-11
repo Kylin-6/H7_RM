@@ -60,7 +60,7 @@ struct INS_State
 };
 
 /** 两轴目标均为 INS 姿态 rad；速度字段为 IMU 模式的 rad/s 前馈。
- * 本分支单 Pitch 只消费 pitch_angle_rad；LOCK 与 DISABLED 保持失能。
+ * 单 Pitch 键鼠串级消费角度及速度前馈；遥控保留原力矩控制，LOCK 与 DISABLED 保持失能。
  */
 struct GimbalCmd
 {
@@ -69,6 +69,7 @@ struct GimbalCmd
     float yaw_speed_rad_s = 0.0f;
     float pitch_speed_rad_s = 0.0f;
     GimbalMode mode = GimbalMode::DISABLED;
+    bool pitch_cascaded_control = false; ///< 本板键鼠 Pitch：位置外环 + 速度内环，速度字段为前馈。
     bool yaw_absolute_target = false; ///< 老步兵键鼠：INS 绝对 Yaw；遥控仍使用速度积分。
 };
 

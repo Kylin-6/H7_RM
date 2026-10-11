@@ -28,6 +28,9 @@ struct Struct_Gimbal_Debug
     float command_rad = 0.0f;
     float target_rad = 0.0f;
     float target_speed_rad_s = 0.0f;
+    float speed_setpoint_rad_s = 0.0f; ///< 串级位置修正与前馈合成后的速度环目标。
+    float speed_error_rad_s = 0.0f;
+    bool pitch_cascaded_control = false;
     float actual_rad = 0.0f;
     float actual_speed_rad_s = 0.0f;
     float command_torque_nm = 0.0f; // 电机协议方向；提交成功不等于执行成功。
