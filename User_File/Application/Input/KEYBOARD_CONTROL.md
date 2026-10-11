@@ -51,9 +51,13 @@ GimbalBoard 使用独立的 `vtm_legacy.c/.h`，保留 `vtm_26.c/.h` 给新图�
 
 VT02/VT12 键鼠使用 A5 帧：5 字节帧头（小端载荷长度、序号、CRC8）、2 字节小端命令 0x0304、12 字节载荷、2 字节 CRC16，总计 21 字节。载荷 byte0～5 为小端 int16 鼠标 X/Y/Z，byte6/7 为左右键（0/1），byte8～9 为小端完整 uint16 键盘，byte10～11 保留。键盘位序 W/S/A/D/Shift/Ctrl/Q/E/R/F/G/Z/X/C/V/B 为 bit0～15。官方发送频率为 30 Hz。仅合法 0x0304 更新键鼠实际接收 ms、本地递增序号及帧头序号；其他合法图传帧只更新链路诊断，不续期键鼠。
 
-模式按本次确认的 SBUS CH5：中心化值 <0 选择键鼠，其余档位选择遥控。CH5<0 不再是整车停机开关；CH7 速度、CH8 跟随保持遥控档原规则。SBUS 帧须年龄 ≤50 ms、无 frame_lost/failsafe，切源或故障后须连续健康 200 ms 才重新许可。键鼠档尚未收到合法图传数据或年龄 >200 ms 即停机，不自动退回遥控；新帧恢复后仍须满足 SBUS 与 INS 条件。图传键鼠超时由云台 Application 的 `input_state.h` 中 `INPUT_KEYBOARD_MAX_AGE_MS=200` 统一用于云台 UART 适配和 Keyboard 仲裁；年龄 ≤200 ms 沿用最后一帧键位并保持已累加的鼠标角目标，不重复执行鼠标增量，201 ms 起停机，普通裁判帧不续期。此项不修改 SBUS、0x065、0x066 的 50 ms 保护或恢复释放门。VT02/VT12 没有 pause 或遥控挡位字段，不解析新图传的这些字段。
+遥控器有健康 SBUS 帧时，CH5 中心化值 <0 选择键鼠，其余档位选择遥控；CH7 速度、CH8 跟随保持原规则。SBUS 健康要求帧年龄 ≤50 ms、无 frame_lost/failsafe；上电、切档或恢复后仍须连续健康 200 ms 才授予 SBUS 所选来源许可。
 
-`InputState_SetPermission(permitted, require_remote)` 只由 ControlTask 调用；默认 `(true,true)` 保留原 Remote 互锁。键鼠使用 SBUS 所选来源的健康许可和 UART7 键鼠时效，云台同时要求新鲜有限 INS；遥控继续要求底盘下发遥控模式、许可和 50 ms 通道时效。底盘核对本地 CH5 与 0x066 模式一致，避免切档后执行旧模式。
+SBUS 尚未收到帧、年龄 >50 ms 或报告 frame_lost/failsafe 时，底盘自动选择键鼠候选，不沿用最后一帧 CH5 或摇杆。底盘 0x065 发送键鼠模式、候选许可和零遥控通道；云台仍须收到新鲜合法 UART7 键鼠帧（≤200 ms）、有效 INS 和 ≤50 ms 的 0x065，才发布获许可的键鼠 0x066。底盘最终仍核对本地来源与 ≤50 ms 的 0x066 模式/许可一致；仅遥控失联不能自行驱动。键鼠也失联则停机，不回放旧遥控命令。遥控器重新健康后恢复 CH5 选择，并等待原 200 ms 健康确认，等待期间不自动绕过 SBUS 解锁。
+
+图传键鼠超时由云台 `input_state.h` 中 `INPUT_KEYBOARD_MAX_AGE_MS=200` 统一用于 UART 适配和 Keyboard 仲裁；年龄 ≤200 ms 沿用键位与已累加角目标，不重复消费鼠标，201 ms 起停机。普通裁判帧不续期；SBUS、0x065、0x066 的 50 ms 保护、Pitch 使能等待及发射恢复释放门保留。VT02/VT12 没有 pause 或遥控挡位字段。
+
+`InputState_SetPermission(permitted, require_remote)` 只由 ControlTask 调用；默认 `(true,true)` 保留原 Remote 互锁。键鼠使用底盘所选来源许可（含 SBUS 不可用时的键鼠候选）和 UART7 键鼠时效，云台同时要求新鲜有限 INS；遥控继续要求底盘下发遥控模式、许可和 50 ms 通道时效。底盘核对本地 CH5 与 0x066 模式一致，避免切档后执行旧模式。
 
 云台顺序为 INS 桥 → KeyboardInput（模式、许可）→ RemoteInput → RobotCmd → Gimbal/Shoot；底盘为 INS 接收 → RemoteInput → KeyboardInput → RobotCmd → Chassis。设备/协议层只解析与缓存，Input 生成意图，RobotCmd 仍是唯一命令发布者。
 
@@ -82,7 +86,7 @@ VT02/VT12 键鼠使用 A5 帧：5 字节帧头（小端载荷长度、序号、C
 
 ### 0x065：底盘 → 云台
 
-原周期 2 ms 保持。byte0～1 火控、byte2～3 波轮、byte4～5 Pitch，均为大端 int16；byte6 高四位版本 1、bit0 为所选来源的健康许可、bit1～2 为模式 0/1/2、bit3 为 0；byte7 为递增 uint8 序号。只有 SBUS 健康并通过 200 ms 恢复条件才授予许可；仅已许可的遥控档携带三个通道，键鼠档、停机或未解锁时通道全零。云台用模式区分键鼠选择和零摇杆，用实际接收时间仲裁，不在 1 kHz 轮询时刷新时间戳。
+原周期 2 ms 保持。byte0～1 火控、byte2～3 波轮、byte4～5 Pitch，均为大端 int16；byte6 高四位版本 1、bit0 为所选来源的健康许可、bit1～2 为模式 0/1/2、bit3 为 0；byte7 为递增 uint8 序号。健康 SBUS 按 CH5 和 200 ms 恢复条件授予所选来源许可；SBUS 不可用时改为键鼠候选许可，由云台再检查 UART 时效和 INS。仅已许可的遥控档携带三个通道，键鼠档、停机或未解锁时通道全零。云台用模式区分键鼠选择和零摇杆，用实际接收时间仲裁，不在 1 kHz 轮询时刷新时间戳。
 
 两种协议的序号均只接受向前差值 1～127，255→0 合法，重复或回退不刷新业务快照。合法重复帧只更新链路流量基准；合法流量中断 >50 ms 后允许重建序号基准，以支持对端重启。非法帧不更新基准。协议没有会话号，间隔后的合法旧帧与重启首帧不可区分；当前不提供会话防重放。0x070/0x075 和 INS 回传 0x143/0x144 保持现有协议。
 
@@ -145,3 +149,18 @@ Gimbal、PID、Slope、IIR 源码和硬件接口桩，通过 2690 项断言及 A
 两分支 SingleBoard、GimbalBoard、ChassisBoard 均构建通过，`git diff --check` 通过。
 实用固件：云台 GimbalBoard Flash 138164 B、DTCM 116800 B（89.11%）；
 底盘 ChassisBoard Flash 150120 B、DTCM 110304 B（84.16%）。本轮未烧录，手感与机械响应待实机验收。
+
+### 遥控失联时键鼠接管
+
+底盘 `remote_input_forwarding.cpp` 负责 SBUS 不可用时选择键鼠候选；云台现有 UART、INS、
+0x065 许可检查与 0x066 转发保持原实现，线上字节布局和版本不变。本次运行行为只需更新底盘固件。
+切源仍清除旧动作、捕获当前姿态，恢复后的发射必须先观察到释放。
+回归脚本位于 `/tmp/h7-keyboard-fallback/run.py` 与 `cloud_run.py`：使用两板实际输入、仲裁、
+RobotCmd 和云台控制源码，检查无 SBUS 上电、CH5 优先、SBUS 50/51 ms、failsafe/frame_lost、
+200 ms 恢复、UART 200/201 ms、两向 CAN 50/51 ms、未就绪、溢出和发射释放门。
+硬件接口使用桩；临时测试不提交，实机断线与接管行为尚待验收。
+
+本轮结果：底盘 52 项检查、云台 2704 项检查及 AddressSanitizer/UBSan 均通过。
+底盘分支 SingleBoard/GimbalBoard/ChassisBoard 构建与两分支 `git diff --check` 通过；
+云台分支仅同步文档，运行代码未变。底盘 ChassisBoard Flash 150112 B、DTCM 110304 B（84.16%）。
+未烧录、未推送；本地 OpenOCD 配置保留。
