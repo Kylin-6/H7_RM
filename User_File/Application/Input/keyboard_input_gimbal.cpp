@@ -4,6 +4,7 @@
 #include "keyboard_input.h"
 #include "keyboard_link.h"
 #include "keyboard_logic.h"
+#include "keyboard_modes.h"
 #include "message_center.h"
 #include "remote_input.h"
 #include "usart.h"
@@ -28,6 +29,11 @@ uint32_t last_frame_ms;
 uint32_t last_send_ms;
 uint32_t event_sequence;
 KeyboardInput::Class_MouseTrigger trigger;
+KeyboardInput::Class_KeyboardModes drive_mode;
+bool keyboard_session_started;
+bool sent_follow = true;
+uint8_t sent_spin;
+uint8_t sent_spin_revision;
 } // namespace
 
 bool KeyboardInput_Init()
@@ -115,9 +121,18 @@ void KeyboardInput_Update()
     debug.keyboard_fresh = keyboard_fresh;
     debug.ins_valid = ins_valid;
     debug.permitted = permitted;
+    // 实际切回遥控才结束键鼠会话；短暂接收故障保留 F 的跟随选择。
+    if (requested == ReceiverMode::Remote)
+        keyboard_session_started = false;
+    if (requested == ReceiverMode::Keyboard && !keyboard_session_started)
+    {
+        drive_mode.Reset(true);
+        keyboard_session_started = true;
+    }
     if (transition || !ready || input_gap)
     {
         trigger.Reset();
+        drive_mode.Reset(false);
         captured = false;
     }
     ControlInput input{};
@@ -137,6 +152,7 @@ void KeyboardInput_Update()
             const auto& sample = batch.frames[i];
             if (!ready || entering || now - sample.received_ms > INPUT_KEYBOARD_MAX_AGE_MS)
                 continue;
+            drive_mode.Update(sample.keyboard);
             const float delta = mouse_pitch.Update(sample.mouse_y, sample.received_ms, config.keyboard_pitch_mouse_max,
                                                    config.keyboard_pitch_rad_per_count, config.pitch_min, config.pitch_max,
                                                    config.pitch_torque.target_rate_rad_s);
@@ -169,18 +185,25 @@ void KeyboardInput_Update()
     debug.pitch_speed_rad_s = input.gimbal.pitch_speed_rad_s;
     InputState_SubmitKeyboard(input);
     // 模式/许可变化立即提交；失败时下个控制周期重试，不当作对端确认。
-    if (transition || now - last_send_ms >= 10U)
+    const bool drive_changed = drive_mode.follow != sent_follow || drive_mode.spin != sent_spin || drive_mode.revision != sent_spin_revision;
+    if (transition || drive_changed || now - last_send_ms >= 10U)
     {
         Struct_Keyboard_Frame frame{};
         frame.mode = mode;
         frame.yaw_counts = yaw_counts;
         frame.keyboard = rc.keyboard;
         frame.permitted = permitted;
+        frame.follow_enabled = drive_mode.follow;
+        frame.spin = drive_mode.spin;
+        frame.spin_revision = drive_mode.revision;
         if (KeyboardLink_Send(frame))
         {
             last_send_ms = now;
             last_mode = mode;
             last_permitted = permitted;
+            sent_follow = drive_mode.follow;
+            sent_spin = drive_mode.spin;
+            sent_spin_revision = drive_mode.revision;
         }
     }
     was_ready = ready;

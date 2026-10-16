@@ -758,3 +758,5 @@ cmake --build --preset SingleBoard
 相关约定见 [Application 指南](../README.md)、
 [Message Center](../../System/MessageCenter/README.md) 与
 [DJI 驱动](../../Device/Peripheral/Motor/DJImotor/dji_motor.md)。
+
+键鼠当前普通 / Shift / Ctrl 平移目标为 15 / 18 / 7.5，单位仍为工程抽象目标；F 点按切换跟随，Q/E 点按切换自转，Ctrl+Shift 暂停并清除自转。仅调整键鼠普通比例为 0.5，既有遥控档位、驾驶整形、单轮限幅与功率保护保持。完整键位、恢复规则及版本 3 协议见 [键鼠控制](../Input/KEYBOARD_CONTROL.md)。

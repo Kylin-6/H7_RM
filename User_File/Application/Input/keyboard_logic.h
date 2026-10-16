@@ -16,7 +16,8 @@ enum Key : uint16_t
     Shift = 1U << 4,
     Ctrl = 1U << 5,
     Q = 1U << 6,
-    E = 1U << 7
+    E = 1U << 7,
+    F = 1U << 9
 };
 
 inline ReceiverMode SelectMode(bool received, uint32_t timestamp, uint32_t now, uint8_t mode)

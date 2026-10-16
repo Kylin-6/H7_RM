@@ -69,7 +69,6 @@ extern "C" void Control_Task(void *)
         RobotCmd_Update();
         Gimbal_Update();
         Shoot_Update();
-        ClientUI_Capture();
         static uint32_t last_diagnostic_ms = 0U;
         const uint32_t now_ms = HAL_GetTick();
         if (now_ms - last_diagnostic_ms >= 10U)
@@ -77,5 +76,6 @@ extern "C" void Control_Task(void *)
             last_diagnostic_ms = now_ms;
             Diagnostics_Publish();
         }
+        ClientUI_Capture();
     }
 }

@@ -20,6 +20,9 @@ struct Struct_Keyboard_Frame
     uint16_t yaw_counts = 0U; // 版本 2：累计鼠标 X，按模 65536 差分。
     uint16_t keyboard = 0U;
     bool permitted = false;
+    bool follow_enabled = true;
+    uint8_t spin = 0U;          // 版本 3：0 停止，1 正转，2 反转。
+    uint8_t spin_revision = 0U; // 5 位旋转动作代号，F 不推进。
     uint32_t received_ms = 0U;
 };
 

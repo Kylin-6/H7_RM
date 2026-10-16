@@ -9,9 +9,14 @@
 #include "stm32h7xx_hal.h"
 
 Struct_Diagnostic_LED_State Diagnostics_LED_State;
+namespace
+{
+bool init_failed;
+}
 
 void Diagnostics_PublishInitFailure()
 {
+    init_failed = true;
     Struct_Robot_Diagnostic d{};
     d.fault_mask = DIAG_APP_INIT;
     MessageCenter::Robot_Diagnostic_Topic.Publish(d);
@@ -38,8 +43,10 @@ void Diagnostics_Publish()
     }
     else
         enable_pending = false;
-    const auto d = Diagnostics_BuildSnapshot(g, s, remote_valid,
-                                             enable_pending && now - enable_start_ms >= 1000U);
+    auto d = Diagnostics_BuildSnapshot(g, s, remote_valid,
+                                       enable_pending && now - enable_start_ms >= 1000U);
+    if (init_failed)
+        d.fault_mask |= DIAG_APP_INIT;
     MessageCenter::Robot_Diagnostic_Topic.Publish(d);
 }
 

@@ -5,6 +5,11 @@
 
 #if H7_CLIENT_UI_GIMBAL
 #include "message_center.h"
+#include "input_state.h"
+#include "source_arbitration.h"
+#include "keyboard_input.h"
+#include "keyboard_protocol.h"
+#include "Init.h"
 #include <cmath>
 #else
 #include "client_ui_config.h"
@@ -25,6 +30,9 @@ namespace
 {
 bool initialized;
 uint32_t last_send_ms;
+#if H7_CLIENT_UI_GIMBAL
+uint32_t last_diagnostic_send_ms;
+#endif
 #if !H7_CLIENT_UI_GIMBAL
 Struct_Client_UI_Chassis chassis;
 uint32_t chassis_ms;
@@ -143,9 +151,33 @@ void ClientUI_Capture()
 #if H7_CLIENT_UI_GIMBAL
     ShootFeedback feedback{};
     const bool valid = MessageCenter::Shoot_Feedback_Topic.ReadFresh(feedback, 100000U) && feedback.online;
-    const uint8_t next = !valid ? 0U :
-        (std::fabs(feedback.friction_left_speed_rad_s) > 1.0f || std::fabs(feedback.friction_right_speed_rad_s) > 1.0f) ? 2U : 1U;
-    ClientUILink_Capture(next, HAL_GetTick());
+    Struct_Client_UI_Gimbal next{};
+    if (valid && std::isfinite(feedback.friction_left_speed_rad_s) && std::isfinite(feedback.friction_right_speed_rad_s))
+    {
+        next.left_speed_rad_s = std::fabs(feedback.friction_left_speed_rad_s);
+        next.right_speed_rad_s = std::fabs(feedback.friction_right_speed_rad_s);
+        next.speed_valid = next.left_speed_rad_s <= 6553.5f && next.right_speed_rad_s <= 6553.5f;
+        next.friction = next.left_speed_rad_s > 1.0f || next.right_speed_rad_s > 1.0f ? 2U : 1U;
+    }
+    if (valid && std::isfinite(feedback.loader_speed_rad_s))
+        next.loader = std::fabs(feedback.loader_speed_rad_s) > 1.0f ? 2U : 1U;
+    const auto input = InputState_Read();
+    const auto decision = SourceArbitration_Resolve(input);
+    next.autoaim = !input.vision_enabled ? 1U : decision.armed && decision.gimbal.mode == GimbalMode::IMU ? 3U : 2U;
+    const auto sample = MessageCenter::Robot_Diagnostic_Topic.ReadWithMeta();
+    const uint64_t now_us = SYS_Timestamp_Get_Microsecond();
+    Struct_Client_UI_Diagnostic ui_diagnostic{};
+    ui_diagnostic.fault_mask = sample.data.fault_mask;
+    ui_diagnostic.permitted = sample.data.permitted;
+    ui_diagnostic.waiting = sample.data.waiting;
+    ui_diagnostic.snapshot_valid = sample.valid;
+    ui_diagnostic.control_fresh = sample.valid && now_us >= sample.timestamp_us && now_us - sample.timestamp_us <= 50000U;
+    const auto& keyboard = Keyboard_Input_Debug;
+    if (keyboard.requested_mode == static_cast<uint8_t>(ReceiverMode::Keyboard))
+        ui_diagnostic.input_reason = static_cast<uint8_t>(keyboard.reset_reason & 0x1EU);
+    const uint32_t now_ms = HAL_GetTick();
+    ClientUILink_Capture(next, now_ms);
+    ClientUILink_CaptureDiagnostic(ui_diagnostic, now_ms);
 #else
     const auto input = InputState_Read();
     const auto decision = SourceArbitration_Resolve(input);
@@ -193,7 +225,7 @@ void ClientUI_Update()
 #endif
     __DMB();
     __set_PRIMASK(mask);
-    uint8_t friction_state = 0U;
+    Struct_Client_UI_Gimbal friction_state{};
     uint32_t friction_ms = 0U;
     const bool friction_valid = ClientUILink_Read(friction_state, friction_ms);
     const uint32_t now = HAL_GetTick();
@@ -216,7 +248,7 @@ void ClientUI_Update()
     if (now - last_send_ms < 100U)
         return;
     if (Draw(robot_id, state, valid && now - captured_ms <= CLIENT_UI_MAX_AGE_MS,
-             friction_valid && now - friction_ms <= CLIENT_UI_MAX_AGE_MS ? friction_state : 0U))
+             friction_valid && now - friction_ms <= CLIENT_UI_MAX_AGE_MS ? friction_state.friction : 0U))
     {
         last_send_ms = now;
         if (++slot == 6U)
@@ -226,9 +258,26 @@ void ClientUI_Update()
         }
     }
 #else
-    if (now - last_send_ms < 50U)
-        return;
-    if (ClientUILink_Send(friction_valid && now - friction_ms <= CLIENT_UI_MAX_AGE_MS ? friction_state : 0U))
+    if (now - last_send_ms >= 50U &&
+        ClientUILink_Send(friction_valid && now - friction_ms <= CLIENT_UI_MAX_AGE_MS ? friction_state : Struct_Client_UI_Gimbal{}))
         last_send_ms = now;
+    if (now - last_diagnostic_send_ms >= 50U)
+    {
+        Struct_Client_UI_Diagnostic diagnostic{};
+        uint32_t diagnostic_ms = 0U;
+        const bool available = ClientUILink_ReadDiagnostic(diagnostic, diagnostic_ms);
+        const uint32_t diagnostic_now = HAL_GetTick();
+        diagnostic.control_fresh = available && diagnostic.control_fresh && diagnostic_now - diagnostic_ms <= 50U;
+        if (!diagnostic.control_fresh)
+        {
+            diagnostic.fault_mask |= 1U << 2U;
+            diagnostic.permitted = false;
+            diagnostic.waiting = false;
+        }
+        if (System_Init_GetState() == SYSTEM_INIT_FATAL)
+            diagnostic.fault_mask |= 1U;
+        if (ClientUILink_SendDiagnostic(diagnostic))
+            last_diagnostic_send_ms = diagnostic_now;
+    }
 #endif
 }

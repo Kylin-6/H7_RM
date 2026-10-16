@@ -2,23 +2,24 @@
 
 void KeyboardProtocol_Encode(const Struct_Keyboard_Frame& frame, uint8_t data[8])
 {
-    const bool permitted = frame.permitted && frame.mode != ReceiverMode::Stop;
+    const bool permitted = frame.permitted && frame.mode != ReceiverMode::Stop &&
+                           frame.spin <= 2U && frame.spin_revision <= 31U;
     const uint16_t x = permitted ? frame.yaw_counts : 0U;
     const uint16_t keys = permitted ? frame.keyboard : 0U;
-    data[0] = 0x20U | static_cast<uint8_t>(frame.mode);
+    data[0] = 0x30U | static_cast<uint8_t>(frame.mode);
     data[1] = frame.sequence;
     data[2] = static_cast<uint16_t>(x) >> 8U;
     data[3] = static_cast<uint8_t>(x);
     data[4] = keys >> 8U;
     data[5] = static_cast<uint8_t>(keys);
     data[6] = permitted ? 1U : 0U;
-    data[7] = 0U;
+    data[7] = permitted && frame.mode == ReceiverMode::Keyboard ? uint8_t((frame.follow_enabled ? 1U : 0U) | (frame.spin << 1U) | (frame.spin_revision << 3U)) : 0U;
 }
 
 bool KeyboardProtocol_Decode(const uint8_t* data, uint32_t length, Struct_Keyboard_Frame& frame)
 {
-    if (data == nullptr || length != 8U || (data[0] & 0xF0U) != 0x20U ||
-        (data[0] & 0x0FU) > 2U || (data[6] & 0xFEU) != 0U || data[7] != 0U)
+    if (data == nullptr || length != 8U || (data[0] & 0xF0U) != 0x30U ||
+        (data[0] & 0x0FU) > 2U || (data[6] & 0xFEU) != 0U || ((data[7] >> 1U) & 3U) == 3U)
         return false;
     Struct_Keyboard_Frame decoded{};
     decoded.mode = static_cast<ReceiverMode>(data[0] & 0x0FU);
@@ -26,8 +27,12 @@ bool KeyboardProtocol_Decode(const uint8_t* data, uint32_t length, Struct_Keyboa
     decoded.yaw_counts = (static_cast<uint16_t>(data[2]) << 8U) | data[3];
     decoded.keyboard = (static_cast<uint16_t>(data[4]) << 8U) | data[5];
     decoded.permitted = data[6] != 0U;
+    decoded.follow_enabled = (data[7] & 1U) != 0U;
+    decoded.spin = (data[7] >> 1U) & 3U;
+    decoded.spin_revision = data[7] >> 3U;
     if ((decoded.mode == ReceiverMode::Stop && decoded.permitted) ||
-        (!decoded.permitted && (decoded.yaw_counts != 0U || decoded.keyboard != 0U)))
+        (!decoded.permitted && (decoded.yaw_counts != 0U || decoded.keyboard != 0U || data[7] != 0U)) ||
+        (decoded.mode != ReceiverMode::Keyboard && data[7] != 0U))
         return false;
     frame = decoded;
     return true;
